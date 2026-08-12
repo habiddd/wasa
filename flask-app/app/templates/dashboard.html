@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard CPA Reservas Bot</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #e2e4e9;
+    --text: #1a1d23;
+    --text-muted: #6b7280;
+    --accent: #2563eb;
+    --ok: #16a34a;
+    --ok-bg: #dcfce7;
+    --fail: #dc2626;
+    --fail-bg: #fee2e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1c1f26;
+      --border: #2c303a;
+      --text: #e6e8ec;
+      --text-muted: #9aa0ac;
+      --accent: #5b8def;
+      --ok: #4ade80;
+      --ok-bg: #14301f;
+      --fail: #f87171;
+      --fail-bg: #3a1a1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0; font-size: 1.25rem; }
+  header p { margin: 0.25rem 0 0; color: var(--text-muted); font-size: 0.85rem; }
+
+  nav.tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  nav.tabs button {
+    appearance: none;
+    background: none;
+    border: none;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  nav.tabs button.activo {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    font-weight: 600;
+  }
+
+  main { padding: 1.5rem; max-width: 960px; margin: 0 auto; }
+  section.panel { display: none; }
+  section.panel.activo { display: block; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.75rem;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+  }
+  .card h3 {
+    margin: 0 0 0.5rem;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .card p { margin: 0.25rem 0 0; font-size: 0.8rem; color: var(--text-muted); word-break: break-word; }
+
+  .pill {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+  }
+  .pill.ok { color: var(--ok); background: var(--ok-bg); }
+  .pill.fail { color: var(--fail); background: var(--fail-bg); }
+
+  #qr-panel { text-align: center; }
+  #qr-imagen { max-width: 260px; border-radius: 8px; border: 1px solid var(--border); margin-top: 1rem; }
+  #qr-estado-texto { margin-top: 0.75rem; color: var(--text-muted); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.5rem; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-muted); font-weight: 600; }
+
+  .stats-row { display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem 1rem; min-width: 140px; }
+  .stat .valor { font-size: 1.4rem; font-weight: 700; }
+  .stat .etiqueta { font-size: 0.75rem; color: var(--text-muted); }
+
+  .actualizado { font-size: 0.75rem; color: var(--text-muted); margin-top: 1rem; }
+  h2.titulo-panel { margin-top: 0; font-size: 1rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Dashboard — CPA Reservas Bot</h1>
+  <p>Estado de servicios, vinculación de WhatsApp y métricas de uso.</p>
+</header>
+
+<nav class="tabs">
+  <button data-tab="servicios" class="activo">Servicios</button>
+  <button data-tab="qr">QR / WhatsApp</button>
+  <button data-tab="metricas">Métricas</button>
+</nav>
+
+<main>
+  <section id="servicios" class="panel activo">
+    <h2 class="titulo-panel">Estado de servicios</h2>
+    <div class="grid" id="servicios-grid">
+      <p>Cargando…</p>
+    </div>
+    <p class="actualizado" id="servicios-actualizado"></p>
+  </section>
+
+  <section id="qr" class="panel">
+    <h2 class="titulo-panel">Vinculación de WhatsApp</h2>
+    <div id="qr-panel">
+      <p id="qr-estado-texto">Cargando…</p>
+      <img id="qr-imagen" style="display:none" alt="Código QR de vinculación">
+    </div>
+  </section>
+
+  <section id="metricas" class="panel">
+    <h2 class="titulo-panel">Métricas (últimos 30 días)</h2>
+    <div class="stats-row" id="metricas-resumen"></div>
+
+    <h3>Últimas interacciones del bot</h3>
+    <table id="tabla-interacciones">
+      <thead>
+        <tr><th>Fecha</th><th>Teléfono</th><th>Intent</th><th>Permitido</th><th>Motivo bloqueo</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(function () {
+  const tabs = document.querySelectorAll("nav.tabs button");
+  const panels = document.querySelectorAll("section.panel");
+
+  function activarTab(nombre) {
+    tabs.forEach((b) => b.classList.toggle("activo", b.dataset.tab === nombre));
+    panels.forEach((p) => p.classList.toggle("activo", p.id === nombre));
+  }
+
+  tabs.forEach((b) => b.addEventListener("click", () => activarTab(b.dataset.tab)));
+
+  function pill(ok) {
+    return `<span class="pill ${ok ? "ok" : "fail"}">${ok ? "OK" : "FALLA"}</span>`;
+  }
+
+  async function cargarServicios() {
+    try {
+      const resp = await fetch("/dashboard/api/status");
+      const data = await resp.json();
+      const nombres = {
+        postgres: "Postgres",
+        redis: "Redis",
+        baileys: "Baileys / WhatsApp",
+        llm: "LLM local",
+        flask: "Flask",
+      };
+      const grid = document.getElementById("servicios-grid");
+      grid.innerHTML = Object.entries(nombres)
+        .map(([clave, etiqueta]) => {
+          const s = data[clave] || { ok: false, detalle: "sin datos" };
+          const extra = clave === "baileys" && s.numero ? `<p>Número: ${s.numero}</p>` : "";
+          return `
+            <div class="card">
+              <h3>${etiqueta} ${pill(s.ok)}</h3>
+              <p>${s.detalle || ""}</p>
+              ${extra}
+            </div>`;
+        })
+        .join("");
+      document.getElementById("servicios-actualizado").textContent =
+        "Última actualización: " + new Date(data.chequeado_en).toLocaleTimeString();
+    } catch (err) {
+      document.getElementById("servicios-grid").innerHTML = "<p>No se pudo consultar el estado.</p>";
+    }
+  }
+
+  async function cargarQr() {
+    try {
+      const resp = await fetch("/dashboard/api/qr");
+      const data = await resp.json();
+      const texto = document.getElementById("qr-estado-texto");
+      const img = document.getElementById("qr-imagen");
+
+      if (data.conectado) {
+        texto.textContent = "✅ WhatsApp conectado" + (data.numero ? ` (número ${data.numero})` : "");
+        img.style.display = "none";
+      } else if (data.qr_imagen) {
+        texto.textContent = "Escanea este código con WhatsApp → Dispositivos vinculados:";
+        img.src = data.qr_imagen;
+        img.style.display = "inline-block";
+      } else {
+        texto.textContent = "Esperando código QR de Baileys…";
+        img.style.display = "none";
+      }
+    } catch (err) {
+      document.getElementById("qr-estado-texto").textContent = "No se pudo consultar el estado de WhatsApp.";
+    }
+  }
+
+  async function cargarMetricas() {
+    try {
+      const resp = await fetch("/dashboard/api/metricas");
+      const data = await resp.json();
+
+      document.getElementById("metricas-resumen").innerHTML = `
+        <div class="stat"><div class="valor">${data.total_reservas_30d}</div><div class="etiqueta">Reservas (30d)</div></div>
+        <div class="stat"><div class="valor">${data.total_bloqueadas_30d}</div><div class="etiqueta">Bloqueadas por guardrails (30d)</div></div>
+      `;
+
+      const tbody = document.querySelector("#tabla-interacciones tbody");
+      tbody.innerHTML = data.ultimas_interacciones
+        .map((i) => `
+          <tr>
+            <td>${i.creado_en ? new Date(i.creado_en).toLocaleString() : "-"}</td>
+            <td>${i.telefono_wa || "-"}</td>
+            <td>${i.intent || "-"}</td>
+            <td>${i.permitido ? "sí" : "no"}</td>
+            <td>${i.motivo_bloqueo || "-"}</td>
+          </tr>`)
+        .join("");
+    } catch (err) {
+      document.getElementById("metricas-resumen").innerHTML = "<p>No se pudieron cargar las métricas.</p>";
+    }
+  }
+
+  cargarServicios();
+  cargarQr();
+  cargarMetricas();
+
+  setInterval(cargarServicios, 10000);
+  setInterval(cargarQr, 5000);
+  setInterval(cargarMetricas, 30000);
+})();
+</script>
+
+</body>
+</html>

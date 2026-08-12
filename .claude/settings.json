@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -u admin:ZyVEUKLhnJPox9goYiEdiBzPuJND9SM6 http://localhost:5000/dashboard/)",
+      "Bash(curl -s http://localhost:5000/api/analytics/reservas-por-dia)",
+      "Bash(curl -s http://localhost:5000/api/analytics/recursos-mas-usados)"
+    ]
+  }
+}

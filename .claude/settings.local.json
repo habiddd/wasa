@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(curl -s http://localhost:5000/health)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/dashboard/)",
+      "Bash(curl -s -u admin:ZyVEUKLhnJPox9goYiEdiBzPuJND9SM6 http://localhost:5000/dashboard/api/status)",
+      "Bash(curl -s -u admin:ZyVEUKLhnJPox9goYiEdiBzPuJND9SM6 http://localhost:5000/dashboard/api/qr)",
+      "Bash(curl -s -u admin:ZyVEUKLhnJPox9goYiEdiBzPuJND9SM6 http://localhost:5000/dashboard/api/metricas)",
+      "Bash(curl -s -u admin:ZyVEUKLhnJPox9goYiEdiBzPuJND9SM6 -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/dashboard/)",
+      "Bash(curl -s http://localhost:3000/status)",
+      "Bash(curl -s -X POST http://localhost:5000/webhook/whatsapp -H 'Content-Type: application/json' -H 'x-api-key: 9gjCTGpDwt3ZmhVXnl41MjR1lSjX3CslRXJx_jSvKtI' -d '{\"event\":\"messages.upsert\",\"instance\":\"cpa-uninorte\",\"data\":{\"key\":{\"remoteJid\":\"573001234567@s.whatsapp.net\",\"fromMe\":false},\"message\":{\"conversation\":\"quiero reservar una camara\"}}}')"
+    ]
+  }
+}

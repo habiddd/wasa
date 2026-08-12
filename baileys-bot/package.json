@@ -1,0 +1,15 @@
+{
+  "name": "cpa-baileys-bot",
+  "version": "1.0.0",
+  "description": "Servicio de WhatsApp con Baileys para el bot de reservas de la CPA",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "@hapi/boom": "^9.0.0",
+    "axios": "^1.7.2",
+    "qrcode": "^1.5.3"
+  }
+}

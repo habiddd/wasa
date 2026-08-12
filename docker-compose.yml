@@ -1,0 +1,119 @@
+name: cpa-reservas-bot
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  baileys_sessions:
+
+services:
+
+  # ---------------------------------------------------------------
+  # Base de datos compartida: una instancia de Postgres, dos DBs
+  # (evolution_db para Evolution API, reservas_db para tu app Flask)
+  # ---------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: cpa_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-changeme_super}
+      POSTGRES_DB: postgres
+      # Variables para el script de inicialización (01-init.sql)
+      APP_DB_USER: ${APP_DB_USER:-reservas_user}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-changeme_app}
+      APP_DB_NAME: ${APP_DB_NAME:-reservas_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - backend
+    ports:
+      # Comenta esta línea si no necesitas acceso externo (pgAdmin, DBeaver, etc.)
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cpa_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------
+  # Baileys: canal de WhatsApp no oficial (gratuito, QR)
+  # ---------------------------------------------------------------
+  baileys-bot:
+    build:
+      context: ./baileys-bot
+    container_name: cpa_baileys_bot
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      flask-app:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    volumes:
+      - baileys_sessions:/app/sessions
+    environment:
+      # URL del webhook de Flask (donde Baileys enviará los mensajes)
+      FLASK_WEBHOOK_URL: http://flask-app:5000/webhook/whatsapp
+      FLASK_QR_URL: http://flask-app:5000/webhook/qr
+      FLASK_API_KEY: ${FLASK_API_KEY}
+      BAILEYS_SESSION_DIR: /app/sessions
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------
+  # Tu backend: lógica de reservas, guardrails, analítica, LLM
+  # ---------------------------------------------------------------
+  flask-app:
+    build:
+      context: ./flask-app
+    container_name: cpa_flask_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      FLASK_ENV: ${FLASK_ENV:-production}
+      SECRET_KEY: ${FLASK_SECRET_KEY}
+      DATABASE_URL: postgresql://${APP_DB_USER:-reservas_user}:${APP_DB_PASSWORD:-changeme_app}@postgres:5432/${APP_DB_NAME:-reservas_db}
+      REDIS_URL: redis://redis:6379/0
+
+      # Baileys (servicio de WhatsApp no oficial)
+      WHATSAPP_API_URL: http://baileys-bot:3000
+      WHATSAPP_API_KEY: ${FLASK_API_KEY}
+
+      # Apunta esto a tu Ollama / LM Studio ya existentes en la red local
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://192.168.3.167:9000}
+      LLM_MODEL: ${LLM_MODEL:-llama3.1}
+
+      # Guardrails
+      MAX_MESSAGES_PER_MINUTE: ${MAX_MESSAGES_PER_MINUTE:-8}
+      ALLOWED_INTENTS: "reservar,consultar_disponibilidad,cancelar,ayuda"
+
+      # Dashboard interno (/dashboard), protegido con autenticación básica
+      DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    networks:
+      - backend
