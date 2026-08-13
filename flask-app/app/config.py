@@ -11,9 +11,15 @@ class Config:
     WHATSAPP_API_URL = os.environ.get("WHATSAPP_API_URL", "http://baileys-bot:3000")
     WHATSAPP_API_KEY = os.environ.get("WHATSAPP_API_KEY")
 
-    # LLM local (Ollama / LM Studio en tu red)
-    LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://192.168.3.167:9000")
-    LLM_MODEL = os.environ.get("LLM_MODEL", "llama3.1")
+    # LLM local, vía API compatible con OpenAI (Ollama / LM Studio).
+    # .strip() porque un espacio de más al final en .env (fácil de dejar sin
+    # querer) rompe la URL silenciosamente.
+    LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://192.168.3.167:9000").strip()
+    LLM_MODEL = os.environ.get("LLM_MODEL", "llama3.1").strip()
+    # Opcional: algunos servidores compatibles con OpenAI exigen
+    # "Authorization: Bearer <key>" aunque sea local. LM Studio / Ollama no
+    # lo requieren, así que puede quedar vacío.
+    LLM_API_KEY = os.environ.get("LLM_API_KEY", "").strip() or None
 
     # Guardrails
     MAX_MESSAGES_PER_MINUTE = int(os.environ.get("MAX_MESSAGES_PER_MINUTE", 8))

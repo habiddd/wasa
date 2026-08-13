@@ -104,9 +104,14 @@ services:
       WHATSAPP_API_URL: http://baileys-bot:3000
       WHATSAPP_API_KEY: ${FLASK_API_KEY}
 
-      # Apunta esto a tu Ollama / LM Studio ya existentes en la red local
+      # LLM local vía API compatible con OpenAI (Ollama / LM Studio).
+      # Si LM Studio corre en el mismo Windows/Mac donde está Docker Desktop
+      # (no dentro de otro contenedor), usa host.docker.internal en vez de
+      # 127.0.0.1/localhost -- dentro del contenedor esos apuntan al propio
+      # contenedor, no al host.
       LLM_BASE_URL: ${LLM_BASE_URL:-http://192.168.3.167:9000}
       LLM_MODEL: ${LLM_MODEL:-llama3.1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
 
       # Guardrails
       MAX_MESSAGES_PER_MINUTE: ${MAX_MESSAGES_PER_MINUTE:-8}

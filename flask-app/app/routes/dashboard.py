@@ -85,8 +85,10 @@ def _check_baileys(estado: dict | None) -> dict:
 
 def _check_llm() -> dict:
     base_url = current_app.config["LLM_BASE_URL"].rstrip("/")
+    api_key = current_app.config.get("LLM_API_KEY")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        resp = requests.get(f"{base_url}/v1/models", timeout=3)
+        resp = requests.get(f"{base_url}/v1/models", headers=headers, timeout=3)
         resp.raise_for_status()
         return {"ok": True, "detalle": "conectado"}
     except requests.RequestException as exc:

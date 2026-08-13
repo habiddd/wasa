@@ -35,6 +35,11 @@ def clasificar_intent(texto_usuario: str) -> str:
     return "otro"
 
 
+def _headers() -> dict:
+    api_key = current_app.config.get("LLM_API_KEY")
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
 def generar_respuesta(texto_usuario: str) -> str:
     base_url = current_app.config["LLM_BASE_URL"].rstrip("/")
     modelo = current_app.config["LLM_MODEL"]
@@ -51,7 +56,7 @@ def generar_respuesta(texto_usuario: str) -> str:
     }
 
     try:
-        resp = requests.post(url, json=payload, timeout=30)
+        resp = requests.post(url, json=payload, headers=_headers(), timeout=30)
         resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"].strip()
