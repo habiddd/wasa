@@ -35,7 +35,7 @@ def recibir_ack():
     return jsonify({"status": "ok" if encontrado else "no_encontrado"}), 200
 
 
-def _extraer_mensaje(payload: dict) -> tuple[str | None, str | None]:
+def _extraer_mensaje(payload: dict) -> tuple[str | None, str | None, str | None]:
     """
     Evolution API envía distintos formatos de evento; nos interesa
     'messages.upsert'. Estructura típica:
@@ -47,16 +47,20 @@ def _extraer_mensaje(payload: dict) -> tuple[str | None, str | None]:
         "message": {"conversation": "hola"}
       }
     }
-    Devuelve (numero_sin_sufijo, texto) o (None, None) si no aplica.
+    Devuelve (numero_sin_sufijo, texto, remote_jid) o (None, None, None) si
+    no aplica. `numero` es solo un identificador para rate limiting/auditoría;
+    para responder hay que usar `remote_jid` completo -- WhatsApp usa JIDs
+    "@lid" para algunas cuentas en vez de "@s.whatsapp.net", y perder el
+    sufijo hace que la respuesta se mande a un JID que no existe.
     """
     if payload.get("event") != "messages.upsert":
-        return None, None
+        return None, None, None
 
     data = payload.get("data", {})
     key = data.get("key", {})
 
     if key.get("fromMe"):
-        return None, None  # ignorar mensajes enviados por el propio bot
+        return None, None, None  # ignorar mensajes enviados por el propio bot
 
     remote_jid = key.get("remoteJid", "")
     numero = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
@@ -64,13 +68,13 @@ def _extraer_mensaje(payload: dict) -> tuple[str | None, str | None]:
     mensaje = data.get("message", {})
     texto = mensaje.get("conversation") or mensaje.get("extendedTextMessage", {}).get("text")
 
-    return (numero or None), (texto or None)
+    return (numero or None), (texto or None), (remote_jid or None)
 
 
 @bp.route("/webhook/whatsapp", methods=["POST"])
 def recibir_webhook():
     payload = request.get_json(silent=True) or {}
-    numero, texto = _extraer_mensaje(payload)
+    numero, texto, remote_jid = _extraer_mensaje(payload)
 
     if not numero or not texto:
         # Eventos que no son mensajes de texto entrantes (status, conexión, etc.)
@@ -87,7 +91,7 @@ def recibir_webhook():
     # --- Guardrail 2: filtrado de entrada ---
     if guardrails.mensaje_es_sospechoso(texto):
         respuesta = "No puedo procesar ese mensaje. Escribe 'ayuda' para ver qué puedo hacer."
-        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(numero, respuesta)
+        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
         guardrails.registrar_interaccion(
             numero, texto, None, respuesta, permitido=False,
             motivo_bloqueo="mensaje_sospechoso",
@@ -103,7 +107,7 @@ def recibir_webhook():
             "Solo puedo ayudarte a reservar equipos/espacios, consultar "
             "disponibilidad o cancelar una reserva. Escribe 'ayuda' para más info."
         )
-        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(numero, respuesta)
+        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
         guardrails.registrar_interaccion(
             numero, texto, intent, respuesta, permitido=False,
             motivo_bloqueo="intent_no_permitido",
@@ -118,7 +122,7 @@ def recibir_webhook():
     # Por ahora, delega la respuesta conversacional al LLM local.
     respuesta = llm_client.generar_respuesta(texto)
 
-    enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(numero, respuesta)
+    enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
 
     guardrails.registrar_interaccion(
         numero, texto, intent, respuesta, permitido=True,

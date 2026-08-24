@@ -3,8 +3,10 @@
 ## Flujo de un mensaje entrante
 
 1. Usuario escribe por WhatsApp al número de la CPA.
-2. Evolution API (Baileys o Meta Cloud API, según config) recibe el
-   mensaje y lo reenvía a `POST /webhook/whatsapp` en Flask.
+2. `baileys-bot` (servicio Node.js sobre `@whiskeysockets/baileys`, WhatsApp
+   Web no oficial) recibe el mensaje vía `messages.upsert` y lo reenvía a
+   `POST /webhook/whatsapp` en Flask, con el `remoteJid` completo tal cual
+   lo entrega Baileys (ver nota sobre JIDs `@lid` más abajo).
 3. Flask, en orden:
    - Aplica **rate limiting** por número (`guardrails.excede_limite_mensajes`).
    - Aplica **filtrado de entrada** contra mensajes sospechosos/inyección
@@ -17,17 +19,54 @@
      buena parte de las respuestas deberían ser plantillas fijas +
      datos reales, y el LLM se reserva para interpretar lenguaje natural
      libre, no para "inventar" el contenido de la respuesta).
-   - Envía la respuesta de vuelta por `evolution_client.enviar_mensaje_texto`.
+   - Envía la respuesta de vuelta por `whatsapp_client.enviar_mensaje_texto`,
+     que hace `POST /send` al servicio `baileys-bot`.
    - Registra la interacción completa en `auditoria_bot`.
+4. `baileys-bot` reporta de forma asíncrona el estado de entrega
+   (server-ack/delivery-ack/leído) vía `POST /webhook/ack`, correlacionado
+   por `mensaje_id` (ver `guardrails.actualizar_estado_envio`).
 
-## Por qué Evolution API como intermediario
+`flask-app/app/evolution_client.py` es un cliente para Evolution API que
+quedó del scaffold original y ya no se usa — el canal activo hoy es
+Baileys directo (`whatsapp_client.py`), documentado en
+`docs/SESION_2026-08-10.md`.
 
-- Abstrae el canal: mismo webhook, mismo formato de payload, sin importar
-  si por debajo hay Baileys o Meta Cloud API.
-- Te da reconexión automática y gestión de sesión de WhatsApp sin que
-  tengas que mantenerlo tú a mano.
+## Por qué Baileys directo (sin Evolution API de por medio)
+
+- Es gratuito y no requiere levantar/mantener una instancia aparte de
+  Evolution API.
+- Te da reconexión automática y gestión de sesión de WhatsApp (la sesión
+  persiste en el volumen `baileys_sessions`) sin que tengas que
+  mantenerlo tú a mano.
 - Permite correr en modo no oficial (gratis, rápido de arrancar) mientras
   tramitas la verificación de negocio de Meta, sin bloquear tu desarrollo.
+- El costo es que Flask queda acoplado directamente al formato de eventos
+  de Baileys en vez de a un formato intermediario estable — si más
+  adelante se migra a Meta Cloud API, `webhook.py`/`whatsapp_client.py`
+  necesitan un adaptador.
+
+## JIDs `@lid` — por qué no se puede reconstruir el destino desde el número
+
+WhatsApp no siempre identifica una conversación con el JID clásico
+`<numero>@s.whatsapp.net`; algunas cuentas usan direccionamiento
+`<id>@lid` ("linked ID"). Baileys entrega el `remoteJid` tal cual sea uno
+u otro.
+
+Si el pipeline recorta el `remoteJid` a solo los dígitos (por ejemplo,
+para usarlo como identificador de rate limiting o como `telefono_wa` en
+`auditoria_bot`) y luego reconstruye el JID de salida asumiendo siempre
+`@s.whatsapp.net`, el mensaje se manda a un JID que no es el de la
+conversación real. Baileys no valida que el JID exista: `sendMessage`
+devuelve éxito igual, pero WhatsApp nunca entrega nada. Esto pasó en
+producción (ver `docs/SESION_2026-08-24.md`) y quedó silencioso durante
+semanas porque no genera ningún error en los logs.
+
+Por eso `webhook.py` guarda dos cosas por separado:
+- `numero` (dígitos, solo para rate limiting/auditoría — no sirve para
+  responder).
+- `remote_jid` (el JID completo tal cual llegó — el único que hay que
+  usar para enviar la respuesta, vía `whatsapp_client.enviar_mensaje_texto`
+  → `baileys-bot` `POST /send` con `{"jid": ...}`).
 
 ## Por qué separar el LLM de la lógica de reservas
 

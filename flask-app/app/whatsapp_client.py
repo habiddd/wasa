@@ -16,9 +16,15 @@ def _headers():
     }
 
 
-def enviar_mensaje_texto(numero_destino: str, texto: str, timeout: int = 10) -> tuple[bool, str | None]:
+def enviar_mensaje_texto(jid_destino: str, texto: str, timeout: int = 10) -> tuple[bool, str | None]:
     """
-    numero_destino: número en formato internacional sin '+' (ej: 573001234567)
+    jid_destino: JID completo tal cual llegó en el webhook entrante (ej:
+    "573001234567@s.whatsapp.net" o "144186850431118@lid"). Hay que
+    reenviar el JID completo, no solo el número: WhatsApp usa JIDs "@lid"
+    para algunas cuentas, y reconstruirlo como "<numero>@s.whatsapp.net"
+    manda el mensaje a un JID distinto que Baileys acepta sin error pero
+    que WhatsApp nunca entrega (visto en producción con telefono_wa
+    144186850431118).
 
     Devuelve (enviado, mensaje_id). `enviado` solo indica que Baileys aceptó
     el mensaje para enviarlo (ack a nivel HTTP) -- no que WhatsApp lo haya
@@ -30,7 +36,7 @@ def enviar_mensaje_texto(numero_destino: str, texto: str, timeout: int = 10) -> 
     url = f"{base_url}/send"
 
     payload = {
-        "number": numero_destino,
+        "jid": jid_destino,
         "text": texto,
     }
 

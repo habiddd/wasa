@@ -203,8 +203,15 @@ async function connectToWhatsApp() {
 
   // Función para enviar mensajes (usada por Flask vía HTTP).
   // Devuelve el id del mensaje para poder trackear su estado de entrega.
-  sock.sendText = async (numero, texto) => {
-    const remoteJid = `${numero}@s.whatsapp.net`;
+  //
+  // `destino` debe ser el JID completo tal cual llegó en messages.upsert
+  // (ej: "573001234567@s.whatsapp.net" o "144186850431118@lid" -- WhatsApp
+  // usa JIDs "@lid" para algunas cuentas en vez de "@s.whatsapp.net", y
+  // reconstruirlo asumiendo siempre "@s.whatsapp.net" manda el mensaje a un
+  // JID que no existe: Baileys lo acepta sin error pero WhatsApp nunca lo
+  // entrega). Si no trae "@" (número suelto), se asume "@s.whatsapp.net".
+  sock.sendText = async (destino, texto) => {
+    const remoteJid = destino.includes("@") ? destino : `${destino}@s.whatsapp.net`;
     const enviado = await sock.sendMessage(remoteJid, { text: texto });
     return enviado?.key?.id || null;
   };
@@ -238,7 +245,12 @@ const server = http.createServer(async (req, res) => {
       }
 
       try {
-        const mensajeId = await sock.sendText(payload.number, payload.text);
+        // `jid` (JID completo, ej. "...@lid") tiene prioridad sobre `number`
+        // (número suelto, se asume "@s.whatsapp.net") -- ver comentario en
+        // sock.sendText sobre por qué reconstruir el JID desde el número
+        // pierde chats que usan direccionamiento "@lid".
+        const destino = payload.jid || payload.number;
+        const mensajeId = await sock.sendText(destino, payload.text);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ status: "ok", id: mensajeId }));
       } catch (err) {
