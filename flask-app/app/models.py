@@ -54,4 +54,9 @@ class AuditoriaBot(db.Model):
     respuesta_enviada = db.Column(db.Text)
     permitido = db.Column(db.Boolean, nullable=False, default=True)
     motivo_bloqueo = db.Column(db.Text)
+    # Id del mensaje de WhatsApp (lo devuelve Baileys al enviar) y su último
+    # estado de entrega conocido, actualizado vía POST /webhook/ack cuando
+    # Baileys recibe el ack de WhatsApp (server_ack/delivery_ack/leido/error).
+    mensaje_id = db.Column(db.String(64))
+    estado_envio = db.Column(db.String(20), nullable=False, default="n/a")
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)

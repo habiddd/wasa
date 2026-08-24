@@ -11,8 +11,20 @@ const axios = require("axios");
 // Configuración desde variables de entorno
 const FLASK_WEBHOOK_URL = process.env.FLASK_WEBHOOK_URL || "http://flask-app:5000/webhook/whatsapp";
 const FLASK_QR_URL = process.env.FLASK_QR_URL || "http://flask-app:5000/webhook/qr";
+const FLASK_ACK_URL = process.env.FLASK_ACK_URL || "http://flask-app:5000/webhook/ack";
 const FLASK_API_KEY = process.env.FLASK_API_KEY || "";
 const SESSION_DIR = process.env.BAILEYS_SESSION_DIR || "./sessions";
+
+// proto.WebMessageInfo.Status: ERROR=0, PENDING=1, SERVER_ACK=2,
+// DELIVERY_ACK=3, READ=4, PLAYED=5 (confirmado contra la versión instalada).
+const ESTADO_POR_STATUS = {
+  0: "fallido",
+  1: "pendiente",
+  2: "enviado",
+  3: "entregado",
+  4: "leido",
+  5: "reproducido",
+};
 
 // Estado global del socket y de la conexión (usado por /status y /send).
 // Declarado aquí -no dentro de connectToWhatsApp- para que no quede
@@ -35,6 +47,22 @@ async function connectToWhatsApp() {
 
   // Guardar credenciales cuando cambien
   sock.ev.on("creds.update", saveCreds);
+
+  // Salvaguarda contra un bug conocido de Baileys: su buffer interno de
+  // eventos (ev.buffer()/ev.flush()) a veces se queda atascado en modo
+  // "buffering" para siempre si alguna tarea interna de sincronización
+  // nunca resuelve (lo confirmamos en pruebas: tras mandar un mensaje,
+  // ev.isBuffering() quedó en true indefinidamente). Mientras está
+  // atascado, eventos como messages.update (y hasta messages.upsert) dejan
+  // de llegar en silencio. Forzamos un flush si lleva "atascado" más de
+  // unos segundos -- en operación normal isBuffering() vuelve a false casi
+  // de inmediato, así que esto no debería disparar nunca en el camino feliz.
+  const bufferWatchdog = setInterval(() => {
+    if (sock?.ev?.isBuffering?.()) {
+      console.warn("⚠️ Buffer de eventos de Baileys atascado, forzando flush");
+      sock.ev.flush();
+    }
+  }, 5000);
 
   // Manejar códigos QR (viene en connection.update en versiones nuevas)
   sock.ev.on("qr", async (qr) => {
@@ -82,6 +110,7 @@ async function connectToWhatsApp() {
     if (connection === "close") {
       connectionState = "close";
       phoneNumber = null;
+      clearInterval(bufferWatchdog);
 
       const shouldReconnect =
         lastDisconnect.error instanceof Boom
@@ -156,10 +185,28 @@ async function connectToWhatsApp() {
     }
   });
 
-  // Función para enviar mensajes (usada por Flask vía HTTP)
+  // Estado de entrega de mensajes salientes (server-ack/delivery-ack/leído/
+  // error). Lo reenviamos a Flask para que quede en la auditoría y se vea
+  // en el dashboard. `key.fromMe` filtra que solo nos importen los mensajes
+  // que nosotros mandamos, no los que llegan del usuario.
+  sock.ev.on("messages.update", (updates) => {
+    for (const { key, update } of updates) {
+      if (!key.fromMe || update.status === undefined) continue;
+      const estado = ESTADO_POR_STATUS[update.status] || `desconocido_${update.status}`;
+      axios.post(
+        FLASK_ACK_URL,
+        { id: key.id, estado },
+        { headers: { "x-api-key": FLASK_API_KEY, "Content-Type": "application/json" } }
+      ).catch((err) => console.error("Error enviando ack al webhook:", err.message));
+    }
+  });
+
+  // Función para enviar mensajes (usada por Flask vía HTTP).
+  // Devuelve el id del mensaje para poder trackear su estado de entrega.
   sock.sendText = async (numero, texto) => {
     const remoteJid = `${numero}@s.whatsapp.net`;
-    await sock.sendMessage(remoteJid, { text: texto });
+    const enviado = await sock.sendMessage(remoteJid, { text: texto });
+    return enviado?.key?.id || null;
   };
 }
 
@@ -191,9 +238,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       try {
-        await sock.sendText(payload.number, payload.text);
+        const mensajeId = await sock.sendText(payload.number, payload.text);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "ok" }));
+        res.end(JSON.stringify({ status: "ok", id: mensajeId }));
       } catch (err) {
         console.error("Error enviando mensaje por WhatsApp:", err.message);
         res.writeHead(502, { "Content-Type": "application/json" });
@@ -212,6 +259,10 @@ const server = http.createServer(async (req, res) => {
         status: connectionState,
         phoneNumber: phoneNumber,
         lastQrAt: lastQrAt,
+        // Ver el comentario sobre bufferWatchdog más arriba. Si esto
+        // aparece en true por más de unos segundos seguidos, algo se
+        // atascó -- el watchdog debería resolverlo solo.
+        eventBufferAtascado: sock?.ev?.isBuffering ? sock.ev.isBuffering() : null,
       })
     );
   } else {

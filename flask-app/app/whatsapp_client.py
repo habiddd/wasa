@@ -16,9 +16,15 @@ def _headers():
     }
 
 
-def enviar_mensaje_texto(numero_destino: str, texto: str, timeout: int = 10) -> bool:
+def enviar_mensaje_texto(numero_destino: str, texto: str, timeout: int = 10) -> tuple[bool, str | None]:
     """
     numero_destino: número en formato internacional sin '+' (ej: 573001234567)
+
+    Devuelve (enviado, mensaje_id). `enviado` solo indica que Baileys aceptó
+    el mensaje para enviarlo (ack a nivel HTTP) -- no que WhatsApp lo haya
+    entregado. El estado de entrega real llega después, de forma asíncrona,
+    vía POST /webhook/ack (ver app/routes/webhook.py) y se correlaciona por
+    `mensaje_id`.
     """
     base_url = current_app.config["WHATSAPP_API_URL"].rstrip("/")
     url = f"{base_url}/send"
@@ -31,7 +37,7 @@ def enviar_mensaje_texto(numero_destino: str, texto: str, timeout: int = 10) -> 
     try:
         resp = requests.post(url, json=payload, headers=_headers(), timeout=timeout)
         resp.raise_for_status()
-        return True
+        return True, resp.json().get("id")
     except requests.RequestException as exc:
         current_app.logger.error("Error enviando mensaje por Baileys: %s", exc)
-        return False
+        return False, None

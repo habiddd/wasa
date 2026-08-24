@@ -80,6 +80,7 @@ def _check_baileys(estado: dict | None) -> dict:
         "detalle": estado.get("status", "desconocido"),
         "whatsapp_conectado": estado.get("status") == "open",
         "numero": estado.get("phoneNumber"),
+        "buffer_atascado": estado.get("eventBufferAtascado"),
     }
 
 
@@ -176,6 +177,7 @@ def api_metricas():
                     "intent": i.intent_detectado,
                     "permitido": i.permitido,
                     "motivo_bloqueo": i.motivo_bloqueo,
+                    "estado_envio": i.estado_envio,
                     "creado_en": i.creado_en.isoformat() if i.creado_en else None,
                 }
                 for i in ultimas_interacciones

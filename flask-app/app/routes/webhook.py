@@ -19,6 +19,22 @@ def obtener_qr():
     return jsonify({"qr": estado_bot.obtener_qr()}), 200
 
 
+@bp.route("/webhook/ack", methods=["POST"])
+def recibir_ack():
+    """Recibe de Baileys el estado de entrega de un mensaje que enviamos
+    (server_ack/delivery_ack/leido/fallido) y lo asocia a su fila de
+    auditoría por mensaje_id."""
+    payload = request.get_json(silent=True) or {}
+    mensaje_id = payload.get("id")
+    estado = payload.get("estado")
+
+    if not mensaje_id or not estado:
+        return jsonify({"status": "ignorado"}), 200
+
+    encontrado = guardrails.actualizar_estado_envio(mensaje_id, estado)
+    return jsonify({"status": "ok" if encontrado else "no_encontrado"}), 200
+
+
 def _extraer_mensaje(payload: dict) -> tuple[str | None, str | None]:
     """
     Evolution API envía distintos formatos de evento; nos interesa
@@ -70,12 +86,13 @@ def recibir_webhook():
 
     # --- Guardrail 2: filtrado de entrada ---
     if guardrails.mensaje_es_sospechoso(texto):
+        respuesta = "No puedo procesar ese mensaje. Escribe 'ayuda' para ver qué puedo hacer."
+        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(numero, respuesta)
         guardrails.registrar_interaccion(
-            numero, texto, None, None, permitido=False,
+            numero, texto, None, respuesta, permitido=False,
             motivo_bloqueo="mensaje_sospechoso",
-        )
-        whatsapp_client.enviar_mensaje_texto(
-            numero, "No puedo procesar ese mensaje. Escribe 'ayuda' para ver qué puedo hacer."
+            mensaje_id=mensaje_id,
+            estado_envio="pendiente" if enviado else "error_http",
         )
         return jsonify({"status": "bloqueado"}), 200
 
@@ -86,10 +103,12 @@ def recibir_webhook():
             "Solo puedo ayudarte a reservar equipos/espacios, consultar "
             "disponibilidad o cancelar una reserva. Escribe 'ayuda' para más info."
         )
-        whatsapp_client.enviar_mensaje_texto(numero, respuesta)
+        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(numero, respuesta)
         guardrails.registrar_interaccion(
             numero, texto, intent, respuesta, permitido=False,
             motivo_bloqueo="intent_no_permitido",
+            mensaje_id=mensaje_id,
+            estado_envio="pendiente" if enviado else "error_http",
         )
         return jsonify({"status": "intent_bloqueado"}), 200
 
@@ -99,10 +118,12 @@ def recibir_webhook():
     # Por ahora, delega la respuesta conversacional al LLM local.
     respuesta = llm_client.generar_respuesta(texto)
 
-    enviado = whatsapp_client.enviar_mensaje_texto(numero, respuesta)
+    enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(numero, respuesta)
 
     guardrails.registrar_interaccion(
         numero, texto, intent, respuesta, permitido=True,
+        mensaje_id=mensaje_id,
+        estado_envio="pendiente" if enviado else "error_http",
     )
 
     return jsonify({"status": "ok" if enviado else "error_envio"}), 200

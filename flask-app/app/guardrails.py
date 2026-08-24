@@ -66,6 +66,8 @@ def registrar_interaccion(
     respuesta_enviada: str | None,
     permitido: bool,
     motivo_bloqueo: str | None = None,
+    mensaje_id: str | None = None,
+    estado_envio: str = "n/a",
 ):
     entrada = AuditoriaBot(
         telefono_wa=telefono_wa,
@@ -74,6 +76,25 @@ def registrar_interaccion(
         respuesta_enviada=respuesta_enviada,
         permitido=permitido,
         motivo_bloqueo=motivo_bloqueo,
+        mensaje_id=mensaje_id,
+        estado_envio=estado_envio,
     )
     db.session.add(entrada)
     db.session.commit()
+
+
+def actualizar_estado_envio(mensaje_id: str, estado: str) -> bool:
+    """Llamado desde /webhook/ack cuando Baileys reporta un cambio de
+    estado (server_ack/delivery_ack/leido/fallido) para un mensaje que
+    nosotros enviamos. Devuelve False si no encuentra el mensaje (por
+    ejemplo, si la auditoría se limpió antes de que llegara el ack)."""
+    entrada = (
+        AuditoriaBot.query.filter_by(mensaje_id=mensaje_id)
+        .order_by(AuditoriaBot.creado_en.desc())
+        .first()
+    )
+    if entrada is None:
+        return False
+    entrada.estado_envio = estado
+    db.session.commit()
+    return True

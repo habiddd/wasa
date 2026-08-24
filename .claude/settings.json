@@ -11,7 +11,10 @@
       "Bash(python3 -m json.tool)",
       "Bash(curl -s http://localhost:3000/status)",
       "Bash(docker volume *)",
-      "Bash(docker run *)"
+      "Bash(docker run *)",
+      "Bash(echo \"---exit code: $?---\")",
+      "Bash(curl -s -X POST http://localhost:5000/webhook/whatsapp -H 'Content-Type: application/json' -H 'x-api-key: 9gjCTGpDwt3ZmhVXnl41MjR1lSjX3CslRXJx_jSvKtI' -d '{\"event\":\"messages.upsert\",\"instance\":\"cpa-uninorte\",\"data\":{\"key\":{\"remoteJid\":\"573000000004@s.whatsapp.net\",\"fromMe\":false},\"message\":{\"conversation\":\"ayuda\"}}}')",
+      "Bash(curl -s -X POST http://localhost:5000/webhook/whatsapp -H 'Content-Type: application/json' -H 'x-api-key: 9gjCTGpDwt3ZmhVXnl41MjR1lSjX3CslRXJx_jSvKtI' -d '{\"event\":\"messages.upsert\",\"instance\":\"cpa-uninorte\",\"data\":{\"key\":{\"remoteJid\":\"573000000005@s.whatsapp.net\",\"fromMe\":false},\"message\":{\"conversation\":\"ayuda\"}}}')"
     ]
   }
 }

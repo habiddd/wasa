@@ -58,10 +58,18 @@ CREATE TABLE IF NOT EXISTS auditoria_bot (
     respuesta_enviada TEXT,
     permitido       BOOLEAN NOT NULL DEFAULT TRUE,  -- false si un guardrail lo bloqueó
     motivo_bloqueo  TEXT,
+    mensaje_id      VARCHAR(64),                    -- id del mensaje en WhatsApp (lo asigna Baileys)
+    estado_envio    VARCHAR(20) NOT NULL DEFAULT 'n/a', -- n/a | error_http | pendiente | enviado | entregado | leido | reproducido | fallido
     creado_en       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Migración para bases ya creadas antes de que existieran estas columnas
+-- (postgres/init/*.sql solo corre la primera vez que se crea el volumen).
+ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS mensaje_id VARCHAR(64);
+ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS estado_envio VARCHAR(20) NOT NULL DEFAULT 'n/a';
+
 CREATE INDEX IF NOT EXISTS idx_auditoria_telefono_fecha ON auditoria_bot (telefono_wa, creado_en);
+CREATE INDEX IF NOT EXISTS idx_auditoria_mensaje_id ON auditoria_bot (mensaje_id);
 
 -- Este script corre con el superusuario de Postgres (ver 01-init.sql), así
 -- que las tablas de arriba quedan con OWNER postgres. GRANT ALL PRIVILEGES

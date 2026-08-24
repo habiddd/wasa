@@ -74,6 +74,7 @@ services:
       # URL del webhook de Flask (donde Baileys enviará los mensajes)
       FLASK_WEBHOOK_URL: http://flask-app:5000/webhook/whatsapp
       FLASK_QR_URL: http://flask-app:5000/webhook/qr
+      FLASK_ACK_URL: http://flask-app:5000/webhook/ack
       FLASK_API_KEY: ${FLASK_API_KEY}
       BAILEYS_SESSION_DIR: /app/sessions
     networks:
