@@ -20,6 +20,10 @@ def create_app(config_class: type = Config) -> Flask:
 
         db.create_all()  # crea tablas si no existen (idempotente)
 
+        from app.seed import registrar_cli
+
+        registrar_cli(app)
+
     @app.route("/health")
     def health():
         return jsonify({"status": "ok"})

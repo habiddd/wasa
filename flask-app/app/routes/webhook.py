@@ -1,6 +1,6 @@
 from flask import Blueprint, current_app, jsonify, request
 
-from app import whatsapp_client, guardrails, llm_client, estado_bot
+from app import whatsapp_client, guardrails, llm_client, estado_bot, recursos_service
 
 bp = Blueprint("webhook", __name__)
 
@@ -116,11 +116,14 @@ def recibir_webhook():
         )
         return jsonify({"status": "intent_bloqueado"}), 200
 
-    # --- TODO: aquí conectas la lógica real de reservas por intent ---
-    # if intent == "reservar": ...
-    # if intent == "consultar_disponibilidad": ...
-    # Por ahora, delega la respuesta conversacional al LLM local.
-    respuesta = llm_client.generar_respuesta(texto)
+    # Para reservar/consultar disponibilidad, la respuesta sale de datos
+    # reales de recursos/reservas (ver recursos_service) -- nunca del LLM,
+    # que podría inventar disponibilidad. El resto de intents permitidos
+    # (cancelar, ayuda) sigue delegando en el LLM por ahora.
+    if intent in ("reservar", "consultar_disponibilidad"):
+        respuesta = recursos_service.evaluar_disponibilidad(texto)
+    else:
+        respuesta = llm_client.generar_respuesta(texto)
 
     enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
 
