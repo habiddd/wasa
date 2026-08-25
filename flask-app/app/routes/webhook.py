@@ -1,6 +1,15 @@
 from flask import Blueprint, current_app, jsonify, request
 
-from app import whatsapp_client, guardrails, llm_client, estado_bot, recursos_service
+from app import (
+    whatsapp_client,
+    guardrails,
+    llm_client,
+    estado_bot,
+    recursos_service,
+    usuarios_service,
+    registro_service,
+    sesiones,
+)
 
 bp = Blueprint("webhook", __name__)
 
@@ -100,6 +109,45 @@ def recibir_webhook():
         )
         return jsonify({"status": "bloqueado"}), 200
 
+    # --- Identidad: hace falta saber quién es quién antes de dejarlo hacer
+    # nada. El primer contacto de un número crea su fila de Usuario vacía;
+    # mientras no tenga nombre/código/cédula, cada mensaje se trata como
+    # respuesta a la siguiente pregunta pendiente del registro (ver
+    # registro_service.py), sin pasar por clasificación de intent -- si no,
+    # "Juan Pérez" como respuesta a "¿cuál es tu nombre?" se clasificaría
+    # como intent "otro" y quedaría bloqueado por la whitelist. ---
+    usuario = usuarios_service.obtener_o_crear_usuario(numero)
+    sesion = sesiones.obtener_sesion(numero)
+
+    if not registro_service.usuario_esta_completo(usuario):
+        respuesta, sesion = registro_service.procesar_registro(usuario, texto, sesion)
+        sesiones.guardar_sesion(numero, sesion)
+
+        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
+        guardrails.registrar_interaccion(
+            numero, texto, "registro", respuesta, permitido=True,
+            mensaje_id=mensaje_id,
+            estado_envio="pendiente" if enviado else "error_http",
+        )
+        return jsonify({"status": "registro_en_progreso"}), 200
+
+    # --- Confirmación de reserva pendiente: gestionar_reserva ya armó un
+    # resumen y está esperando que el usuario responda sí/no en este mismo
+    # mensaje (ver recursos_service.confirmar_reserva_pendiente) -- eso
+    # tampoco pasa por clasificación de intent, un simple "sí" se
+    # clasificaría como intent "otro" y quedaría bloqueado. ---
+    if sesion.get("reserva_pendiente"):
+        respuesta, sesion = recursos_service.confirmar_reserva_pendiente(texto, usuario, sesion)
+        sesiones.guardar_sesion(numero, sesion)
+
+        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
+        guardrails.registrar_interaccion(
+            numero, texto, "confirmar_reserva", respuesta, permitido=True,
+            mensaje_id=mensaje_id,
+            estado_envio="pendiente" if enviado else "error_http",
+        )
+        return jsonify({"status": "ok" if enviado else "error_envio"}), 200
+
     # --- Clasificación de intent + whitelist ---
     intent = llm_client.clasificar_intent(texto)
     if not guardrails.intent_permitido(intent):
@@ -120,8 +168,11 @@ def recibir_webhook():
     # reales de recursos/reservas (ver recursos_service) -- nunca del LLM,
     # que podría inventar disponibilidad. El resto de intents permitidos
     # (cancelar, ayuda) sigue delegando en el LLM por ahora.
-    if intent in ("reservar", "consultar_disponibilidad"):
-        respuesta = recursos_service.evaluar_disponibilidad(texto)
+    if intent == "consultar_disponibilidad":
+        respuesta = recursos_service.evaluar_consulta_disponibilidad(texto)
+    elif intent == "reservar":
+        respuesta, sesion = recursos_service.gestionar_reserva(texto, usuario, sesion)
+        sesiones.guardar_sesion(numero, sesion)
     else:
         respuesta = llm_client.generar_respuesta(texto)
 

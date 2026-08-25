@@ -12,6 +12,21 @@
 - [x] Dashboard interno (`/dashboard`) protegido con autenticación básica
       (`DASHBOARD_USER`/`DASHBOARD_PASSWORD`) — expone el QR de vinculación
       de WhatsApp, así que no puede quedar abierto
+- [x] Registro obligatorio antes de dejar reservar/consultar nada: el
+      primer mensaje de un número dispara un flujo paso a paso (nombre
+      completo, código de estudiante, cédula) y hasta que no está completo
+      no pasa a ningún otro intent (`registro_service.py`,
+      `usuarios_service.py` — ver `docs/SESION_2026-08-25.md`)
+- [x] Confirmación explícita ("responde SÍ para confirmar") antes de
+      escribir una reserva en la base de datos — el bot manda un resumen
+      (activo, quién reserva, inicio, fin) y solo reserva si el usuario
+      confirma (`recursos_service.gestionar_reserva` /
+      `confirmar_reserva_pendiente`)
+- [x] Restricción a nivel de Postgres (`EXCLUDE USING gist`, extensión
+      `btree_gist`) que impide dos reservas confirmadas solapadas del
+      mismo recurso, sin depender de que la lógica de la app siempre
+      chequee bien — probado saltándose la app con un INSERT crudo por
+      SQL y quedó rechazado (ver `docs/SESION_2026-08-25.md`)
 
 ## Pendiente antes de producción con datos reales de la CPA
 
@@ -41,24 +56,30 @@
 - [ ] Mover el rate limiter de `guardrails.py` de memoria a Redis si vas a
       correr más de un worker de Gunicorn (con memoria, cada worker tiene
       su propio contador y el límite real se vuelve inconsistente).
-- [ ] Validar que el número de WhatsApp que escribe corresponda a un
-      usuario registrado (`usuarios.telefono_wa`) antes de dejarlo reservar
-      equipos costosos — decide si permites auto-registro o requiere
-      alta manual por un admin de la CPA.
-- [ ] Confirmar la reserva con un paso explícito ("responde SÍ para
-      confirmar") antes de escribir en la base de datos, para evitar que
-      una mala interpretación del LLM cree reservas fantasma.
+- [ ] Hoy el registro es auto-servicio (cualquier número que escribe se
+      auto-registra dando sus datos) — decide si para la CPA real hace
+      falta validar esos datos contra algún padrón de Uninorte (ej. que el
+      código de estudiante exista de verdad) en vez de aceptar lo que sea
+      que el usuario escriba.
 - [ ] Logs sin datos sensibles innecesarios (evita loguear el cuerpo
       completo de cada mensaje en texto plano de forma indefinida; define
       una política de retención para `auditoria_bot`).
 
 ### Modelo / LLM
-- [ ] El LLM nunca debe ser el que decide disponibilidad o ejecuta la
+- [x] El LLM nunca debe ser el que decide disponibilidad o ejecuta la
       escritura en la base de datos — siempre a través de funciones
       explícitas y verificadas en SQL (ver `docs/ARQUITECTURA.md`).
-- [ ] Define un tope de tokens/tiempo de respuesta y un mensaje de
-      fallback claro si el LLM local no responde (ya hay un try/except
-      básico en `llm_client.py`, revísalo antes de producción).
+      Implementado: `recursos_service.py` es quien valida/escribe, el LLM
+      solo extrae `{recurso, inicio, fin}` como texto libre → JSON.
+- [ ] El modelo local en uso (`lfm2.5-2.6b`, razonador) puede tardar 30-90s
+      en responder a la extracción de fecha/hora de una reserva porque
+      gasta presupuesto de tokens en `reasoning_content` antes de escribir
+      la respuesta final. Ya se ajustó el timeout de esa llamada (90s) y el
+      de gunicorn (120s, ver `flask-app/Dockerfile`) para que no se corte a
+      mitad de camino, pero un usuario de WhatsApp esperando ~1 minuto por
+      una respuesta sigue siendo mala experiencia. Antes de producción,
+      evalúa un modelo más chico/rápido sin cadena de razonamiento
+      específicamente para esta tarea de extracción estructurada.
 
 ### Cumplimiento con WhatsApp/Meta
 - [ ] Si sigues en modo Baileys en producción real: ten un plan B (número

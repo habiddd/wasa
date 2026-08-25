@@ -7,9 +7,14 @@ class Usuario(db.Model):
     __tablename__ = "usuarios"
 
     id = db.Column(db.Integer, primary_key=True)
-    nombre = db.Column(db.String(150), nullable=False)
+    # nullable: se completa vía el flujo de registro por WhatsApp (ver
+    # registro_service.py), no siempre se conoce en el momento en que se
+    # crea el Usuario (primer contacto, antes de preguntarle nada).
+    nombre = db.Column(db.String(150))
     telefono_wa = db.Column(db.String(20), unique=True, nullable=False)
     codigo_uninorte = db.Column(db.String(30))
+    cedula = db.Column(db.String(20))
+    registro_completo = db.Column(db.Boolean, nullable=False, default=False)
     rol = db.Column(db.String(30), nullable=False, default="estudiante")
     activo = db.Column(db.Boolean, nullable=False, default=True)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
