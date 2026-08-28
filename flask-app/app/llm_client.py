@@ -21,20 +21,83 @@ disponibilidad: si no tienes el dato, dilo explícitamente. Sé breve y claro,
 como si hablaras por WhatsApp."""
 
 
+INTENTS_VALIDOS = ("reservar", "consultar_disponibilidad", "cancelar", "ayuda", "otro")
+
+PROMPT_CLASIFICACION = """Eres un clasificador de intents, no un asistente
+conversacional. Dado un mensaje de WhatsApp dirigido al bot de reservas de
+la CPA (Centro de Producción Audiovisual) de Uninorte, clasifícalo en
+EXACTAMENTE una de estas categorías y responde SOLO con la palabra de la
+categoría (sin comillas, sin explicación, sin markdown, sin texto extra):
+
+- reservar: quiere reservar/apartar un equipo o espacio, o le está
+  respondiendo al bot dentro de un intento de reserva ya en curso (ej.
+  eligiendo cuál activo de una lista que el bot ofreció, dando fecha/hora,
+  corrigiendo un dato).
+- consultar_disponibilidad: pregunta qué activos existen, cuáles están
+  libres/ocupados, o pide información del catálogo sin pedir reservar
+  todavía (ej. "qué cámaras tienen", "qué hay disponible", "tienen
+  micrófonos").
+- cancelar: quiere cancelar una reserva que ya tiene hecha.
+- ayuda: pregunta qué puede hacer el bot o cómo usarlo.
+- otro: cualquier otra cosa (saludos sueltos, temas no relacionados, etc.)
+
+Responde solo la palabra de la categoría."""
+
+
 def clasificar_intent(texto_usuario: str) -> str:
-    """
-    Punto de extensión: aquí va tu lógica real de NLU/LLM para detectar
-    el intent (reservar, consultar_disponibilidad, cancelar, ayuda, otro).
-    De momento hace un match simple por palabras clave como placeholder
-    para que el flujo funcione end-to-end desde el primer día.
-    """
+    """Clasifica el intent del mensaje con el LLM local (mismo endpoint que
+    `extraer_datos_reserva`). Si el LLM no responde, tarda demasiado, o
+    responde algo que no es una de las categorías válidas, cae al
+    heurístico de palabras clave -- mejor una clasificación aproximada que
+    dejar el mensaje sin clasificar y bloqueado por la whitelist."""
+    base_url = current_app.config["LLM_BASE_URL"].rstrip("/")
+    modelo = current_app.config["LLM_MODEL"]
+    url = f"{base_url}/v1/chat/completions"
+
+    payload = {
+        "model": modelo,
+        "messages": [
+            {"role": "system", "content": PROMPT_CLASIFICACION},
+            {"role": "user", "content": texto_usuario},
+        ],
+        "temperature": 0,
+        "max_tokens": 2000,  # igual que extraer_datos_reserva: ver comentario ahí sobre por qué 700 se quedaba corto
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=_headers(), timeout=150)
+        resp.raise_for_status()
+        mensaje = resp.json()["choices"][0]["message"]
+        contenido = (mensaje.get("content") or mensaje.get("reasoning_content") or "").strip().lower()
+    except (requests.RequestException, KeyError, IndexError) as exc:
+        current_app.logger.error("Error consultando el LLM para clasificar intent: %s", exc)
+        return _clasificar_intent_heuristico(texto_usuario)
+
+    for intent in INTENTS_VALIDOS:
+        if intent in contenido:
+            return intent
+
+    current_app.logger.warning("El LLM devolvió un intent no reconocido: %r", contenido)
+    return _clasificar_intent_heuristico(texto_usuario)
+
+
+def _clasificar_intent_heuristico(texto_usuario: str) -> str:
+    """Heurística de respaldo por palabras clave -- solo se usa si el LLM
+    no está disponible o responde algo irreconocible (ver `clasificar_intent`).
+    Antes era la única lógica de clasificación; se queda como red de
+    seguridad porque es instantánea y no depende de ningún servicio externo.
+
+    "cancel" se revisa antes que "reserv" a propósito: "cancelar mi
+    reserva" contiene la subcadena "reserv" (de "reserva"), así que si el
+    orden fuera al revés, cancelar algo caería mal clasificado como
+    "reservar"."""
     texto = normalizar(texto_usuario)
+    if "cancel" in texto:
+        return "cancelar"
     if any(p in texto for p in ("reserv", "aparta", "necesito")):
         return "reservar"
     if any(p in texto for p in ("disponib", "libre", "horario")):
         return "consultar_disponibilidad"
-    if "cancel" in texto:
-        return "cancelar"
     if "ayuda" in texto or "help" in texto:
         return "ayuda"
     return "otro"
@@ -132,17 +195,19 @@ def extraer_datos_reserva(
         # buena parte del presupuesto de tokens en un campo separado de
         # cadena de pensamiento ("reasoning_content") antes de escribir la
         # respuesta final -- con un max_tokens bajo se cortan a mitad de
-        # razonar y "content" llega vacío. 700 da margen para razonar y
-        # aun así completar un JSON corto.
-        "max_tokens": 700,
+        # razonar y "content" llega vacío o incompleto. Medido en la
+        # práctica con lfm2.5-2.6b: un mensaje simple ya gastó 523 tokens
+        # solo en razonar antes de escribir un JSON de 3 campos, así que
+        # 700 se quedaba corto -- 2000 da margen real.
+        "max_tokens": 2000,
     }
 
     try:
         # El modelo local en uso razona antes de responder y puede tardar
         # bastante más que una respuesta conversacional corta (se han visto
-        # 30-40s solo para JSON simple) -- timeout generoso para no cortarlo
+        # 40-50s con max_tokens=2000) -- timeout generoso para no cortarlo
         # a mitad de camino, ya que eso es indistinguible de "no hay red".
-        resp = requests.post(url, json=payload, headers=_headers(), timeout=90)
+        resp = requests.post(url, json=payload, headers=_headers(), timeout=150)
         resp.raise_for_status()
         mensaje = resp.json()["choices"][0]["message"]
         # Fallback: si el modelo dejó "content" vacío pero sí razonó, el

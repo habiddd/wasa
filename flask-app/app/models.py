@@ -32,6 +32,7 @@ class Recurso(db.Model):
     # recursos_placa_formato / recursos_placa_requerida_equipo en
     # postgres/init/02-schema.sql). Un 'espacio' los deja en NULL.
     placa = db.Column(db.String(8), unique=True)         # número de placa/inventario, 8 dígitos
+    categoria = db.Column(db.String(50))                  # 'camara' | 'celular' | 'dron' | ... (texto libre)
     marca = db.Column(db.String(100))
     modelo = db.Column(db.String(100))
     identificador = db.Column(db.String(100))             # número de serie o IMEI, si lo tiene

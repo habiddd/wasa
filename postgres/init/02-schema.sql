@@ -31,11 +31,20 @@ CREATE TABLE IF NOT EXISTS recursos (
     nombre          VARCHAR(150) NOT NULL,
     descripcion     TEXT,
     ubicacion       VARCHAR(150),
-    -- Los siguientes cuatro campos son de inventario físico y solo aplican
-    -- a tipo='equipo' (un espacio -- sala, estudio -- no tiene placa,
-    -- marca, modelo ni número de serie/IMEI). Ver constraint
-    -- recursos_placa_requerida_equipo más abajo.
+    -- Los siguientes campos son de inventario físico y solo aplican a
+    -- tipo='equipo' (un espacio -- sala, estudio -- no tiene placa,
+    -- categoría, marca, modelo ni número de serie/IMEI). Ver constraints
+    -- recursos_placa_requerida_equipo / recursos_categoria_requerida_equipo
+    -- más abajo.
     placa           VARCHAR(8),                      -- número de placa/inventario, 8 dígitos, único
+    -- Categoría del equipo (ej. 'camara', 'celular', 'dron', 'microfono',
+    -- 'tripode', 'luces') -- distinta de la columna `tipo` de arriba
+    -- (equipo/espacio). Permite que el bot responda "qué cámaras tenemos"
+    -- o sugiera otras marcas/modelos de la misma categoría cuando el
+    -- modelo pedido no existe. Texto libre a propósito (no un ENUM fijo)
+    -- para no tener que migrar el esquema cada vez que se agregue una
+    -- categoría nueva de activo.
+    categoria       VARCHAR(50),
     marca           VARCHAR(100),
     modelo          VARCHAR(100),
     identificador   VARCHAR(100),                     -- número de serie o IMEI (alfanumérico), si lo tiene
@@ -43,7 +52,8 @@ CREATE TABLE IF NOT EXISTS recursos (
     activo          BOOLEAN NOT NULL DEFAULT TRUE,
     creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT recursos_placa_formato CHECK (placa IS NULL OR placa ~ '^[0-9]{8}$'),
-    CONSTRAINT recursos_placa_requerida_equipo CHECK (tipo <> 'equipo' OR placa IS NOT NULL)
+    CONSTRAINT recursos_placa_requerida_equipo CHECK (tipo <> 'equipo' OR placa IS NOT NULL),
+    CONSTRAINT recursos_categoria_requerida_equipo CHECK (tipo <> 'equipo' OR categoria IS NOT NULL)
 );
 
 -- Único por activo, pero permite múltiples NULL (para 'espacio', que no
@@ -118,6 +128,7 @@ ALTER TABLE recursos ADD COLUMN IF NOT EXISTS placa VARCHAR(8);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS marca VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS modelo VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS identificador VARCHAR(100);
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS categoria VARCHAR(50);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recursos_placa_unica ON recursos (placa);
 
@@ -134,6 +145,12 @@ BEGIN
     ) THEN
         ALTER TABLE recursos ADD CONSTRAINT recursos_placa_requerida_equipo
             CHECK (tipo <> 'equipo' OR placa IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'recursos_categoria_requerida_equipo'
+    ) THEN
+        ALTER TABLE recursos ADD CONSTRAINT recursos_categoria_requerida_equipo
+            CHECK (tipo <> 'equipo' OR categoria IS NOT NULL);
     END IF;
 END $$;
 

@@ -94,6 +94,48 @@ def listar_nombres_disponibles() -> list[str]:
     return [nombre for nombre, _ in _grupos_activos()]
 
 
+def _categorias_activas() -> list[str]:
+    """Categorías distintas entre los equipos activos (ej. 'camara',
+    'celular', 'dron'), en el orden en que aparecen al agrupar por modelo.
+    Permite resolver "qué cámaras tenemos" aunque "cámaras" no coincida
+    con ningún nombre de modelo -- ver `_detectar_categoria_en_texto`."""
+    vistas: list[str] = []
+    for _, representante in _grupos_activos():
+        cat = representante.categoria
+        if cat and cat not in vistas:
+            vistas.append(cat)
+    return vistas
+
+
+def _grupos_por_categoria(categoria: str) -> list[tuple[str, Recurso]]:
+    """(nombre, representante) de cada modelo distinto dentro de una
+    categoría (comparación normalizada, sin tildes/mayúsculas)."""
+    cat_norm = _normalizar(categoria)
+    return [
+        (nombre, representante)
+        for nombre, representante in _grupos_activos()
+        if representante.categoria and _normalizar(representante.categoria) == cat_norm
+    ]
+
+
+def _detectar_categoria_en_texto(texto: str) -> str | None:
+    """Busca si el texto del usuario menciona una categoría conocida (ej.
+    "cámaras", "celulares") aunque no mencione ningún modelo o marca
+    específicos. La comparación por substring cubre el plural regular en
+    español ("camara" está contenido en "camaras") sin necesitar una
+    lista de sinónimos aparte."""
+    texto_norm = _normalizar(texto)
+    for categoria in _categorias_activas():
+        if _normalizar(categoria) in texto_norm:
+            return categoria
+    return None
+
+
+def _describir_modelo(nombre: str, representante: Recurso) -> str:
+    marca_modelo = " ".join(p for p in [representante.marca, representante.modelo] if p)
+    return f"{nombre} ({marca_modelo})" if marca_modelo else nombre
+
+
 def _reserva_en_curso(recurso_id: int, ahora: datetime) -> Reserva | None:
     return (
         Reserva.query.filter(
@@ -164,6 +206,16 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     candidatos, es_match_debil = buscar_recursos_en_texto(texto_usuario)
 
     if not candidatos:
+        categoria = _detectar_categoria_en_texto(texto_usuario)
+        if categoria:
+            grupos_categoria = _grupos_por_categoria(categoria)
+            if grupos_categoria:
+                lineas = "\n".join(
+                    f"- {_describir_modelo(nombre, rep)}: {_estado_grupo(nombre, ahora)}"
+                    for nombre, rep in grupos_categoria
+                )
+                return f"Esto es lo que tenemos en '{categoria}':\n{lineas}"
+
         grupos = _grupos_activos()
         if not grupos:
             return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA."
@@ -257,15 +309,32 @@ PALABRAS_CANCELAR = {"no", "cancelar", "cancela"}
 
 def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tuple[str, dict]:
     """Punto de entrada para el intent 'reservar'. Intenta resolver activo
-    + fecha/hora en un solo mensaje (el bot no tiene memoria de lo que se
-    dijo en mensajes previos que no haya quedado en `sesion`, así que no
-    puede completar datos que falten en turnos separados) y, si lo logra,
-    NO reserva todavía -- manda un resumen y deja la reserva pendiente en
-    `sesion` hasta que el usuario la confirme (ver confirmar_reserva_pendiente).
+    + fecha/hora en un solo mensaje y, si lo logra, NO reserva todavía --
+    manda un resumen y deja la reserva pendiente en `sesion` hasta que el
+    usuario la confirme (ver confirmar_reserva_pendiente).
+
+    Cuando falta un dato (hay que desambiguar el activo, falta fecha/hora,
+    la fecha no se entendió, el horario ya no está libre), la respuesta le
+    pide ese dato al usuario y se marca `sesion["reserva_en_progreso"] =
+    True` -- eso le dice a webhook.py que la SIGUIENTE respuesta del
+    usuario debe volver a entrar aquí directamente en vez de pasar por
+    clasificación de intent (que podría no reconocer una respuesta corta
+    como "una sony" o "el viernes a las 3" como parte de una reserva y
+    bloquearla). El mismo patrón que ya usa reserva_pendiente para el
+    sí/no de confirmación, pero un paso antes.
+
     El LLM solo se usa para extraer {recurso, inicio, fin} del texto libre
     -- nunca decide si hay disponibilidad ni escribe en la base de datos."""
     ahora_utc = datetime.now(timezone.utc)
     ahora_local = ahora_utc.astimezone(ZONA_HORARIA_CPA)
+
+    if sesion.get("reserva_en_progreso") and set(_normalizar(texto_usuario).split()) & PALABRAS_CANCELAR:
+        sesion_limpia = {**sesion, "reserva_en_progreso": False}
+        return (
+            "Reserva cancelada, no se guardó nada. Si quieres reservar otra cosa, "
+            "dime el activo, fecha y hora."
+        ), sesion_limpia
+
     nombres = listar_nombres_disponibles()
 
     extraido = llm_client.extraer_datos_reserva(texto_usuario, nombres, ahora_local) or {}
@@ -274,19 +343,32 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
 
     if recurso is None:
         if not candidatos:
+            categoria = _detectar_categoria_en_texto(texto_usuario)
+            if categoria:
+                grupos_categoria = _grupos_por_categoria(categoria)
+                if grupos_categoria:
+                    modelos = ", ".join(_describir_modelo(nombre, rep) for nombre, rep in grupos_categoria)
+                    nueva_sesion = {**sesion, "reserva_en_progreso": True}
+                    return (
+                        f"No tengo ese modelo exacto, pero en '{categoria}' tengo: {modelos}. "
+                        "Dime cuál de estos necesitas junto con la fecha y hora."
+                    ), nueva_sesion
             if not nombres:
-                return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA.", sesion
+                nueva_sesion = {**sesion, "reserva_en_progreso": False}
+                return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA.", nueva_sesion
             lista = "\n".join(f"- {n}" for n in nombres)
+            nueva_sesion = {**sesion, "reserva_en_progreso": False}
             return (
                 "No identifiqué qué activo necesitas, o no lo tenemos disponible. "
                 f"Esto es lo que sí tenemos:\n{lista}"
-            ), sesion
+            ), nueva_sesion
         nombres_candidatos = ", ".join(r.nombre for r in candidatos)
+        nueva_sesion = {**sesion, "reserva_en_progreso": True}
         return (
             f"Encontré varias coincidencias: {nombres_candidatos}. ¿Cuál de estos necesitas? "
             "Dime el nombre completo junto con la fecha y hora, por ejemplo: "
             f"'{candidatos[0].nombre} el viernes de 3pm a 5pm'."
-        ), sesion
+        ), nueva_sesion
 
     salvedad = (
         f" (si no te refieres a '{recurso.nombre}', dime el nombre completo del activo)"
@@ -297,36 +379,42 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     inicio_str, fin_str = extraido.get("inicio"), extraido.get("fin")
     if not inicio_str or not fin_str:
         estado = _estado_grupo(recurso.nombre, ahora_utc)
+        nueva_sesion = {**sesion, "reserva_en_progreso": True}
         return (
             f"'{recurso.nombre}' está {estado}. Para reservarla dime también la fecha y hora en "
             f"el mismo mensaje, por ejemplo: '{recurso.nombre} el viernes de 3pm a 5pm'.{salvedad}"
-        ), sesion
+        ), nueva_sesion
 
     try:
         inicio_local = datetime.strptime(inicio_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA_CPA)
         fin_local = datetime.strptime(fin_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA_CPA)
     except ValueError:
+        nueva_sesion = {**sesion, "reserva_en_progreso": True}
         return (
             "No logré entender la fecha/hora que diste. ¿Puedes escribirla de forma más clara? "
             f"Ejemplo: '{recurso.nombre} el viernes de 3pm a 5pm'."
-        ), sesion
+        ), nueva_sesion
 
     inicio_utc, fin_utc = inicio_local.astimezone(timezone.utc), fin_local.astimezone(timezone.utc)
 
     if fin_utc <= inicio_utc:
-        return "La hora de fin debe ser después de la hora de inicio. ¿Puedes revisar el horario?", sesion
+        nueva_sesion = {**sesion, "reserva_en_progreso": True}
+        return "La hora de fin debe ser después de la hora de inicio. ¿Puedes revisar el horario?", nueva_sesion
 
     if inicio_utc < ahora_utc - MARGEN_INICIO_PASADO:
-        return "Esa fecha/hora ya pasó. Dime una fecha y hora futura.", sesion
+        nueva_sesion = {**sesion, "reserva_en_progreso": True}
+        return "Esa fecha/hora ya pasó. Dime una fecha y hora futura.", nueva_sesion
 
     if _unidad_libre_en_rango(recurso.nombre, inicio_utc, fin_utc) is None:
+        nueva_sesion = {**sesion, "reserva_en_progreso": True}
         return (
             f"'{recurso.nombre}' ya está reservado (todas sus unidades) en ese horario. "
             "Prueba con otro horario."
-        ), sesion
+        ), nueva_sesion
 
     nueva_sesion = {
         **sesion,
+        "reserva_en_progreso": False,
         "reserva_pendiente": {
             # Se guarda el modelo, no una placa fija: cuál unidad concreta se
             # asigna se decide recién en confirmar_reserva_pendiente, sobre
