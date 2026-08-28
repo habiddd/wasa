@@ -17,11 +17,20 @@
       completo, código de estudiante, cédula) y hasta que no está completo
       no pasa a ningún otro intent (`registro_service.py`,
       `usuarios_service.py` — ver `docs/SESION_2026-08-25.md`)
-- [x] Confirmación explícita ("responde SÍ para confirmar") antes de
-      escribir una reserva en la base de datos — el bot manda un resumen
-      (activo, quién reserva, inicio, fin) y solo reserva si el usuario
-      confirma (`recursos_service.gestionar_reserva` /
-      `confirmar_reserva_pendiente`)
+- [x] Confirmación explícita antes de escribir una reserva en la base de
+      datos — el bot manda un resumen (activo, quién reserva, inicio, fin)
+      con un menú (Confirmar / Cambiar activo / Cambiar fecha / Cambiar
+      hora / Cancelar) y solo reserva si el usuario elige "Confirmar"
+      (`recursos_service.gestionar_reserva` /
+      `_crear_reserva_desde_wizard` — ver `docs/SESION_2026-08-28.md`)
+- [x] Fecha y hora de una reserva nunca se aceptan de una interpretación
+      sin que el usuario la confirme explícitamente: el formato exacto
+      (dd/mm/aaaa, hh:mm am/pm) se acepta directo, pero cualquier variante
+      en lenguaje natural ("mañana", "de 2pm a 7pm") se le muestra de
+      vuelta al usuario para que diga sí/no antes de usarla — mitiga que
+      una mala interpretación (del parser propio o, antes, del LLM) se
+      cuele sin que el usuario la vea (`_interpretar_fecha_natural`,
+      `_interpretar_hora_relajada`, ver `docs/SESION_2026-08-28.md`)
 - [x] Restricción a nivel de Postgres (`EXCLUDE USING gist`, extensión
       `btree_gist`) que impide dos reservas confirmadas solapadas del
       mismo recurso, sin depender de que la lógica de la app siempre
@@ -69,8 +78,15 @@
 - [x] El LLM nunca debe ser el que decide disponibilidad o ejecuta la
       escritura en la base de datos — siempre a través de funciones
       explícitas y verificadas en SQL (ver `docs/ARQUITECTURA.md`).
-      Implementado: `recursos_service.py` es quien valida/escribe, el LLM
-      solo extrae `{recurso, inicio, fin}` como texto libre → JSON.
+      Implementado: `recursos_service.py` es quien valida/escribe. El LLM
+      solo se usa para identificar el activo mencionado en el primer
+      mensaje (`extraer_datos_reserva`, campo `recurso`) y para clasificar
+      el intent (`clasificar_intent`, con fallback por palabras clave si
+      no responde) — la fecha/hora de una reserva ya no se le piden al
+      LLM en absoluto (ver el bullet de arriba y
+      `docs/SESION_2026-08-28.md`): se detectó en uso real que el modelo
+      inventaba una hora que el usuario nunca dio pese a que el prompt le
+      indicaba devolver `null` si faltaba información.
 - [ ] El modelo local en uso (`lfm2.5-2.6b`, razonador) puede tardar 30-90s
       en responder a la extracción de fecha/hora de una reserva porque
       gasta presupuesto de tokens en `reasoning_content` antes de escribir

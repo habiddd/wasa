@@ -16,9 +16,10 @@
      la siguiente pregunta pendiente del alta (`registro_service`) --
      ver "Identidad y registro" más abajo. Esto pasa *antes* de clasificar
      intent a propósito.
-   - Si hay una **reserva pendiente de confirmación** en la sesión del
-     usuario (ver "Memoria de conversación"), el mensaje se trata como la
-     respuesta sí/no a esa confirmación (`recursos_service.confirmar_reserva_pendiente`),
+   - Si hay un **wizard de reserva en curso** en la sesión del usuario
+     (`sesion["reserva_wizard"]`, ver "Memoria de conversación" y "Reserva
+     paso a paso" más abajo), el mensaje se trata como la respuesta al paso
+     exacto en que quedó ese wizard (`recursos_service.gestionar_reserva`),
      también antes de clasificar intent.
    - Clasifica el **intent** (`llm_client.clasificar_intent`) y lo valida
      contra la whitelist (`guardrails.intent_permitido`).
@@ -94,36 +95,50 @@ El LLM **no** debería:
 
 Esto ya está implementado así: `llm_client.extraer_datos_reserva` le pide
 al LLM que devuelva `{recurso, inicio, fin}` como JSON a partir del texto
-libre del usuario, pero `recursos_service.py` es quien valida ese
-`recurso` contra el catálogo real (si el LLM alucina un nombre que no
-existe, se descarta y cae al matcher por palabras clave), quien consulta
+libre del usuario, pero **solo el campo `recurso` se usa** -- `inicio`/
+`fin` se descartan a propósito (ver "Reserva paso a paso: fecha y hora sin
+LLM" más abajo; se detectó al modelo local inventando una hora que el
+usuario nunca dio). `recursos_service.py` es quien valida ese `recurso`
+contra el catálogo real (si el LLM alucina un nombre que no existe, se
+descarta y cae al matcher por palabras clave), quien consulta
 disponibilidad, y quien decide si se puede escribir en `reservas`. El LLM
 nunca toca la base de datos directamente.
 
-## Disponibilidad de activos y reservas (`recursos_service.py`)
+## Inventario: varias unidades del mismo modelo (`recursos_service.py`)
 
-- `buscar_recursos_en_texto` matchea el texto del usuario contra
-  `recursos.nombre` por score de palabras (no boolean simple), para que
-  una palabra genérica compartida entre varios activos (ej. "cámara" en
-  dos modelos) no gane sobre una palabra distintiva (ej. "sony") que solo
-  aparece en uno. Cuando el único match viene de una palabra genérica sin
-  nombre completo ni segunda palabra distintiva, se marca como
-  `es_match_debil` y la respuesta incluye una salvedad ("si no te
-  refieres a X, dime el nombre completo") -- es una mitigación, no una
-  solución perfecta: sigue siendo posible un falso positivo tipo "grúa de
-  cámara" (que no existe) matcheando con una cámara real solo por la
-  palabra compartida.
+Cada fila de `recursos` con `tipo='equipo'` representa una unidad física
+concreta: tiene `placa` (número de inventario, 8 dígitos, único),
+`categoria` (ej. "cámara", "dron" -- para agrupar tipos de equipo,
+independiente de `tipo` que solo distingue `equipo`/`espacio`), `marca`,
+`modelo` e `identificador` opcional (serie/IMEI). `marca`/`modelo` se
+repiten libremente entre filas -- lo único con restricción de unicidad es
+`placa`. Un `espacio` deja esos campos en `NULL` (no aplican).
+
+Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
+`placa`), se tratan como intercambiables:
+- `_grupos_activos()` / `_grupo(nombre)`: una fila representante por
+  modelo distinto, y todas las unidades activas de ese modelo.
+- `buscar_recursos_en_texto` puntúa por grupo (un representante por
+  modelo, no por placa) contra `recursos.nombre`, por score de palabras
+  (no boolean simple) para que una palabra genérica compartida entre
+  varios modelos (ej. "cámara") no gane sobre una palabra distintiva (ej.
+  "sony") que solo aparece en uno. Cuando el único match viene de una
+  palabra genérica sin nombre completo ni segunda palabra distintiva, se
+  marca `es_match_debil` y la respuesta incluye una salvedad ("si no te
+  refieres a X, dime el nombre completo").
+- `_unidad_libre_en_rango(nombre, inicio, fin)`: recorre las unidades del
+  grupo y devuelve la primera sin choque de horario -- el usuario nunca
+  elige la placa exacta, solo el modelo; el bot reparte automáticamente
+  cualquier unidad libre.
+- `_categorias_activas()`, `_grupos_por_categoria()`,
+  `_detectar_categoria_en_texto()`: resuelven preguntas por categoría (ej.
+  "qué cámaras tenemos") comparando contra `categoria` aunque el texto no
+  mencione ningún modelo, y permiten sugerir otras marcas/modelos dentro
+  de la misma categoría.
 - `evaluar_consulta_disponibilidad` (intent `consultar_disponibilidad`)
-  lista el **estado de cada coincidencia** (o de todo el catálogo si no
-  identifica un activo específico) -- el usuario quiere saber qué hay y
+  lista el **estado agregado de cada modelo** (`_estado_grupo`: cuántas
+  unidades libres de cuántas totales) -- el usuario quiere saber qué hay y
   qué no, así que nunca pregunta "¿cuál de estos?".
-- `gestionar_reserva` (intent `reservar`) sí necesita que el usuario elija
-  exactamente un activo, así que ante varias coincidencias pregunta cuál.
-  Una vez resuelto el activo, si `llm_client.extraer_datos_reserva` no
-  devolvió fecha/hora, responde con el estado actual y pide que la
-  incluya en el mismo mensaje -- el bot no tiene memoria de conversación
-  para completar eso en un turno posterior (salvo la reserva pendiente de
-  confirmación, ver más abajo).
 - Toda hora se interpreta en `America/Bogota` (zona horaria fija de la
   CPA) y se guarda en UTC (columnas `TIMESTAMPTZ`).
 - **La garantía real contra choques de horario es de Postgres, no de la
@@ -135,26 +150,66 @@ nunca toca la base de datos directamente.
   migración, un script manual, o dos requests concurrentes que pasaron el
   chequeo de la aplicación al mismo tiempo. `crear_reserva` en
   `recursos_service.py` solo atrapa el `IntegrityError` que Postgres lanza
-  si eso pasa; el chequeo previo con `_reserva_solapada` es solo para dar
-  un mensaje más claro antes de intentar el INSERT, no la garantía de
+  si eso pasa; el chequeo previo con `_unidad_libre_en_rango` es solo para
+  dar un mensaje más claro antes de intentar el INSERT, no la garantía de
   consistencia.
 
-## Confirmación antes de reservar
+## Reserva paso a paso (`recursos_service.py`, wizard)
 
-`gestionar_reserva` nunca escribe en `reservas` directamente. Si activo +
-fecha/hora quedan resueltos y sin conflicto, en vez de reservar manda un
-**resumen** (activo, nombre completo de quien reserva, fecha/hora de
-inicio y fin) y dice "¿confirmas?", guardando los datos en la sesión de
-Redis del usuario bajo `reserva_pendiente`. El siguiente mensaje se
-intercepta en `webhook.py` *antes* de clasificar intent (un simple "sí" se
-clasificaría como intent "otro" y quedaría bloqueado por la whitelist) y
-va a `confirmar_reserva_pendiente`, que:
-- Si el usuario confirma: re-valida que la fecha no haya pasado y que no
-  haya un choque nuevo (por si alguien más reservó mientras esperaba la
-  respuesta), y recién ahí llama a `crear_reserva`.
-- Si cancela: limpia la sesión sin tocar la base de datos.
-- Si la respuesta no es reconocible como sí/no: vuelve a preguntar sin
-  perder el estado pendiente.
+`gestionar_reserva` (intent `reservar`) no le pide todo al usuario en un
+solo mensaje libre -- va preguntando un dato a la vez con menús numerados,
+guardando el progreso en `sesion["reserva_wizard"]` (ver "Memoria de
+conversación"). Progresión (`_siguiente_paso_wizard`):
+
+```
+elegir_activo → elegir_marca → elegir_modelo → fecha → hora → confirmar → listo
+```
+
+`_avanzar_wizard` salta solo cualquier paso que tenga una única opción
+posible (ej. una sola marca dentro de una categoría), avisando al usuario
+("solo tenemos una marca de dron, sigo con esa") en vez de preguntar algo
+que no tiene sentido elegir. Si el primer mensaje ya deja claro el activo
+(vía `llm_client.extraer_datos_reserva`, ver arriba), esos pasos se saltan
+también.
+
+### Fecha y hora: formato fijo, sin LLM -- con reconocimiento de lenguaje natural confirmado explícitamente
+
+Los pasos "fecha" y "hora" **no** usan el LLM: piden `dd/mm/aaaa` y
+`hh:mm am/pm` exactos, parseados con regex deterministas
+(`_parsear_fecha_dd_mm_aaaa`, `_parsear_rango_horario`). Esto es
+deliberado -- se detectó que el LLM local, al interpretar fecha/hora en
+lenguaje libre, a veces inventa un dato que el usuario nunca dio (ej.
+respondió solo "Mañana" y el modelo agregó una hora de la nada). El paso
+de fecha además siempre muestra primero "Hoy es {día} {dd/mm/aaaa}..."
+para que el usuario note de inmediato si el bot tiene otra fecha en mente.
+
+Si el texto no viene en el formato exacto, antes de rechazarlo se intenta
+reconocerlo con patrones deterministas más flexibles (sin LLM tampoco):
+`_interpretar_fecha_natural` ("mañana", "pasado mañana", días de la
+semana, "en N días", "22 de noviembre") y `_interpretar_hora_relajada`
+("de 2pm a 7pm", "desde las 3 hasta las 5pm"). A diferencia del formato
+exacto, una interpretación **nunca se acepta directo**: el wizard entra en
+un paso de confirmación (`confirmar_fecha_interpretada` /
+`confirmar_hora_interpretada`) mostrando exactamente lo que entendió y
+pidiendo un sí/no antes de seguir. Si el usuario dice "no", solo se borra
+ese dato pendiente y se vuelve a pedir en el formato exacto, sin perder el
+resto de lo ya elegido. El atajo global de `gestionar_reserva` que
+cancela todo el wizard cuando el usuario escribe la palabra "no" se
+desactiva a propósito durante estos dos pasos (ahí "no" significa "esa
+interpretación está mal", no "cancela la reserva").
+
+### Confirmación final editable
+
+El último paso (`confirmar`) no es un simple sí/no: manda el resumen
+(activo, quién reserva, inicio, fin) con un menú `Confirmar / Cambiar
+activo / Cambiar fecha / Cambiar hora / Cancelar`. Elegir "Cambiar fecha"
+(por ejemplo) borra solo `fecha`/`inicio`/`fin` del wizard y hace que
+`_avanzar_wizard` vuelva a preguntar justo eso, conservando el resto.
+Solo cuando el usuario elige "Confirmar" se llama a
+`_crear_reserva_desde_wizard`, que re-valida que la fecha no haya pasado
+mientras confirmaba y que no haya un choque nuevo (por si alguien más
+reservó esa unidad mientras tanto) antes de escribir en `reservas` de
+verdad -- hasta ese momento no se toca la base de datos.
 
 ## Identidad y registro (`registro_service.py`, `usuarios_service.py`)
 
@@ -178,19 +233,18 @@ que responde a lo último que se preguntó.
 ## Memoria de conversación (`sesiones.py`)
 
 Cada webhook HTTP es una request sin estado, pero el registro paso a paso
-y la confirmación de reserva necesitan recordar en qué punto de la
-conversación se quedaron entre un mensaje y el siguiente. `sesiones.py`
-guarda un blob JSON pequeño por número de WhatsApp en Redis
-(`sesion:<telefono_wa>`), con TTL de 7 días que se renueva en cada
-lectura/escritura -- una conversación activa no se corta a media
-pregunta, y una inactiva por más de una semana se limpia sola sin
-necesidad de un job de limpieza aparte.
+y el wizard de reserva necesitan recordar en qué punto de la conversación
+se quedaron entre un mensaje y el siguiente. `sesiones.py` guarda un blob
+JSON pequeño por número de WhatsApp en Redis (`sesion:<telefono_wa>`), con
+TTL de 7 días que se renueva en cada lectura/escritura -- una conversación
+activa no se corta a media pregunta, y una inactiva por más de una semana
+se limpia sola sin necesidad de un job de limpieza aparte.
 
 Es un punto de extensión genérico: cualquier flujo futuro que necesite
-recordar contexto entre mensajes (ej. una aclaración de "¿cuál de estos
-recursos?" respondida en un mensaje separado) puede guardar su propio
-estado ahí bajo su propia clave, igual que `registro_campo_pendiente` y
-`reserva_pendiente`.
+recordar contexto entre mensajes puede guardar su propio estado ahí bajo
+su propia clave, igual que `registro_campo_pendiente` y
+`reserva_wizard` (este último, un dict completo con el progreso del
+wizard de reserva paso a paso -- ver "Reserva paso a paso" más arriba).
 
 ## Analítica en tiempo real
 
