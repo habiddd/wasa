@@ -79,7 +79,7 @@ def clasificar_intent(texto_usuario: str) -> str:
 
     current_app.logger.warning("El LLM devolvió un intent no reconocido: %r", contenido)
     return _clasificar_intent_heuristico(texto_usuario)
-
+ca
 
 def _clasificar_intent_heuristico(texto_usuario: str) -> str:
     """Heurística de respaldo por palabras clave -- solo se usa si el LLM

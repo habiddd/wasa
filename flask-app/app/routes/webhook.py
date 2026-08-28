@@ -131,32 +131,14 @@ def recibir_webhook():
         )
         return jsonify({"status": "registro_en_progreso"}), 200
 
-    # --- Confirmación de reserva pendiente: gestionar_reserva ya armó un
-    # resumen y está esperando que el usuario responda sí/no en este mismo
-    # mensaje (ver recursos_service.confirmar_reserva_pendiente) -- eso
-    # tampoco pasa por clasificación de intent, un simple "sí" se
-    # clasificaría como intent "otro" y quedaría bloqueado. ---
-    if sesion.get("reserva_pendiente"):
-        respuesta, sesion = recursos_service.confirmar_reserva_pendiente(texto, usuario, sesion)
-        sesiones.guardar_sesion(numero, sesion)
-
-        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
-        guardrails.registrar_interaccion(
-            numero, texto, "confirmar_reserva", respuesta, permitido=True,
-            mensaje_id=mensaje_id,
-            estado_envio="pendiente" if enviado else "error_http",
-        )
-        return jsonify({"status": "ok" if enviado else "error_envio"}), 200
-
-    # --- Continuación de una reserva en curso: gestionar_reserva ya le
-    # pidió al usuario un dato que faltaba (desambiguar el activo, dar
-    # fecha/hora, corregir una fecha que no se entendió) y está esperando
-    # esa respuesta en este mismo mensaje (ver
-    # recursos_service.gestionar_reserva) -- eso tampoco pasa por
-    # clasificación de intent: una respuesta corta como "una sony" no se
-    # reconoce de forma confiable como intent "reservar" y quedaría
-    # bloqueada por la whitelist. ---
-    if sesion.get("reserva_en_progreso"):
+    # --- Continuación de un wizard de reserva en curso: gestionar_reserva
+    # ya le preguntó al usuario un paso (qué tipo/marca/modelo, fecha, hora,
+    # o el menú final de confirmar/cambiar/cancelar) y está esperando esa
+    # respuesta en este mismo mensaje (ver recursos_service.gestionar_reserva)
+    # -- eso tampoco pasa por clasificación de intent: una respuesta corta
+    # como "2" no se reconoce de forma confiable como intent "reservar" y
+    # quedaría bloqueada por la whitelist. ---
+    if sesion.get("reserva_wizard"):
         respuesta, sesion = recursos_service.gestionar_reserva(texto, usuario, sesion)
         sesiones.guardar_sesion(numero, sesion)
 
