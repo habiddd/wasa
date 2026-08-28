@@ -31,10 +31,24 @@ CREATE TABLE IF NOT EXISTS recursos (
     nombre          VARCHAR(150) NOT NULL,
     descripcion     TEXT,
     ubicacion       VARCHAR(150),
+    -- Los siguientes cuatro campos son de inventario físico y solo aplican
+    -- a tipo='equipo' (un espacio -- sala, estudio -- no tiene placa,
+    -- marca, modelo ni número de serie/IMEI). Ver constraint
+    -- recursos_placa_requerida_equipo más abajo.
+    placa           VARCHAR(8),                      -- número de placa/inventario, 8 dígitos, único
+    marca           VARCHAR(100),
+    modelo          VARCHAR(100),
+    identificador   VARCHAR(100),                     -- número de serie o IMEI (alfanumérico), si lo tiene
     requiere_seguro BOOLEAN NOT NULL DEFAULT FALSE,  -- activa secuencia de seguro de equipos
     activo          BOOLEAN NOT NULL DEFAULT TRUE,
-    creado_en       TIMESTAMPTZ NOT NULL DEFAULT now()
+    creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT recursos_placa_formato CHECK (placa IS NULL OR placa ~ '^[0-9]{8}$'),
+    CONSTRAINT recursos_placa_requerida_equipo CHECK (tipo <> 'equipo' OR placa IS NOT NULL)
 );
+
+-- Único por activo, pero permite múltiples NULL (para 'espacio', que no
+-- tiene placa) ya que Postgres no cuenta NULL como duplicado en UNIQUE.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recursos_placa_unica ON recursos (placa);
 
 CREATE TABLE IF NOT EXISTS reservas (
     id              SERIAL PRIMARY KEY,
@@ -99,6 +113,29 @@ ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS estado_envio VARCHAR(20) NOT 
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cedula VARCHAR(20);
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS registro_completo BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE usuarios ALTER COLUMN nombre DROP NOT NULL;
+
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS placa VARCHAR(8);
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS marca VARCHAR(100);
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS modelo VARCHAR(100);
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS identificador VARCHAR(100);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recursos_placa_unica ON recursos (placa);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'recursos_placa_formato'
+    ) THEN
+        ALTER TABLE recursos ADD CONSTRAINT recursos_placa_formato
+            CHECK (placa IS NULL OR placa ~ '^[0-9]{8}$');
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'recursos_placa_requerida_equipo'
+    ) THEN
+        ALTER TABLE recursos ADD CONSTRAINT recursos_placa_requerida_equipo
+            CHECK (tipo <> 'equipo' OR placa IS NOT NULL);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_auditoria_telefono_fecha ON auditoria_bot (telefono_wa, creado_en);
 CREATE INDEX IF NOT EXISTS idx_auditoria_mensaje_id ON auditoria_bot (mensaje_id);

@@ -28,6 +28,13 @@ class Recurso(db.Model):
     nombre = db.Column(db.String(150), nullable=False)
     descripcion = db.Column(db.Text)
     ubicacion = db.Column(db.String(150))
+    # Inventario físico -- solo aplica a tipo='equipo' (ver constraints
+    # recursos_placa_formato / recursos_placa_requerida_equipo en
+    # postgres/init/02-schema.sql). Un 'espacio' los deja en NULL.
+    placa = db.Column(db.String(8), unique=True)         # número de placa/inventario, 8 dígitos
+    marca = db.Column(db.String(100))
+    modelo = db.Column(db.String(100))
+    identificador = db.Column(db.String(100))             # número de serie o IMEI, si lo tiene
     requiere_seguro = db.Column(db.Boolean, nullable=False, default=False)
     activo = db.Column(db.Boolean, nullable=False, default=True)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)

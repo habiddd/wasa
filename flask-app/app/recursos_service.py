@@ -38,20 +38,26 @@ def buscar_recursos_en_texto(texto: str) -> tuple[list[Recurso], bool]:
     que no tenemos). El llamador debe usarlo para agregar una salvedad en
     vez de responder con confianza total.
 
+    Cuando hay varias unidades del mismo modelo (mismo nombre, distinta
+    placa), se puntúa un solo
+    representante por nombre: al usuario no le interesa la placa exacta,
+    así que dos unidades idénticas nunca deben aparecer como dos
+    "coincidencias" distintas que haya que desambiguar.
+
     Si en el futuro hace falta más precisión, este es el punto de
     extensión para pasarle la lista de nombres al LLM y que elija.
     """
     texto_norm = _normalizar(texto)
     puntuados: list[tuple[int, Recurso]] = []
 
-    for recurso in Recurso.query.filter_by(activo=True).all():
-        nombre_norm = _normalizar(recurso.nombre)
+    for _, representante in _grupos_activos():
+        nombre_norm = _normalizar(representante.nombre)
         palabras = [p for p in nombre_norm.split() if len(p) >= LONGITUD_MINIMA_PALABRA_CLAVE]
         score = sum(1 for p in palabras if p in texto_norm)
         if nombre_norm in texto_norm:
             score += 10  # nombre completo mencionado: gana sobre cualquier match parcial
         if score > 0:
-            puntuados.append((score, recurso))
+            puntuados.append((score, representante))
 
     if not puntuados:
         return [], False
@@ -61,9 +67,31 @@ def buscar_recursos_en_texto(texto: str) -> tuple[list[Recurso], bool]:
     return candidatos, mejor_score == 1
 
 
+def _grupos_activos() -> list[tuple[str, Recurso]]:
+    """(nombre, unidad_representante) por cada modelo distinto entre los
+    recursos activos, ordenados por tipo y nombre. Varias filas de
+    `recursos` pueden compartir nombre/marca/modelo (una por placa) --
+    esto colapsa esas filas a una sola entrada por modelo."""
+    recursos = Recurso.query.filter_by(activo=True).order_by(Recurso.tipo, Recurso.nombre, Recurso.id).all()
+    vistos: dict[str, Recurso] = {}
+    orden: list[str] = []
+    for r in recursos:
+        if r.nombre not in vistos:
+            vistos[r.nombre] = r
+            orden.append(r.nombre)
+    return [(nombre, vistos[nombre]) for nombre in orden]
+
+
+def _grupo(nombre: str) -> list[Recurso]:
+    """Todas las unidades activas de un mismo modelo (mismo nombre,
+    normalmente distinta placa). Son intercambiables para efectos de
+    reserva -- al usuario
+    le basta con pedir el modelo, no la placa específica."""
+    return Recurso.query.filter_by(activo=True, nombre=nombre).order_by(Recurso.id).all()
+
+
 def listar_nombres_disponibles() -> list[str]:
-    recursos = Recurso.query.filter_by(activo=True).order_by(Recurso.tipo, Recurso.nombre).all()
-    return [r.nombre for r in recursos]
+    return [nombre for nombre, _ in _grupos_activos()]
 
 
 def _reserva_en_curso(recurso_id: int, ahora: datetime) -> Reserva | None:
@@ -106,6 +134,27 @@ def _estado_recurso(recurso: Recurso, ahora: datetime) -> str:
     return "libre, sin reservas próximas"
 
 
+def _estado_grupo(nombre: str, ahora: datetime) -> str:
+    """Como `_estado_recurso`, pero agregado sobre todas las unidades del
+    mismo modelo -- con una sola unidad se comporta igual que antes; con
+    varias, reporta cuántas están libres en vez del estado de una sola
+    placa (que sería engañoso: otra unidad idéntica puede estar libre
+    aunque la primera esté en uso)."""
+    unidades = _grupo(nombre)
+    if len(unidades) <= 1:
+        return _estado_recurso(unidades[0], ahora) if unidades else "sin unidades activas"
+
+    libres = [u for u in unidades if _reserva_en_curso(u.id, ahora) is None]
+    if libres:
+        return f"disponible ahora ({len(libres)} de {len(unidades)} unidades libres)"
+
+    fin_mas_cercano = min(_reserva_en_curso(u.id, ahora).fin for u in unidades)
+    return (
+        f"las {len(unidades)} unidades están en uso ahora mismo, "
+        f"la primera se libera a las {fin_mas_cercano.strftime('%H:%M')}"
+    )
+
+
 def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     """Punto de entrada para el intent 'consultar_disponibilidad'. A
     diferencia de reservar, aquí el usuario quiere saber qué hay y qué no
@@ -115,13 +164,13 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     candidatos, es_match_debil = buscar_recursos_en_texto(texto_usuario)
 
     if not candidatos:
-        recursos = Recurso.query.filter_by(activo=True).order_by(Recurso.tipo, Recurso.nombre).all()
-        if not recursos:
+        grupos = _grupos_activos()
+        if not grupos:
             return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA."
-        lineas = "\n".join(f"- {r.nombre}: {_estado_recurso(r, ahora)}" for r in recursos)
+        lineas = "\n".join(f"- {nombre}: {_estado_grupo(nombre, ahora)}" for nombre, _ in grupos)
         return f"No identifiqué un activo específico, así que aquí tienes el estado de todo:\n{lineas}"
 
-    lineas = "\n".join(f"- {r.nombre}: {_estado_recurso(r, ahora)}" for r in candidatos)
+    lineas = "\n".join(f"- {r.nombre}: {_estado_grupo(r.nombre, ahora)}" for r in candidatos)
     salvedad = (
         "\n(si buscabas otro activo, dime el nombre completo)" if es_match_debil else ""
     )
@@ -138,6 +187,17 @@ def _reserva_solapada(recurso_id: int, inicio: datetime, fin: datetime) -> Reser
         )
         .first()
     )
+
+
+def _unidad_libre_en_rango(nombre: str, inicio: datetime, fin: datetime) -> Recurso | None:
+    """Primera unidad del grupo sin choque de horario, o None si todas
+    están ocupadas. No importa cuál unidad específica se devuelva -- todas
+    las del mismo modelo son equivalentes para el usuario, que solo pidió
+    el modelo, no una placa."""
+    for unidad in _grupo(nombre):
+        if _reserva_solapada(unidad.id, inicio, fin) is None:
+            return unidad
+    return None
 
 
 def crear_reserva(
@@ -236,7 +296,7 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
 
     inicio_str, fin_str = extraido.get("inicio"), extraido.get("fin")
     if not inicio_str or not fin_str:
-        estado = _estado_recurso(recurso, ahora_utc)
+        estado = _estado_grupo(recurso.nombre, ahora_utc)
         return (
             f"'{recurso.nombre}' está {estado}. Para reservarla dime también la fecha y hora en "
             f"el mismo mensaje, por ejemplo: '{recurso.nombre} el viernes de 3pm a 5pm'.{salvedad}"
@@ -259,19 +319,19 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     if inicio_utc < ahora_utc - MARGEN_INICIO_PASADO:
         return "Esa fecha/hora ya pasó. Dime una fecha y hora futura.", sesion
 
-    conflicto = _reserva_solapada(recurso.id, inicio_utc, fin_utc)
-    if conflicto:
-        c_inicio = conflicto.inicio.astimezone(ZONA_HORARIA_CPA).strftime("%d/%m %H:%M")
-        c_fin = conflicto.fin.astimezone(ZONA_HORARIA_CPA).strftime("%H:%M")
+    if _unidad_libre_en_rango(recurso.nombre, inicio_utc, fin_utc) is None:
         return (
-            f"'{recurso.nombre}' ya está reservado del {c_inicio} a las {c_fin}, y se cruza con el "
-            "horario que pediste. Prueba con otro horario."
+            f"'{recurso.nombre}' ya está reservado (todas sus unidades) en ese horario. "
+            "Prueba con otro horario."
         ), sesion
 
     nueva_sesion = {
         **sesion,
         "reserva_pendiente": {
-            "recurso_id": recurso.id,
+            # Se guarda el modelo, no una placa fija: cuál unidad concreta se
+            # asigna se decide recién en confirmar_reserva_pendiente, sobre
+            # la disponibilidad más reciente (cualquier unidad libre sirve).
+            "nombre": recurso.nombre,
             "inicio": inicio_utc.isoformat(),
             "fin": fin_utc.isoformat(),
         },
@@ -309,8 +369,9 @@ def confirmar_reserva_pendiente(texto_usuario: str, usuario: Usuario, sesion: di
             "No entendí tu respuesta. Responde 'sí' para confirmar la reserva o 'no' para cancelarla."
         ), sesion
 
-    recurso = Recurso.query.get(pendiente["recurso_id"])
-    if recurso is None or not recurso.activo:
+    nombre = pendiente["nombre"]
+    grupo = _grupo(nombre)
+    if not grupo:
         return "Ese activo ya no está disponible. Si quieres, intenta reservar de nuevo.", sesion_limpia
 
     inicio_utc = datetime.fromisoformat(pendiente["inicio"])
@@ -323,24 +384,28 @@ def confirmar_reserva_pendiente(texto_usuario: str, usuario: Usuario, sesion: di
             "con una fecha futura."
         ), sesion_limpia
 
-    conflicto = _reserva_solapada(recurso.id, inicio_utc, fin_utc)
-    if conflicto:
-        c_inicio = conflicto.inicio.astimezone(ZONA_HORARIA_CPA).strftime("%d/%m %H:%M")
-        c_fin = conflicto.fin.astimezone(ZONA_HORARIA_CPA).strftime("%H:%M")
+    if _unidad_libre_en_rango(nombre, inicio_utc, fin_utc) is None:
         return (
-            f"'{recurso.nombre}' se acaba de reservar del {c_inicio} a las {c_fin} mientras "
-            "esperaba tu confirmación, y se cruza con tu horario. Prueba con otro horario."
+            f"'{nombre}' se acaba de reservar (todas sus unidades) mientras esperaba tu "
+            "confirmación, y se cruza con tu horario. Prueba con otro horario."
         ), sesion_limpia
 
-    reserva, error = crear_reserva(usuario.id, recurso.id, inicio_utc, fin_utc)
-    if error == "choque":
-        return (
-            f"'{recurso.nombre}' ya no está disponible en ese horario. Prueba con otro horario."
-        ), sesion_limpia
+    # Puede haber más de una unidad libre para el mismo modelo; si la
+    # primera choca justo en el INSERT (dos usuarios confirmando a la vez),
+    # se prueba con la siguiente -- la garantía real contra choques es el
+    # EXCLUDE de Postgres que atrapa crear_reserva, esto solo evita que una
+    # colisión rara en una unidad tumbe una reserva que otra unidad sí
+    # podía cubrir.
+    for candidata in grupo:
+        reserva, error = crear_reserva(usuario.id, candidata.id, inicio_utc, fin_utc)
+        if error is None:
+            inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
+            fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
+            return (
+                f"Listo, reservé '{nombre}' del {inicio_local.strftime('%d/%m %H:%M')} "
+                f"a las {fin_local.strftime('%H:%M')}.{_nota_seguro(candidata)}"
+            ), sesion_limpia
 
-    inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
-    fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
     return (
-        f"Listo, reservé '{recurso.nombre}' del {inicio_local.strftime('%d/%m %H:%M')} "
-        f"a las {fin_local.strftime('%H:%M')}.{_nota_seguro(recurso)}"
+        f"'{nombre}' ya no está disponible en ese horario. Prueba con otro horario."
     ), sesion_limpia
