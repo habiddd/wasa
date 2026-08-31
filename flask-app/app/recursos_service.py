@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import llm_client
 from app.extensions import db
-from app.models import Recurso, Reserva, Usuario
+from app.models import Recurso, Reserva, ReservaGrupo, Usuario
 from app.textutils import normalizar as _normalizar
 
 LONGITUD_MINIMA_PALABRA_CLAVE = 4
@@ -52,11 +52,7 @@ def buscar_recursos_en_texto(texto: str) -> tuple[list[Recurso], bool]:
     puntuados: list[tuple[int, Recurso]] = []
 
     for _, representante in _grupos_activos():
-        nombre_norm = _normalizar(representante.nombre)
-        palabras = [p for p in nombre_norm.split() if len(p) >= LONGITUD_MINIMA_PALABRA_CLAVE]
-        score = sum(1 for p in palabras if p in texto_norm)
-        if nombre_norm in texto_norm:
-            score += 10  # nombre completo mencionado: gana sobre cualquier match parcial
+        score = _puntaje_nombre_en_texto(representante.nombre, texto_norm)
         if score > 0:
             puntuados.append((score, representante))
 
@@ -66,6 +62,21 @@ def buscar_recursos_en_texto(texto: str) -> tuple[list[Recurso], bool]:
     mejor_score = max(score for score, _ in puntuados)
     candidatos = [recurso for score, recurso in puntuados if score == mejor_score]
     return candidatos, mejor_score == 1
+
+
+def _puntaje_nombre_en_texto(nombre: str, texto_norm: str) -> int:
+    """Cuántas palabras clave (>= LONGITUD_MINIMA_PALABRA_CLAVE) del nombre
+    de un recurso aparecen en un texto ya normalizado, +10 si el nombre
+    completo aparece tal cual. 0 si no hay ningún indicio real -- usado
+    tanto para puntuar candidatos por palabra clave (`buscar_recursos_en_texto`)
+    como para exigirle respaldo textual a lo que devuelve el LLM antes de
+    confiarlo a ciegas (ver `_resolver_recurso_para_reserva`)."""
+    nombre_norm = _normalizar(nombre)
+    palabras = [p for p in nombre_norm.split() if len(p) >= LONGITUD_MINIMA_PALABRA_CLAVE]
+    score = sum(1 for p in palabras if p in texto_norm)
+    if nombre_norm in texto_norm:
+        score += 10
+    return score
 
 
 def _grupos_activos() -> list[tuple[str, Recurso]]:
@@ -89,6 +100,28 @@ def _grupo(nombre: str) -> list[Recurso]:
     reserva -- al usuario
     le basta con pedir el modelo, no la placa específica."""
     return Recurso.query.filter_by(activo=True, nombre=nombre).order_by(Recurso.id).all()
+
+
+def _accesorios_por_defecto(nombre_padre: str) -> list[str]:
+    """Nombres (modelo) de los accesorios que se agregan automáticamente al
+    reservar `nombre_padre` -- hijos activos con `incluido_por_defecto=True`
+    de cualquier unidad del grupo (no de una placa específica: el wizard ya
+    trata todo por modelo y solo baja a una unidad concreta al crear la
+    reserva, ver `_unidad_libre_en_rango`). Deduplicado por nombre."""
+    ids_padres = [u.id for u in _grupo(nombre_padre)]
+    if not ids_padres:
+        return []
+    hijos = (
+        Recurso.query.filter_by(activo=True, incluido_por_defecto=True)
+        .filter(Recurso.padre_id.in_(ids_padres))
+        .order_by(Recurso.id)
+        .all()
+    )
+    vistos: list[str] = []
+    for h in hijos:
+        if h.nombre not in vistos:
+            vistos.append(h.nombre)
+    return vistos
 
 
 def listar_nombres_disponibles() -> list[str]:
@@ -253,22 +286,66 @@ def _unidad_libre_en_rango(nombre: str, inicio: datetime, fin: datetime) -> Recu
     return None
 
 
-def crear_reserva(
-    usuario_id: int, recurso_id: int, inicio: datetime, fin: datetime
-) -> tuple[Reserva | None, str | None]:
-    """Inserta la reserva. La protección real contra choques es la
-    restricción EXCLUDE de Postgres sobre (recurso_id, rango horario)
-    para estado='confirmada' (ver postgres/init/02-schema.sql) -- el
-    chequeo de `_reserva_solapada` antes de llamar a esta función es solo
+def _resolver_disponibilidad_carrito(
+    carrito: list[dict], inicio: datetime, fin: datetime
+) -> tuple[list[dict], list[Recurso], list[str]]:
+    """Revisa la disponibilidad de cada ítem del carrito en el rango dado.
+    Ya no distingue accesorio automático de elegido a mano: cualquier ítem
+    sin unidad libre en ese horario -- sea el activo que el usuario pidió o
+    un hijo que se incluyó por defecto -- se reporta en `no_disponibles`
+    para que el llamador se lo diga al usuario y le pregunte qué hacer (ver
+    paso "resolver_disponibilidad" en `_continuar_reserva`), en vez de
+    decidir en silencio por él. Cuando `no_disponibles` viene vacío,
+    `disponibles` y `unidades` quedan en el mismo orden -- una unidad por
+    ítem, listas para reservar."""
+    disponibles: list[dict] = []
+    unidades: list[Recurso] = []
+    no_disponibles: list[str] = []
+
+    for item in carrito:
+        unidad = _unidad_libre_en_rango(item["nombre_recurso"], inicio, fin)
+        if unidad is not None:
+            disponibles.append(item)
+            unidades.append(unidad)
+        else:
+            no_disponibles.append(item["nombre_recurso"])
+
+    return disponibles, unidades, no_disponibles
+
+
+def crear_reservas_grupo(
+    usuario_id: int, recursos: list[Recurso], inicio: datetime, fin: datetime
+) -> tuple[list[Reserva] | None, str | None]:
+    """Inserta una reserva por cada recurso en `recursos`, todas ligadas al
+    mismo ReservaGrupo y en una sola transacción -- si alguna choca al
+    confirmar (la restricción EXCLUDE de Postgres sobre (recurso_id, rango
+    horario) para estado='confirmada', ver postgres/init/02-schema.sql), se
+    revierte todo el grupo en vez de dejar una reserva parcial del carrito.
+    El chequeo de disponibilidad antes de llamar a esta función (ver
+    `_resolver_disponibilidad_carrito` / `_unidad_libre_en_rango`) es solo
     para dar un mensaje más claro, no la garantía de consistencia."""
-    reserva = Reserva(usuario_id=usuario_id, recurso_id=recurso_id, inicio=inicio, fin=fin, estado="confirmada")
-    db.session.add(reserva)
+    grupo = ReservaGrupo(usuario_id=usuario_id)
+    db.session.add(grupo)
+    db.session.flush()  # asigna grupo.id sin cerrar la transacción
+
+    reservas = [
+        Reserva(
+            usuario_id=usuario_id,
+            recurso_id=recurso.id,
+            inicio=inicio,
+            fin=fin,
+            estado="confirmada",
+            grupo_id=grupo.id,
+        )
+        for recurso in recursos
+    ]
+    db.session.add_all(reservas)
     try:
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
         return None, "choque"
-    return reserva, None
+    return reservas, None
 
 
 def _resolver_recurso_para_reserva(
@@ -282,10 +359,19 @@ def _resolver_recurso_para_reserva(
     nombre_llm = (extraido.get("recurso") or "").strip().lower()
     recurso_llm = None
     if nombre_llm:
-        recurso_llm = next(
+        candidato_llm = next(
             (r for r in Recurso.query.filter_by(activo=True).all() if r.nombre.strip().lower() == nombre_llm),
             None,
         )
+        # El prompt le pide al LLM "recurso: null si el mensaje no lo
+        # menciona con claridad", pero en la práctica no siempre lo respeta
+        # (ej. "quiero reservar" a secas, sin mencionar ningún activo,
+        # puede devolver igual un nombre inventado). Se exige que ese
+        # nombre tenga respaldo real en lo que escribió el usuario --mismo
+        # criterio de palabra clave que `buscar_recursos_en_texto`-- antes
+        # de confiarlo; si no, se trata como si el LLM hubiera dicho null.
+        if candidato_llm is not None and _puntaje_nombre_en_texto(candidato_llm.nombre, _normalizar(texto_usuario)) > 0:
+            recurso_llm = candidato_llm
 
     if recurso_llm and (not candidatos or len(candidatos) > 1 or recurso_llm in candidatos):
         return recurso_llm, candidatos, False
@@ -297,14 +383,17 @@ def _resolver_recurso_para_reserva(
 
 
 def _nota_seguro(recurso: Recurso) -> str:
+    """Línea aparte (no inline) para el mensaje de confirmación -- lleva el
+    nombre del activo porque puede haber más de uno en el carrito que
+    requiera seguro, y sin el nombre no se sabría a cuál se refiere."""
     return (
-        " Este activo requiere seguro -- el equipo de la CPA te contactará para completar ese trámite."
+        f"⚠ {recurso.nombre} requiere seguro -- el equipo de la CPA te contactará para completar ese trámite."
         if recurso.requiere_seguro
         else ""
     )
 
 
-PALABRAS_CANCELAR = {"no", "cancelar", "cancela"}
+PALABRAS_CANCELAR = {"no", "cancelar", "cancela", "cerrar"}
 
 _DIAS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
@@ -603,9 +692,65 @@ def _aplicar_respuesta_menu(wizard: dict, texto_usuario: str) -> str | None:
     return None
 
 
+def _mover_item_resuelto_al_carrito(wizard: dict) -> str:
+    """Mueve wizard['nombre_recurso'] (recién resuelto) al carrito, sin
+    tocar sus accesorios por defecto todavía -- eso lo decide el usuario a
+    continuación si el activo trae alguno (ver paso "confirmar_accesorios"
+    más abajo, y el chequeo al tope del `while` en `_avanzar_wizard`)."""
+    nombre = wizard.pop("nombre_recurso")
+    carrito: list[dict] = wizard.setdefault("carrito", [])
+    if not any(item["nombre_recurso"] == nombre for item in carrito):
+        carrito.append({"nombre_recurso": nombre, "auto": False, "por": None})
+    wizard["categoria"] = None
+    wizard["marca"] = None
+    wizard["resolviendo_item"] = False
+    return nombre
+
+
+OPCIONES_ACCESORIOS = [
+    ("incluir", "Sí, inclúyelos"),
+    ("excluir", "No, no los necesito"),
+]
+
+
+def _mensaje_confirmar_accesorios(nombre_padre: str, pendientes: list[str]) -> str:
+    """Mensaje tipo factura, separado del resumen final, que confirma el
+    activo recién elegido y le pregunta al usuario si quiere sus accesorios
+    por defecto -- ANTES de pedir fecha/hora, no junto con esa pregunta."""
+    lineas = "\n".join(f"    • {n}" for n in pendientes)
+    mensaje = (
+        "*ACTIVO SELECCIONADO*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"*{nombre_padre}*\n"
+        "Incluye por defecto:\n"
+        f"{lineas}\n"
+        f"{_DIVISOR_FACTURA}"
+    )
+    return mensaje + "\n\n" + _formatear_menu("¿Deseas incluirlos en tu reserva?", OPCIONES_ACCESORIOS)
+
+
+def _iniciar_quitar_item(wizard: dict, sesion: dict) -> tuple[str, dict]:
+    """Muestra el menú de "quitar un activo" con lo que hay en el carrito.
+    Si el carrito se queda vacío después de quitar, el llamador debe volver
+    a pedir un activo (`resolviendo_item = True`)."""
+    opciones = [
+        (
+            item["nombre_recurso"],
+            item["nombre_recurso"] + (" (incluido por defecto)" if item["auto"] else ""),
+        )
+        for item in wizard["carrito"]
+    ]
+    wizard["opciones_actuales"] = opciones
+    wizard["paso"] = "quitar_item_menu"
+    mensaje = _formatear_menu("¿Qué activo quieres quitar de la reserva?", opciones)
+    wizard["_mensaje_menu_actual"] = mensaje
+    return mensaje, {**sesion, "reserva_wizard": wizard}
+
+
 OPCIONES_CONFIRMAR = [
     ("confirmar", "Confirmar"),
-    ("cambiar_activo", "Cambiar activo"),
+    ("agregar_item", "Agregar otro activo o espacio"),
+    ("quitar_item", "Quitar un activo de la reserva"),
     ("cambiar_fecha", "Cambiar fecha"),
     ("cambiar_hora", "Cambiar hora"),
     ("cancelar", "Cancelar"),
@@ -623,12 +768,16 @@ OPCIONES_CONFIRMAR_HORA = [
 
 
 def _siguiente_paso_wizard(wizard: dict) -> str:
-    if not wizard.get("nombre_recurso"):
-        if not wizard.get("categoria"):
-            return "elegir_activo"
-        if not wizard.get("marca"):
-            return "elegir_marca"
-        return "elegir_modelo"
+    if wizard.get("resolviendo_item"):
+        if not wizard.get("nombre_recurso"):
+            if not wizard.get("categoria"):
+                return "elegir_activo"
+            if not wizard.get("marca"):
+                return "elegir_marca"
+            return "elegir_modelo"
+        # nombre_recurso ya se resolvió pero todavía no se encajó en el
+        # carrito -- eso lo maneja _avanzar_wizard antes de llegar aquí
+        # (ver el chequeo al tope de su while), así que no debería pasar.
     if not wizard.get("fecha"):
         return "fecha"
     if not wizard.get("inicio") or not wizard.get("fin"):
@@ -641,13 +790,35 @@ def _siguiente_paso_wizard(wizard: dict) -> str:
 def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
     """Avanza el wizard todo lo que se pueda sin pedirle nada al usuario
     (si un paso solo tiene una opción posible, ej. una sola marca en una
-    categoría, se salta solo y sigue) y se detiene en el primer paso que sí
-    necesita una respuesta, o cuando el usuario ya confirmó todo
-    (`listo=True`, momento en el que el llamador crea la reserva de
-    verdad). Devuelve (mensaje_para_el_usuario, wizard_actualizado, listo)."""
+    categoría, se salta solo y sigue; y si un ítem recién se resolvió, se
+    encaja en el carrito junto con sus accesorios por defecto) y se detiene
+    en el primer paso que sí necesita una respuesta, o cuando el usuario ya
+    confirmó todo (`listo=True`, momento en el que el llamador crea la
+    reserva de verdad). Devuelve (mensaje_para_el_usuario, wizard_actualizado,
+    listo)."""
     avisos: list[str] = []
 
     while True:
+        if wizard.get("resolviendo_item") and wizard.get("nombre_recurso"):
+            nombre = _mover_item_resuelto_al_carrito(wizard)
+            ya_en_carrito = {item["nombre_recurso"] for item in wizard["carrito"]}
+            pendientes = [a for a in _accesorios_por_defecto(nombre) if a not in ya_en_carrito]
+
+            if pendientes:
+                # Se detiene acá -- no se decide en silencio -- para
+                # preguntarle al usuario si quiere los accesorios por
+                # defecto ANTES de pedirle fecha/hora (ver
+                # `_mensaje_confirmar_accesorios` / paso "confirmar_accesorios").
+                wizard["accesorios_pendientes"] = pendientes
+                wizard["item_padre_pendiente"] = nombre
+                wizard["opciones_actuales"] = OPCIONES_ACCESORIOS
+                wizard["paso"] = "confirmar_accesorios"
+                mensaje = _mensaje_confirmar_accesorios(nombre, pendientes)
+                wizard["_mensaje_menu_actual"] = mensaje
+                return _con_avisos(avisos, mensaje), wizard, False
+
+            continue
+
         paso = _siguiente_paso_wizard(wizard)
 
         if paso == "elegir_activo":
@@ -692,9 +863,10 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
             wizard["opciones_actuales"] = None
             wizard["paso"] = "fecha"
+            nombres_carrito = ", ".join(f"'{item['nombre_recurso']}'" for item in wizard["carrito"])
             mensaje = (
                 f"Hoy es {_DIAS_ES[ahora_local.weekday()]} {ahora_local.strftime('%d/%m/%Y')}. "
-                f"¿Qué fecha necesitas '{wizard['nombre_recurso']}'? "
+                f"¿Qué fecha necesitas {nombres_carrito}? "
                 "Escríbela en formato dd/mm/aaaa, por ejemplo 22/11/2026."
             )
             return _con_avisos(avisos, mensaje), wizard, False
@@ -719,19 +891,41 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
         return "", wizard, True  # listo -- el usuario ya eligió "confirmar"
 
 
+_DIVISOR_FACTURA = "――――――――――――――――――"
+
+
+def _formatear_item_factura(nombre: str, es_hijo_auto: bool, sufijo: str = "") -> str:
+    """Una línea de activo para los mensajes de resumen/confirmación, estilo
+    factura: el activo que el usuario pidió va en negrita al margen; un
+    accesorio que se incluyó solo por venir en bundle (`es_hijo_auto`) va
+    sangrado justo debajo, sin repetir el nombre del padre -- el wizard ya
+    garantiza que un padre y sus accesorios quedan contiguos en el carrito
+    (ver `_mover_item_resuelto_al_carrito` / paso "confirmar_accesorios"),
+    así que la sangría alcanza para que se entienda a cuál pertenecen."""
+    if es_hijo_auto:
+        return f"    • {nombre} _(incluido)_{sufijo}"
+    return f"*{nombre}*{sufijo}"
+
+
 def _mensaje_resumen(wizard: dict, usuario: Usuario) -> str:
     inicio_utc = datetime.fromisoformat(wizard["inicio"])
     fin_utc = datetime.fromisoformat(wizard["fin"])
     inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
     fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
-    resumen = (
-        "Resumen de tu reserva:\n"
-        f"- Activo: {wizard['nombre_recurso']}\n"
-        f"- Reservado por: {usuario.nombre}\n"
-        f"- Inicio: {_formatear_fecha_hora(inicio_local)}\n"
-        f"- Fin: {_formatear_fecha_hora(fin_local)}\n"
+    lineas_activos = "\n".join(
+        _formatear_item_factura(item["nombre_recurso"], item["auto"]) for item in wizard["carrito"]
     )
-    return resumen + "\n" + _formatear_menu("¿Qué quieres hacer?", OPCIONES_CONFIRMAR)
+    resumen = (
+        "*RESUMEN DE RESERVA*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"{lineas_activos}\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"Reservado por: {usuario.nombre}\n"
+        f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
+        f"Fin: {_formatear_fecha_hora(fin_local)}\n"
+        f"{_DIVISOR_FACTURA}"
+    )
+    return resumen + "\n\n" + _formatear_menu("¿Qué quieres hacer?", OPCIONES_CONFIRMAR)
 
 
 def _con_avisos(avisos: list[str], mensaje: str) -> str:
@@ -740,17 +934,43 @@ def _con_avisos(avisos: list[str], mensaje: str) -> str:
     return "\n".join(avisos) + ("\n\n" + mensaje if mensaje else "")
 
 
+OPCIONES_NO_DISPONIBLE = [
+    ("quitar", "Quitar esos activos y continuar con el resto de la reserva"),
+    ("cancelar_reserva", "Cancelar esta reserva y elegir otro activo"),
+]
+
+
+def _mensaje_no_disponibles(no_disponibles: list[str]) -> str:
+    """Le dice al usuario exactamente cuáles activos (padre o hijo, da
+    igual) ya no están disponibles en el horario elegido, y le pregunta qué
+    hacer -- en vez de decidir en silencio (ver `_resolver_disponibilidad_carrito`
+    y el paso "resolver_disponibilidad" en `_continuar_reserva`)."""
+    lineas = "\n".join(f"    • {n}" for n in no_disponibles)
+    verbo = "No está disponible" if len(no_disponibles) == 1 else "No están disponibles"
+    mensaje = (
+        "*DISPONIBILIDAD*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"{verbo} en ese horario:\n"
+        f"{lineas}\n"
+        f"{_DIVISOR_FACTURA}"
+    )
+    return mensaje + "\n\n" + _formatear_menu("¿Qué quieres hacer?", OPCIONES_NO_DISPONIBLE)
+
+
+def _pausar_por_no_disponibles(wizard: dict, sesion: dict, no_disponibles: list[str]) -> tuple[str, dict]:
+    wizard["no_disponibles"] = no_disponibles
+    wizard["opciones_actuales"] = OPCIONES_NO_DISPONIBLE
+    wizard["paso"] = "resolver_disponibilidad"
+    mensaje = _mensaje_no_disponibles(no_disponibles)
+    wizard["_mensaje_menu_actual"] = mensaje
+    return mensaje, {**sesion, "reserva_wizard": wizard}
+
+
 def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) -> tuple[str, dict]:
     """Se llama solo cuando el usuario eligió "Confirmar" en el paso final
     -- aquí sí se escribe de verdad en `reservas`, todo lo anterior solo
-    preparaba los datos."""
-    nombre = wizard["nombre_recurso"]
-    sesion_limpia = {**sesion, "reserva_wizard": None}
-
-    grupo = _grupo(nombre)
-    if not grupo:
-        return "Ese activo ya no está disponible. Si quieres, intenta reservar de nuevo.", sesion_limpia
-
+    preparaba los datos. Todo el carrito se crea junto o no se crea nada
+    (ver `crear_reservas_grupo`)."""
     inicio_utc = datetime.fromisoformat(wizard["inicio"])
     fin_utc = datetime.fromisoformat(wizard["fin"])
     ahora_utc = datetime.now(timezone.utc)
@@ -758,33 +978,50 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     if inicio_utc < ahora_utc - MARGEN_INICIO_PASADO:
         return (
             "Esa fecha/hora ya pasó mientras confirmabas. Intenta reservar de nuevo con una fecha futura."
-        ), sesion_limpia
+        ), {**sesion, "reserva_wizard": None}
 
-    if _unidad_libre_en_rango(nombre, inicio_utc, fin_utc) is None:
+    # Última verificación antes de escribir en la base -- puede haber
+    # cambiado desde que se eligió la hora (ej. otra persona reservó algo
+    # justo mientras este usuario confirmaba).
+    carrito_final, unidades, no_disponibles = _resolver_disponibilidad_carrito(
+        wizard["carrito"], inicio_utc, fin_utc
+    )
+
+    if no_disponibles:
+        return _pausar_por_no_disponibles(wizard, sesion, no_disponibles)
+
+    sesion_limpia = {**sesion, "reserva_wizard": None}
+
+    # Puede haber más de una unidad libre por modelo; la garantía real
+    # contra choques es el EXCLUDE de Postgres que atrapa
+    # crear_reservas_grupo -- esto solo evita el caso común (nadie más
+    # reservó nada en el instante entre el chequeo y el commit).
+    reservas, error = crear_reservas_grupo(usuario.id, unidades, inicio_utc, fin_utc)
+    if error is not None:
         return (
-            f"'{nombre}' se acaba de reservar (todas sus unidades) mientras confirmabas, y se cruza "
-            "con tu horario. Prueba con otro horario."
+            "Uno de los activos se acaba de reservar justo mientras confirmabas. Intenta reservar de nuevo."
         ), sesion_limpia
 
-    # Puede haber más de una unidad libre para el mismo modelo; si la
-    # primera choca justo en el INSERT (dos usuarios confirmando a la vez),
-    # se prueba con la siguiente -- la garantía real contra choques es el
-    # EXCLUDE de Postgres que atrapa crear_reserva, esto solo evita que una
-    # colisión rara en una unidad tumbe una reserva que otra unidad sí
-    # podía cubrir.
-    for candidata in grupo:
-        reserva, error = crear_reserva(usuario.id, candidata.id, inicio_utc, fin_utc)
-        if error is None:
-            inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
-            fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
-            # _formatear_hora ya termina en "a.m."/"p.m." (con punto), así
-            # que no se agrega otro punto aparte antes de _nota_seguro.
-            return (
-                f"Listo, reservé '{nombre}' -- {_formatear_fecha_hora(inicio_local)} "
-                f"a {_formatear_hora(fin_local)}{_nota_seguro(candidata)}"
-            ), sesion_limpia
-
-    return f"'{nombre}' ya no está disponible en ese horario. Prueba con otro horario.", sesion_limpia
+    inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
+    fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
+    lineas = "\n".join(
+        _formatear_item_factura(unidad.nombre, item["auto"])
+        for item, unidad in zip(carrito_final, unidades)
+    )
+    notas_seguro = [_nota_seguro(unidad) for unidad in unidades if unidad.requiere_seguro]
+    mensaje = (
+        "*RESERVA CONFIRMADA*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"{lineas}\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"Reservado por: {usuario.nombre}\n"
+        f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
+        f"Fin: {_formatear_hora(fin_local)}\n"
+        f"{_DIVISOR_FACTURA}"
+    )
+    if notas_seguro:
+        mensaje += "\n" + "\n".join(notas_seguro)
+    return mensaje, sesion_limpia
 
 
 def _aplicar_fecha_valida(wizard: dict, usuario: Usuario, sesion: dict, fecha: date) -> tuple[str, dict]:
@@ -810,16 +1047,19 @@ def _aplicar_hora_valida(
         wizard["paso"] = "hora"
         wizard["opciones_actuales"] = None
         return error, {**sesion, "reserva_wizard": wizard}
-    if _unidad_libre_en_rango(wizard["nombre_recurso"], inicio_utc, fin_utc) is None:
-        wizard["paso"] = "hora"
-        wizard["opciones_actuales"] = None
-        return (
-            f"'{wizard['nombre_recurso']}' ya está reservado (todas sus unidades) en ese horario. "
-            "Prueba con otro horario."
-        ), {**sesion, "reserva_wizard": wizard}
+
     wizard["inicio"] = inicio_utc.isoformat()
     wizard["fin"] = fin_utc.isoformat()
     wizard["opciones_actuales"] = None
+
+    _, _, no_disponibles = _resolver_disponibilidad_carrito(wizard["carrito"], inicio_utc, fin_utc)
+    if no_disponibles:
+        # Se le dice al usuario cuál activo (padre o hijo, da igual) no
+        # está disponible y se le pregunta qué hacer, en vez de bloquear
+        # todo el horario o descartar accesorios en silencio (ver
+        # `_pausar_por_no_disponibles`).
+        return _pausar_por_no_disponibles(wizard, sesion, no_disponibles)
+
     mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
     if listo:
         return _crear_reserva_desde_wizard(wizard, usuario, sesion)
@@ -849,6 +1089,8 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         "categoria": None,
         "marca": None,
         "nombre_recurso": None,
+        "carrito": [],
+        "resolviendo_item": True,
         "fecha": None,
         "inicio": None,
         "fin": None,
@@ -1012,12 +1254,97 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             wizard["confirmado"] = True
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
 
-        if valor == "cambiar_activo":
-            wizard.update(categoria=None, marca=None, nombre_recurso=None)
+        if valor == "agregar_item":
+            wizard.update(categoria=None, marca=None, nombre_recurso=None, resolviendo_item=True)
+        elif valor == "quitar_item":
+            return _iniciar_quitar_item(wizard, sesion)
         elif valor == "cambiar_fecha":
             wizard.update(fecha=None, inicio=None, fin=None)
         elif valor == "cambiar_hora":
             wizard.update(inicio=None, fin=None)
+
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "confirmar_accesorios":
+        opciones = wizard.get("opciones_actuales") or OPCIONES_ACCESORIOS
+        valor = _interpretar_opcion(texto_usuario, opciones)
+        if valor is None:
+            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                **sesion,
+                "reserva_wizard": wizard,
+            }
+
+        pendientes = wizard.pop("accesorios_pendientes", [])
+        nombre_padre = wizard.pop("item_padre_pendiente", None)
+        if valor == "incluir":
+            for nombre_accesorio in pendientes:
+                wizard["carrito"].append({"nombre_recurso": nombre_accesorio, "auto": True, "por": nombre_padre})
+            # No hace falta revisar disponibilidad acá -- ya se revisa en el
+            # paso "hora" (o al confirmar, si la hora ya estaba puesta por
+            # venir de "agregar otro activo"), ver `_pausar_por_no_disponibles`.
+
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "resolver_disponibilidad":
+        opciones = wizard.get("opciones_actuales") or OPCIONES_NO_DISPONIBLE
+        valor = _interpretar_opcion(texto_usuario, opciones)
+        if valor is None:
+            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                **sesion,
+                "reserva_wizard": wizard,
+            }
+
+        no_disponibles = wizard.pop("no_disponibles", [])
+
+        if valor == "cancelar_reserva":
+            return (
+                "Reserva cancelada, no se guardó nada. Si quieres reservar otra cosa, dime qué necesitas."
+            ), {**sesion, "reserva_wizard": None}
+
+        # "quitar" -- se quitan los activos no disponibles y, si alguno era
+        # padre de un accesorio incluido por defecto, también ese accesorio
+        # (mismo criterio de arrastre que "Quitar un activo de la reserva",
+        # ver paso "quitar_item_menu").
+        wizard["carrito"] = [
+            item
+            for item in wizard["carrito"]
+            if item["nombre_recurso"] not in no_disponibles and item.get("por") not in no_disponibles
+        ]
+        if not wizard["carrito"]:
+            wizard["resolviendo_item"] = True
+
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "quitar_item_menu":
+        opciones = wizard.get("opciones_actuales") or []
+        valor = _interpretar_opcion(texto_usuario, opciones)
+        if valor is None:
+            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                **sesion,
+                "reserva_wizard": wizard,
+            }
+
+        nombre_a_quitar = valor
+        wizard["carrito"] = [
+            item
+            for item in wizard["carrito"]
+            if item["nombre_recurso"] != nombre_a_quitar and item.get("por") != nombre_a_quitar
+        ]
+        if not wizard["carrito"]:
+            # Se quitó el único activo -- hay que elegir otro para poder
+            # seguir con la reserva.
+            wizard["resolviendo_item"] = True
 
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
         if listo:
@@ -1033,9 +1360,10 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     """Punto de entrada para el intent 'reservar'. Arranca o continúa el
     wizard paso a paso (ver bloque de arriba), incluyendo la confirmación
     final -- ya no existe un mecanismo aparte de "reserva_pendiente" con
-    solo sí/no, el último paso del wizard ("confirmar") es un menú que
-    también permite cambiar el activo, la fecha o la hora sin reiniciar
-    todo. Mientras `sesion` tenga `reserva_wizard` distinto de None,
+    solo sí/no, el último paso del wizard ("confirmar") es un menú tipo
+    carrito de compras que también permite agregar o quitar activos, o
+    cambiar la fecha/hora, sin reiniciar todo. Mientras `sesion` tenga
+    `reserva_wizard` distinto de None,
     webhook.py manda la respuesta del usuario directo aquí en vez de pasar
     por clasificación de intent (una respuesta corta como "2" no se
     reconoce de forma confiable como intent "reservar" y quedaría
@@ -1045,10 +1373,25 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     # En los pasos de "¿es correcto lo que entendí?" (fecha/hora
     # interpretadas), "no" significa "esa interpretación está mal, deja que
     # te la escriba en el formato exacto" -- no "cancela toda la reserva".
-    # Ahí solo las palabras explícitas de cancelar deben cortar el flujo.
+    # Ahí solo las palabras explícitas de cancelar/cerrar deben cortar el
+    # flujo. "cerrar" es sinónimo de "cancelar" pensado para el caso de "ya
+    # no quiero seguir, corta esto ya" en cualquier paso del wizard -- este
+    # chequeo corre antes de despachar al paso actual, así que funciona sin
+    # importar en qué parte del flujo esté el usuario. Solo se borra
+    # `reserva_wizard` de la sesión (nada se reserva hasta el paso
+    # "confirmar", así que no queda ningún activo/espacio a medio reservar);
+    # el historial de la interacción (`guardrails.registrar_interaccion`)
+    # no se toca.
+    # Mismo motivo para "confirmar_accesorios": su opción "No, no los
+    # necesito" también empieza por "no", que ahí significa "excluye esos
+    # accesorios", no "cancela toda la reserva".
     palabras_cancelar = PALABRAS_CANCELAR
-    if wizard is not None and wizard.get("paso") in ("confirmar_fecha_interpretada", "confirmar_hora_interpretada"):
-        palabras_cancelar = {"cancelar", "cancela"}
+    if wizard is not None and wizard.get("paso") in (
+        "confirmar_fecha_interpretada",
+        "confirmar_hora_interpretada",
+        "confirmar_accesorios",
+    ):
+        palabras_cancelar = {"cancelar", "cancela", "cerrar"}
 
     if wizard is not None and set(_normalizar(texto_usuario).split()) & palabras_cancelar:
         return (

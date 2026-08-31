@@ -31,13 +31,31 @@ class Recurso(db.Model):
     # Inventario físico -- solo aplica a tipo='equipo' (ver constraints
     # recursos_placa_formato / recursos_placa_requerida_equipo en
     # postgres/init/02-schema.sql). Un 'espacio' los deja en NULL.
-    placa = db.Column(db.String(8), unique=True)         # número de placa/inventario, 8 dígitos
+    placa = db.Column(db.String(10), unique=True)         # placa/inventario: 7-8 caracteres alfanuméricos
+    # FK al equipo principal cuando este recurso es un accesorio/hijo que
+    # viene en bundle con otro equipo (ej. los lentes de una cámara). NULL
+    # si el equipo no es hijo de otro.
+    padre_id = db.Column(db.Integer, db.ForeignKey("recursos.id"))
+    # Solo tiene sentido cuando padre_id no es None: si este hijo se agrega
+    # automáticamente a la reserva del padre (ej. los lentes que siempre van
+    # con la cámara) o si hay que pedirlo aparte.
+    incluido_por_defecto = db.Column(db.Boolean, nullable=False, default=True)
     categoria = db.Column(db.String(50))                  # 'camara' | 'celular' | 'dron' | ... (texto libre)
     marca = db.Column(db.String(100))
     modelo = db.Column(db.String(100))
     identificador = db.Column(db.String(100))             # número de serie o IMEI, si lo tiene
     requiere_seguro = db.Column(db.Boolean, nullable=False, default=False)
     activo = db.Column(db.Boolean, nullable=False, default=True)
+    creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    padre = db.relationship("Recurso", remote_side=[id], backref="hijos")
+
+
+class ReservaGrupo(db.Model):
+    __tablename__ = "reserva_grupos"
+
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -51,10 +69,16 @@ class Reserva(db.Model):
     fin = db.Column(db.DateTime(timezone=True), nullable=False)
     estado = db.Column(db.String(20), nullable=False, default="confirmada")
     canal_origen = db.Column(db.String(20), nullable=False, default="whatsapp")
+    # NULL en reservas creadas antes de que existiera el carrito (ver
+    # ReservaGrupo). Toda reserva nueva creada por el wizard de
+    # recursos_service.py comparte grupo_id con las demás confirmadas junto
+    # con ella en la misma sesión (ej. una cámara + sus lentes).
+    grupo_id = db.Column(db.Integer, db.ForeignKey("reserva_grupos.id"))
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
     usuario = db.relationship("Usuario")
     recurso = db.relationship("Recurso")
+    grupo = db.relationship("ReservaGrupo", backref="reservas")
 
 
 class AuditoriaBot(db.Model):

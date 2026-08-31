@@ -18,22 +18,25 @@ from app.models import Recurso, Reserva, Usuario
 
 RECURSOS_DUMMY = [
     dict(tipo="equipo", nombre="Cámara Sony A7III", descripcion="Mirrorless full frame",
-         placa="10000001", categoria="cámara", marca="Sony", modelo="A7III", identificador="SN-A7III-001",
+         placa="10000010", categoria="cámara", marca="Sony", modelo="A7III", identificador="SN-A7III-001",
          requiere_seguro=True),
     dict(tipo="equipo", nombre="Cámara Canon EOS R", descripcion="Mirrorless full frame",
-         placa="10000002", categoria="cámara", marca="Canon", modelo="EOS R", identificador="SN-EOSR-002",
+         placa="10000020", categoria="cámara", marca="Canon", modelo="EOS R", identificador="SN-EOSR-002",
+         requiere_seguro=True),
+    dict(tipo="equipo", nombre="Cámara Canon EOS R6", descripcion="Mirrorless full frame",
+         placa="10000070", categoria="cámara", marca="Canon", modelo="EOS R6", identificador="SN-EOSR6-007",
          requiere_seguro=True),
     dict(tipo="equipo", nombre="Trípode Manfrotto", descripcion="Trípode de video con cabezal fluido",
-         placa="10000003", categoria="trípode", marca="Manfrotto", modelo="MT055XPRO3", identificador=None,
+         placa="10000030", categoria="trípode", marca="Manfrotto", modelo="MT055XPRO3", identificador=None,
          requiere_seguro=False),
     dict(tipo="equipo", nombre="Micrófono Rode NTG3", descripcion="Micrófono shotgun",
-         placa="10000004", categoria="micrófono", marca="Rode", modelo="NTG3", identificador=None,
+         placa="10000040", categoria="micrófono", marca="Rode", modelo="NTG3", identificador=None,
          requiere_seguro=False),
     dict(tipo="equipo", nombre="Kit de luces LED", descripcion="Kit de 2 paneles LED con soportes",
-         placa="10000005", categoria="luces", marca="Neewer", modelo="660 PRO", identificador=None,
+         placa="10000050", categoria="luces", marca="Neewer", modelo="660 PRO", identificador=None,
          requiere_seguro=True),
     dict(tipo="equipo", nombre="Dron DJI Mavic", descripcion="Dron con cámara 4K",
-         placa="10000006", categoria="dron", marca="DJI", modelo="Mavic 3", identificador="IMEI-864012345678901",
+         placa="10000060", categoria="dron", marca="DJI", modelo="Mavic 3", identificador="IMEI-864012345678901",
          requiere_seguro=True),
     dict(tipo="espacio", nombre="Estudio de grabación A", descripcion="Estudio con croma",
          ubicacion="Edificio CPA, piso 2"),
@@ -54,6 +57,61 @@ def seed_recursos_cmd():
     recursos = [Recurso(**data) for data in RECURSOS_DUMMY]
     db.session.add_all(recursos)
     db.session.flush()  # asigna ids sin cerrar la transacción
+
+    # Dos lentes hijos de la Sony A7III, para poder probar el carrito con
+    # accesorios por defecto (ver recursos_service._accesorios_por_defecto).
+    camara_sony = next(r for r in recursos if r.nombre == "Cámara Sony A7III")
+    lentes_sony = [
+        Recurso(
+            tipo="equipo", nombre="Lente Sony 24-70mm f/2.8", descripcion="Zoom estándar",
+            placa="LEN0022", categoria="lente", marca="Sony", modelo="FE 24-70mm f/2.8 GM",
+            padre_id=camara_sony.id, incluido_por_defecto=True,
+        ),
+        Recurso(
+            tipo="equipo", nombre="Lente Sony 70-200mm f/2.8", descripcion="Zoom telefoto",
+            placa="LEN0023", categoria="lente", marca="Sony", modelo="FE 70-200mm f/2.8 GM",
+            padre_id=camara_sony.id, incluido_por_defecto=True,
+        ),
+    ]
+    db.session.add_all(lentes_sony)
+    db.session.flush()
+    recursos += lentes_sony
+
+    # Dos lentes hijos de la Canon EOS R y tres de la Canon EOS R6, para
+    # probar el carrito con más de un padre/hijo y con bundles de tamaño
+    # distinto (2 vs. 3 accesorios).
+    camara_canon_r = next(r for r in recursos if r.nombre == "Cámara Canon EOS R")
+    camara_canon_r6 = next(r for r in recursos if r.nombre == "Cámara Canon EOS R6")
+    lentes_canon = [
+        Recurso(
+            tipo="equipo", nombre="Lente Canon RF 24-105mm f/4L", descripcion="Zoom estándar",
+            placa="LEN0024", categoria="lente", marca="Canon", modelo="RF 24-105mm f/4L",
+            padre_id=camara_canon_r.id, incluido_por_defecto=True,
+        ),
+        Recurso(
+            tipo="equipo", nombre="Lente Canon RF 50mm f/1.2L", descripcion="Fijo retrato",
+            placa="LEN0025", categoria="lente", marca="Canon", modelo="RF 50mm f/1.2L",
+            padre_id=camara_canon_r.id, incluido_por_defecto=True,
+        ),
+        Recurso(
+            tipo="equipo", nombre="Lente Canon RF 16-35mm f/2.8L", descripcion="Gran angular",
+            placa="LEN0026", categoria="lente", marca="Canon", modelo="RF 16-35mm f/2.8L",
+            padre_id=camara_canon_r6.id, incluido_por_defecto=True,
+        ),
+        Recurso(
+            tipo="equipo", nombre="Lente Canon RF 70-200mm f/2.8L", descripcion="Zoom telefoto",
+            placa="LEN0027", categoria="lente", marca="Canon", modelo="RF 70-200mm f/2.8L",
+            padre_id=camara_canon_r6.id, incluido_por_defecto=True,
+        ),
+        Recurso(
+            tipo="equipo", nombre="Lente Canon RF 100-500mm f/4.5-7.1L", descripcion="Supertelefoto",
+            placa="LEN0028", categoria="lente", marca="Canon", modelo="RF 100-500mm f/4.5-7.1L",
+            padre_id=camara_canon_r6.id, incluido_por_defecto=True,
+        ),
+    ]
+    db.session.add_all(lentes_canon)
+    db.session.flush()
+    recursos += lentes_canon
 
     usuario_prueba = Usuario(
         nombre="Usuario de Pruebas",
@@ -88,6 +146,9 @@ def seed_recursos_cmd():
     click.echo("- 'Cámara Sony A7III' queda EN USO ahora mismo (hasta dentro de 30 min).")
     click.echo("- 'Estudio de grabación A' queda libre ahora pero con reserva en 2h.")
     click.echo("- El resto quedan libres y sin reservas.")
+    click.echo("- La Sony A7III trae 2 lentes hijos incluidos por defecto (LEN0022, LEN0023).")
+    click.echo("- La Canon EOS R trae 2 lentes hijos incluidos por defecto (LEN0024, LEN0025).")
+    click.echo("- La Canon EOS R6 trae 3 lentes hijos incluidos por defecto (LEN0026, LEN0027, LEN0028).")
 
 
 def registrar_cli(app):

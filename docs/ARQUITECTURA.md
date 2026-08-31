@@ -107,12 +107,23 @@ nunca toca la base de datos directamente.
 ## Inventario: varias unidades del mismo modelo (`recursos_service.py`)
 
 Cada fila de `recursos` con `tipo='equipo'` representa una unidad física
-concreta: tiene `placa` (número de inventario, 8 dígitos, único),
-`categoria` (ej. "cámara", "dron" -- para agrupar tipos de equipo,
-independiente de `tipo` que solo distingue `equipo`/`espacio`), `marca`,
-`modelo` e `identificador` opcional (serie/IMEI). `marca`/`modelo` se
-repiten libremente entre filas -- lo único con restricción de unicidad es
-`placa`. Un `espacio` deja esos campos en `NULL` (no aplican).
+concreta: tiene `placa` (número de inventario, único; 7-8 caracteres
+alfanuméricos -- el padre usa 8 dígitos terminados en 0 por convención,
+ej. `12345670`, un hijo puede tener la misma placa con el último dígito
+distinto de 0 o un código propio como `LEN0022`), `categoria` (ej.
+"cámara", "dron" -- para agrupar tipos de equipo, independiente de `tipo`
+que solo distingue `equipo`/`espacio`), `marca`, `modelo` e `identificador`
+opcional (serie/IMEI). `marca`/`modelo` se repiten libremente entre filas
+-- lo único con restricción de unicidad es `placa`. Un `espacio` deja esos
+campos en `NULL` (no aplican).
+
+**Accesorios en bundle (`padre_id`):** un equipo puede venir empaquetado
+con otros (ej. una cámara con 2 lentes). `recursos.padre_id` referencia al
+equipo principal cuando la fila es un accesorio/hijo; `NULL` si no lo es.
+`incluido_por_defecto` (solo relevante cuando `padre_id` no es `NULL`)
+marca si ese hijo se agrega solo a la reserva del padre o si hay que
+pedirlo aparte -- ver "Carrito de reserva" más abajo. Un hijo sigue siendo
+un `recurso` normal: se puede reservar solo, sin su padre.
 
 Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
 `placa`), se tratan como intercambiables:
@@ -148,18 +159,19 @@ Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
   rechaza cualquier INSERT/UPDATE que se solape con una reserva confirmada
   existente del mismo recurso, sin importar si la vía es la app, una
   migración, un script manual, o dos requests concurrentes que pasaron el
-  chequeo de la aplicación al mismo tiempo. `crear_reserva` en
+  chequeo de la aplicación al mismo tiempo. `crear_reservas_grupo` en
   `recursos_service.py` solo atrapa el `IntegrityError` que Postgres lanza
-  si eso pasa; el chequeo previo con `_unidad_libre_en_rango` es solo para
-  dar un mensaje más claro antes de intentar el INSERT, no la garantía de
-  consistencia.
+  si eso pasa (revirtiendo el carrito completo, ver "Carrito de reserva y
+  accesorios por defecto" más abajo); el chequeo previo con
+  `_unidad_libre_en_rango` es solo para dar un mensaje más claro antes de
+  intentar el INSERT, no la garantía de consistencia.
 
 ## Reserva paso a paso (`recursos_service.py`, wizard)
 
 `gestionar_reserva` (intent `reservar`) no le pide todo al usuario en un
 solo mensaje libre -- va preguntando un dato a la vez con menús numerados,
 guardando el progreso en `sesion["reserva_wizard"]` (ver "Memoria de
-conversación"). Progresión (`_siguiente_paso_wizard`):
+conversación"). Progresión para un ítem (`_siguiente_paso_wizard`):
 
 ```
 elegir_activo → elegir_marca → elegir_modelo → fecha → hora → confirmar → listo
@@ -171,6 +183,13 @@ posible (ej. una sola marca dentro de una categoría), avisando al usuario
 que no tiene sentido elegir. Si el primer mensaje ya deja claro el activo
 (vía `llm_client.extraer_datos_reserva`, ver arriba), esos pasos se saltan
 también.
+
+La reserva no se limita a un solo activo: `wizard["carrito"]` es la lista
+de ítems ya resueltos (ver "Carrito de reserva" más abajo). En cuanto un
+ítem termina de resolverse (`elegir_activo → ... → elegir_modelo`),
+`_agregar_item_al_carrito` lo mueve al carrito antes de seguir -- por eso
+`wizard["nombre_recurso"]` es solo "el ítem que se está resolviendo ahora",
+no "el único ítem de la reserva".
 
 ### Fecha y hora: formato fijo, sin LLM -- con reconocimiento de lenguaje natural confirmado explícitamente
 
@@ -198,18 +217,41 @@ cancela todo el wizard cuando el usuario escribe la palabra "no" se
 desactiva a propósito durante estos dos pasos (ahí "no" significa "esa
 interpretación está mal", no "cancela la reserva").
 
-### Confirmación final editable
+### Carrito de reserva y accesorios por defecto
 
-El último paso (`confirmar`) no es un simple sí/no: manda el resumen
-(activo, quién reserva, inicio, fin) con un menú `Confirmar / Cambiar
-activo / Cambiar fecha / Cambiar hora / Cancelar`. Elegir "Cambiar fecha"
-(por ejemplo) borra solo `fecha`/`inicio`/`fin` del wizard y hace que
-`_avanzar_wizard` vuelva a preguntar justo eso, conservando el resto.
+El último paso (`confirmar`) no es un simple sí/no: manda el resumen (cada
+ítem del carrito, quién reserva, inicio, fin) con un menú `Confirmar /
+Agregar otro activo o espacio / Quitar un activo de la reserva / Cambiar
+fecha / Cambiar hora / Cancelar` -- se comporta como un carrito de compras,
+no como una reserva de un solo activo:
+
+- **Accesorios por defecto:** al resolver un activo con hijos marcados
+  `incluido_por_defecto=True` (ver "Accesorios en bundle" arriba),
+  `_accesorios_por_defecto` los agrega solos al carrito -- el usuario no
+  tiene que pedirlos aparte, solo quitarlos si no los quiere.
+- **"Agregar otro activo o espacio"** reentra a `elegir_activo` para un
+  ítem nuevo en el mismo horario ya elegido; al resolverse, se suma al
+  carrito (con sus propios accesorios por defecto si aplica).
+- **"Quitar un activo de la reserva"** abre un menú numerado
+  (`quitar_item_menu`) con lo que hay en el carrito; quitar un padre
+  también quita los accesorios que se agregaron por él. Si el carrito
+  queda vacío, vuelve a pedir un activo.
+- Elegir "Cambiar fecha" (por ejemplo) borra solo `fecha`/`inicio`/`fin`
+  del wizard y hace que `_avanzar_wizard` vuelva a preguntar justo eso,
+  conservando el carrito ya armado.
+
 Solo cuando el usuario elige "Confirmar" se llama a
-`_crear_reserva_desde_wizard`, que re-valida que la fecha no haya pasado
-mientras confirmaba y que no haya un choque nuevo (por si alguien más
-reservó esa unidad mientras tanto) antes de escribir en `reservas` de
-verdad -- hasta ese momento no se toca la base de datos.
+`_crear_reserva_desde_wizard`. Antes de escribir nada,
+`_resolver_disponibilidad_carrito` revisa cada ítem: uno que el usuario
+**eligió explícitamente** y ya no está disponible (alguien más lo reservó
+mientras confirmaba) bloquea todo y pide cambiar la hora o quitarlo; un
+**accesorio por defecto** que ya no está disponible se quita del carrito
+en silencio (con un aviso) sin bloquear el resto -- nadie pidió ese
+accesorio a propósito. Si todo el carrito queda disponible,
+`crear_reservas_grupo` crea un `ReservaGrupo` y una `Reserva` por cada
+unidad **en una sola transacción**: si la restricción `EXCLUDE` de
+Postgres rechaza alguna justo al confirmar (condición de carrera), se
+revierte el carrito completo en vez de dejar una reserva parcial.
 
 ## Identidad y registro (`registro_service.py`, `usuarios_service.py`)
 

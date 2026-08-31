@@ -36,7 +36,26 @@ CREATE TABLE IF NOT EXISTS recursos (
     -- categoría, marca, modelo ni número de serie/IMEI). Ver constraints
     -- recursos_placa_requerida_equipo / recursos_categoria_requerida_equipo
     -- más abajo.
-    placa           VARCHAR(8),                      -- número de placa/inventario, 8 dígitos, único
+    -- Número de placa/inventario, único. El equipo padre usa 8 dígitos
+    -- numéricos terminados en 0 (ej. '12345670'). Un equipo hijo (accesorio
+    -- que viene en bundle con un padre, ver `padre_id` abajo) puede tener
+    -- su propia placa de 7-8 caracteres alfanuméricos: o la misma placa del
+    -- padre con el último dígito distinto de 0 (ej. '12345671', '12345673'),
+    -- o un código independiente con numeración propia (ej. 'LEN0022' para
+    -- un lente, 'LEN0023' para otro).
+    placa           VARCHAR(10),
+    -- FK a recursos(id) del equipo principal cuando esta fila es un
+    -- accesorio/hijo que viene en bundle con otro equipo (ej. los lentes de
+    -- una cámara, el micrófono de un dron). NULL si el equipo no es hijo de
+    -- otro (es un equipo principal o independiente). Permite que el bot
+    -- responda "qué accesorios tiene la cámara X" (recursos con padre_id =
+    -- id de la cámara) o "de qué equipo es hijo el lente Y" (seguir padre_id).
+    padre_id        INTEGER REFERENCES recursos(id),
+    -- Solo tiene sentido cuando `padre_id` no es NULL (un hijo/accesorio):
+    -- indica si este hijo se agrega automáticamente a la reserva del padre
+    -- (ej. los lentes que siempre van con la cámara) o si hay que pedirlo
+    -- aparte. Se ignora en equipos sin padre.
+    incluido_por_defecto BOOLEAN NOT NULL DEFAULT TRUE,
     -- Categoría del equipo (ej. 'camara', 'celular', 'dron', 'microfono',
     -- 'tripode', 'luces') -- distinta de la columna `tipo` de arriba
     -- (equipo/espacio). Permite que el bot responda "qué cámaras tenemos"
@@ -51,14 +70,30 @@ CREATE TABLE IF NOT EXISTS recursos (
     requiere_seguro BOOLEAN NOT NULL DEFAULT FALSE,  -- activa secuencia de seguro de equipos
     activo          BOOLEAN NOT NULL DEFAULT TRUE,
     creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT recursos_placa_formato CHECK (placa IS NULL OR placa ~ '^[0-9]{8}$'),
+    CONSTRAINT recursos_placa_formato CHECK (placa IS NULL OR placa ~ '^[A-Z0-9]{7,8}$'),
     CONSTRAINT recursos_placa_requerida_equipo CHECK (tipo <> 'equipo' OR placa IS NOT NULL),
-    CONSTRAINT recursos_categoria_requerida_equipo CHECK (tipo <> 'equipo' OR categoria IS NOT NULL)
+    CONSTRAINT recursos_categoria_requerida_equipo CHECK (tipo <> 'equipo' OR categoria IS NOT NULL),
+    CONSTRAINT recursos_padre_no_self CHECK (padre_id IS NULL OR padre_id <> id)
 );
 
 -- Único por activo, pero permite múltiples NULL (para 'espacio', que no
 -- tiene placa) ya que Postgres no cuenta NULL como duplicado en UNIQUE.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recursos_placa_unica ON recursos (placa);
+
+-- idx_recursos_padre_id se crea más abajo, después del bloque de migración
+-- que agrega la columna `padre_id` -- en una base ya existente (donde el
+-- CREATE TABLE de arriba se saltó por "already exists") esa columna todavía
+-- no existe en este punto del script.
+
+-- Agrupa las reservas creadas juntas en una misma confirmación de "carrito"
+-- (ej. la cámara + sus lentes + una sala, todas en el mismo horario) -- ver
+-- reservas.grupo_id abajo. Permite mostrarle al usuario su reserva completa
+-- y, en el futuro, cancelarla en bloque.
+CREATE TABLE IF NOT EXISTS reserva_grupos (
+    id         SERIAL PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    creado_en  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS reservas (
     id              SERIAL PRIMARY KEY,
@@ -68,12 +103,19 @@ CREATE TABLE IF NOT EXISTS reservas (
     fin             TIMESTAMPTZ NOT NULL,
     estado          VARCHAR(20) NOT NULL DEFAULT 'confirmada', -- confirmada | cancelada | completada | no_show
     canal_origen    VARCHAR(20) NOT NULL DEFAULT 'whatsapp',
+    -- NULL en reservas creadas antes de que existiera el carrito. Toda
+    -- reserva nueva creada por el wizard de recursos_service.py sí lo trae,
+    -- compartido por todos los activos confirmados juntos en esa sesión.
+    grupo_id        INTEGER REFERENCES reserva_grupos(id),
     creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT rango_valido CHECK (fin > inicio)
 );
 
 -- Evita choques de horario para el mismo recurso a nivel de base de datos
 CREATE INDEX IF NOT EXISTS idx_reservas_recurso_rango ON reservas (recurso_id, inicio, fin);
+-- idx_reservas_grupo_id se crea más abajo, después del bloque de migración
+-- que agrega la columna `grupo_id` (mismo motivo que idx_recursos_padre_id
+-- arriba: en una base ya existente esa columna no existe todavía aquí).
 
 -- Garantía real (no solo un índice) de que dos reservas confirmadas del
 -- mismo recurso nunca se solapen en el tiempo, aunque la app tenga un bug
@@ -124,22 +166,32 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cedula VARCHAR(20);
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS registro_completo BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE usuarios ALTER COLUMN nombre DROP NOT NULL;
 
-ALTER TABLE recursos ADD COLUMN IF NOT EXISTS placa VARCHAR(8);
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS placa VARCHAR(10);
+ALTER TABLE recursos ALTER COLUMN placa TYPE VARCHAR(10);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS marca VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS modelo VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS identificador VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS categoria VARCHAR(50);
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS padre_id INTEGER REFERENCES recursos(id);
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS incluido_por_defecto BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recursos_placa_unica ON recursos (placa);
+CREATE INDEX IF NOT EXISTS idx_recursos_padre_id ON recursos (padre_id);
+
+-- reserva_grupos ya está creada más arriba (CREATE TABLE IF NOT EXISTS,
+-- antes de "reservas") incluso para una base inicializada antes de que
+-- existiera -- este ALTER solo agrega la columna que la referencia.
+ALTER TABLE reservas ADD COLUMN IF NOT EXISTS grupo_id INTEGER REFERENCES reserva_grupos(id);
+CREATE INDEX IF NOT EXISTS idx_reservas_grupo_id ON reservas (grupo_id);
 
 DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'recursos_placa_formato'
-    ) THEN
-        ALTER TABLE recursos ADD CONSTRAINT recursos_placa_formato
-            CHECK (placa IS NULL OR placa ~ '^[0-9]{8}$');
-    END IF;
+    -- Se recrea (no solo "si no existe") porque el formato cambió de
+    -- 8 dígitos numéricos a 7-8 caracteres alfanuméricos, para admitir
+    -- placas de equipos hijo (ej. '12345671' o 'LEN0022').
+    ALTER TABLE recursos DROP CONSTRAINT IF EXISTS recursos_placa_formato;
+    ALTER TABLE recursos ADD CONSTRAINT recursos_placa_formato
+        CHECK (placa IS NULL OR placa ~ '^[A-Z0-9]{7,8}$');
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'recursos_placa_requerida_equipo'
     ) THEN
@@ -151,6 +203,12 @@ BEGIN
     ) THEN
         ALTER TABLE recursos ADD CONSTRAINT recursos_categoria_requerida_equipo
             CHECK (tipo <> 'equipo' OR categoria IS NOT NULL);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'recursos_padre_no_self'
+    ) THEN
+        ALTER TABLE recursos ADD CONSTRAINT recursos_padre_no_self
+            CHECK (padre_id IS NULL OR padre_id <> id);
     END IF;
 END $$;
 
