@@ -18,24 +18,46 @@
       no pasa a ningún otro intent (`registro_service.py`,
       `usuarios_service.py` — ver `docs/SESION_2026-08-25.md`)
 - [x] Confirmación explícita antes de escribir una reserva en la base de
-      datos — el bot manda un resumen (activo, quién reserva, inicio, fin)
-      con un menú (Confirmar / Cambiar activo / Cambiar fecha / Cambiar
-      hora / Cancelar) y solo reserva si el usuario elige "Confirmar"
-      (`recursos_service.gestionar_reserva` /
-      `_crear_reserva_desde_wizard` — ver `docs/SESION_2026-08-28.md`)
+      datos — el bot manda un resumen tipo factura (cada activo del
+      carrito, quién reserva, inicio, fin) con un menú (Confirmar /
+      Agregar otro activo o espacio / Quitar un activo de la reserva /
+      Cambiar fecha / Cambiar hora / Cancelar) y solo reserva si el
+      usuario elige "Confirmar" (`recursos_service.gestionar_reserva` /
+      `_crear_reserva_desde_wizard` — ver `docs/SESION_2026-08-28.md` y
+      `docs/SESION_2026-08-31.md`)
 - [x] Fecha y hora de una reserva nunca se aceptan de una interpretación
       sin que el usuario la confirme explícitamente: el formato exacto
-      (dd/mm/aaaa, hh:mm am/pm) se acepta directo, pero cualquier variante
-      en lenguaje natural ("mañana", "de 2pm a 7pm") se le muestra de
-      vuelta al usuario para que diga sí/no antes de usarla — mitiga que
+      (dd/mm/aaaa, hh:mm am/pm, o un rango de fechas dd/mm/aaaa a
+      dd/mm/aaaa para reservas de varios días) se acepta directo, pero
+      cualquier variante en lenguaje natural ("mañana", "desde mañana
+      hasta el viernes", "a las 3pm") se le muestra de vuelta al usuario
+      con un menú numerado (1. Sí / 2. No) antes de usarla — mitiga que
       una mala interpretación (del parser propio o, antes, del LLM) se
       cuele sin que el usuario la vea (`_interpretar_fecha_natural`,
-      `_interpretar_hora_relajada`, ver `docs/SESION_2026-08-28.md`)
+      `_interpretar_rango_fecha_natural`,
+      `_interpretar_hora_individual_relajada`, ver
+      `docs/SESION_2026-08-28.md` y `docs/SESION_2026-08-31.md`). Si en
+      vez del número el usuario repite la misma fecha/hora, se toma como
+      confirmación implícita; si escribe una distinta, se le vuelve a
+      preguntar por esa nueva interpretación — nunca se salta el menú.
 - [x] Restricción a nivel de Postgres (`EXCLUDE USING gist`, extensión
       `btree_gist`) que impide dos reservas confirmadas solapadas del
       mismo recurso, sin depender de que la lógica de la app siempre
       chequee bien — probado saltándose la app con un INSERT crudo por
       SQL y quedó rechazado (ver `docs/SESION_2026-08-25.md`)
+- [x] Cancelar una reserva ya confirmada (intent `cancelar`) solo lista y
+      modifica reservas del propio usuario que escribe: tanto el listado
+      como el `UPDATE` final filtran por `Reserva.usuario_id == usuario.id`,
+      donde `usuario` viene resuelto por el servidor a partir del número de
+      WhatsApp del remitente, nunca de algo que el texto del chat pueda
+      afirmar — un usuario no puede ver ni cancelar una reserva ajena, ni
+      una a la vez ni varias juntas (`recursos_service.gestionar_cancelacion`).
+      Probado dos veces: primero simulando un segundo usuario que reutiliza
+      el estado de cancelación de otro con datos sintéticos, y después
+      repitiendo el mismo intento contra las reservas **reales** del
+      usuario que venía probando el bot (incluyendo forzar a mano el paso
+      de confirmación con sus ids reales) — en ambos casos, cero filas
+      modificadas (ver `docs/SESION_2026-08-31.md`)
 
 ## Pendiente antes de producción con datos reales de la CPA
 
@@ -82,11 +104,24 @@
       solo se usa para identificar el activo mencionado en el primer
       mensaje (`extraer_datos_reserva`, campo `recurso`) y para clasificar
       el intent (`clasificar_intent`, con fallback por palabras clave si
-      no responde) — la fecha/hora de una reserva ya no se le piden al
-      LLM en absoluto (ver el bullet de arriba y
-      `docs/SESION_2026-08-28.md`): se detectó en uso real que el modelo
-      inventaba una hora que el usuario nunca dio pese a que el prompt le
-      indicaba devolver `null` si faltaba información.
+      no responde) — el prompt le sigue pidiendo `inicio`/`fin` también,
+      pero esos dos campos se descartan siempre sin usarlos (ver el bullet
+      de arriba y `docs/SESION_2026-08-28.md`): se detectó en uso real que
+      el modelo inventaba una hora que el usuario nunca dio pese a que el
+      prompt le indicaba devolver `null` si faltaba información.
+- [x] Ni el campo `recurso` que devuelve el LLM se acepta a ciegas — se
+      detectaron dos veces en uso real (`docs/SESION_2026-08-31.md`) que
+      el modelo completaba ese campo con un activo inventado cuando el
+      mensaje no lo mencionaba con claridad, pese a que el prompt le pide
+      `null` en ese caso: un mensaje sin ningún activo ("Reservar" a
+      secas) devolvía un nombre igual, y un mensaje ambiguo entre dos
+      modelos del catálogo ("cámara canon", con EOS R y EOS R6 en el
+      catálogo) dejaba que el LLM "eligiera" uno sin que el texto lo
+      distinguiera. `_resolver_recurso_para_reserva` ahora exige respaldo
+      textual real (`_puntaje_nombre_en_texto`) antes de confiar el
+      `recurso` del LLM, y nunca lo consulta para desempatar cuando el
+      matcheo por palabra clave ya encontró más de un candidato — en ese
+      caso siempre se le pregunta al usuario.
 - [ ] El modelo local en uso (`lfm2.5-2.6b`, razonador) puede tardar 30-90s
       en responder a la extracción de fecha/hora de una reserva porque
       gasta presupuesto de tokens en `reasoning_content` antes de escribir

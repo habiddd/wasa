@@ -70,11 +70,16 @@ def _puntaje_nombre_en_texto(nombre: str, texto_norm: str) -> int:
     completo aparece tal cual. 0 si no hay ningún indicio real -- usado
     tanto para puntuar candidatos por palabra clave (`buscar_recursos_en_texto`)
     como para exigirle respaldo textual a lo que devuelve el LLM antes de
-    confiarlo a ciegas (ver `_resolver_recurso_para_reserva`)."""
+    confiarlo a ciegas (ver `_resolver_recurso_para_reserva`).
+
+    Los matches son por palabra completa (`\\b`), no substring suelto: sin
+    eso, "Cámara Canon EOS R" -- que es un prefijo literal de "Cámara Canon
+    EOS R6" -- puntuaría igual de alto contra un mensaje que en realidad
+    dice "...eos r6", empatando dos modelos que el texto sí distingue."""
     nombre_norm = _normalizar(nombre)
     palabras = [p for p in nombre_norm.split() if len(p) >= LONGITUD_MINIMA_PALABRA_CLAVE]
-    score = sum(1 for p in palabras if p in texto_norm)
-    if nombre_norm in texto_norm:
+    score = sum(1 for p in palabras if re.search(rf"\b{re.escape(p)}\b", texto_norm))
+    if re.search(rf"\b{re.escape(nombre_norm)}\b", texto_norm):
         score += 10
     return score
 
@@ -358,7 +363,15 @@ def _resolver_recurso_para_reserva(
 
     nombre_llm = (extraido.get("recurso") or "").strip().lower()
     recurso_llm = None
-    if nombre_llm:
+    # Solo tiene sentido pedirle una respuesta al LLM cuando el matcheo por
+    # palabra clave no encontró NADA -- si ya hay uno o varios candidatos,
+    # mandan ellos. Antes, si había más de un candidato (empate por
+    # palabra clave) se dejaba que el LLM "desempatara" solo -- eso
+    # causaba que "cámara canon" (empata entre EOS R y EOS R6, ninguna
+    # palabra del mensaje distingue cuál) devolviera un modelo inventado
+    # en vez de preguntarle al usuario cuál quería, porque el LLM no tenía
+    # de dónde sacar esa información y aun así "elegía" uno.
+    if nombre_llm and not candidatos:
         candidato_llm = next(
             (r for r in Recurso.query.filter_by(activo=True).all() if r.nombre.strip().lower() == nombre_llm),
             None,
@@ -373,7 +386,7 @@ def _resolver_recurso_para_reserva(
         if candidato_llm is not None and _puntaje_nombre_en_texto(candidato_llm.nombre, _normalizar(texto_usuario)) > 0:
             recurso_llm = candidato_llm
 
-    if recurso_llm and (not candidatos or len(candidatos) > 1 or recurso_llm in candidatos):
+    if recurso_llm:
         return recurso_llm, candidatos, False
 
     if len(candidatos) == 1:
@@ -445,10 +458,8 @@ def _parsear_fecha_hora(
 
 
 _PATRON_FECHA = re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$")
-_PATRON_HORA = re.compile(
-    r"^\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?\s*a\s*"
-    r"(\d{1,2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?\s*$",
-    re.IGNORECASE,
+_PATRON_RANGO_FECHA = re.compile(
+    r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*a\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$", re.IGNORECASE
 )
 
 
@@ -472,6 +483,36 @@ def _parsear_fecha_dd_mm_aaaa(texto: str, ahora_local: datetime) -> tuple[date |
         return None, "Esa fecha ya pasó. Dime una fecha de hoy en adelante, en formato dd/mm/aaaa."
 
     return fecha, None
+
+
+def _parsear_rango_fecha_dd_mm_aaaa(
+    texto: str, ahora_local: datetime
+) -> tuple[date | None, date | None, str | None]:
+    """Exige el formato "dd/mm/aaaa a dd/mm/aaaa" para una reserva de varios
+    días (ej. "22/11/2026 a 25/11/2026") -- mismo criterio que
+    `_parsear_fecha_dd_mm_aaaa`: nada de lenguaje natural para un rango,
+    determinista. Devuelve (fecha_inicio, fecha_fin, None) o
+    (None, None, mensaje_de_error). (None, None, None) si el texto ni
+    siquiera matchea el patrón de rango (no es un error -- el llamador debe
+    intentar con una fecha única en ese caso)."""
+    m = _PATRON_RANGO_FECHA.match(texto)
+    if not m:
+        return None, None, None
+
+    d1, m1, a1, d2, m2, a2 = (int(g) for g in m.groups())
+    try:
+        fecha_inicio = date(a1, m1, d1)
+        fecha_fin = date(a2, m2, d2)
+    except ValueError:
+        return None, None, "Esa fecha no existe. Escríbela como dd/mm/aaaa, por ejemplo 22/11/2026."
+
+    if fecha_inicio < ahora_local.date():
+        return None, None, "Esa fecha ya pasó. Dime una fecha de hoy en adelante, en formato dd/mm/aaaa."
+
+    if fecha_fin < fecha_inicio:
+        return None, None, "La fecha de fin debe ser igual o después de la fecha de inicio. ¿Puedes revisar el rango?"
+
+    return fecha_inicio, fecha_fin, None
 
 
 _MESES_ES = (
@@ -532,58 +573,96 @@ def _interpretar_fecha_natural(texto: str, ahora_local: datetime) -> date | None
     return None
 
 
-def _parsear_rango_horario(texto: str) -> tuple[tuple[int, int], tuple[int, int]] | None:
-    """Interpreta un rango como '3:00pm a 5:00pm', '3pm a 5pm' o '15:00 a
-    17:00'. Devuelve ((h_inicio, m_inicio), (h_fin, m_fin)) en 24h, o None
-    si el texto no matchea ese patrón."""
-    m = _PATRON_HORA.match(texto)
+_PATRONES_RANGO_FECHA_NATURAL = [
+    re.compile(r"^desde\s+(.+?)\s+hasta\s+(.+)$"),
+    re.compile(r"^entre\s+(.+?)\s+y\s+(.+)$"),
+    re.compile(r"^del\s+(.+?)\s+al\s+(.+)$"),
+    re.compile(r"^de\s+(.+?)\s+a\s+(.+)$"),
+]
+
+
+def _interpretar_rango_fecha_natural(texto: str, ahora_local: datetime) -> tuple[date, date] | None:
+    """Segundo intento para un RANGO de fechas cuando no vino en formato
+    "dd/mm/aaaa a dd/mm/aaaa" (ej. "desde mañana hasta el viernes", "del
+    lunes al viernes", "entre el 3 y el 5 de octubre"). Reconoce el
+    conector y le pasa cada lado a `_parsear_fecha_dd_mm_aaaa` /
+    `_interpretar_fecha_natural` -- si cualquiera de los dos lados no se
+    reconoce, no es un rango válido y se devuelve None (el llamador prueba
+    otra cosa, ej. una fecha única suelta). Antes de este intento, una
+    fecha única con "el viernes" hacía que la frase completa se
+    interpretara como esa sola fecha, ignorando el "desde mañana" -- por
+    eso este chequeo va primero. Igual que `_interpretar_fecha_natural`,
+    es una interpretación: quien llama debe pedir confirmación antes de
+    aceptarla (ver `_continuar_reserva`, paso "fecha")."""
+    texto_norm = _normalizar(texto.strip())
+
+    for patron in _PATRONES_RANGO_FECHA_NATURAL:
+        m = patron.match(texto_norm)
+        if not m:
+            continue
+        parte_inicio, parte_fin = m.group(1).strip(), m.group(2).strip()
+
+        fecha_inicio, _ = _parsear_fecha_dd_mm_aaaa(parte_inicio, ahora_local)
+        if fecha_inicio is None:
+            fecha_inicio = _interpretar_fecha_natural(parte_inicio, ahora_local)
+
+        fecha_fin, _ = _parsear_fecha_dd_mm_aaaa(parte_fin, ahora_local)
+        if fecha_fin is None:
+            fecha_fin = _interpretar_fecha_natural(parte_fin, ahora_local)
+
+        if fecha_inicio is not None and fecha_fin is not None:
+            return fecha_inicio, fecha_fin
+
+    return None
+
+
+def _normalizar_ampm(valor: str | None) -> str | None:
+    if not valor:
+        return None
+    return "pm" if valor.lower().replace(".", "").replace(" ", "") == "pm" else "am"
+
+
+def _hora_a_24h(hora: int, periodo: str | None) -> int | None:
+    if periodo is None:
+        return hora if 0 <= hora <= 23 else None  # ya viene en 24h
+    if not (1 <= hora <= 12):
+        return None
+    hora = 0 if hora == 12 else hora
+    return hora + 12 if periodo == "pm" else hora
+
+
+_PATRON_HORA_INDIVIDUAL = re.compile(
+    r"^\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?)?\s*$", re.IGNORECASE
+)
+
+
+def _parsear_hora_individual(texto: str) -> tuple[int, int] | None:
+    """Interpreta UNA sola hora (no un rango) -- ej. '3:00pm', '3pm',
+    '15:00'. Se pide la hora de inicio y la de fin en mensajes separados
+    (ver pasos "hora_inicio"/"hora_fin"), no un rango en un solo mensaje,
+    para no confundir al usuario con dos datos a la vez. Devuelve
+    (hora, minuto) en 24h, o None si el texto no matchea ese patrón."""
+    m = _PATRON_HORA_INDIVIDUAL.match(texto)
     if not m:
         return None
-    h1, m1, ampm1, h2, m2, ampm2 = m.groups()
-    h1, m1 = int(h1), int(m1 or 0)
-    h2, m2 = int(h2), int(m2 or 0)
-    if not (0 <= m1 <= 59 and 0 <= m2 <= 59):
+    h, mnt, ampm = m.groups()
+    h, mnt = int(h), int(mnt or 0)
+    if not (0 <= mnt <= 59):
         return None
-
-    def _normalizar_ampm(valor: str | None) -> str | None:
-        if not valor:
-            return None
-        return "pm" if valor.lower().replace(".", "").replace(" ", "") == "pm" else "am"
-
-    p1, p2 = _normalizar_ampm(ampm1), _normalizar_ampm(ampm2)
-    # si un lado no trae am/pm explícito pero el otro sí, se asume el mismo
-    if p1 is None and p2 is not None:
-        p1 = p2
-    if p2 is None and p1 is not None:
-        p2 = p1
-
-    def _a_24h(hora: int, periodo: str | None) -> int | None:
-        if periodo is None:
-            return hora if 0 <= hora <= 23 else None  # ya viene en 24h
-        if not (1 <= hora <= 12):
-            return None
-        hora = 0 if hora == 12 else hora
-        return hora + 12 if periodo == "pm" else hora
-
-    h1_24, h2_24 = _a_24h(h1, p1), _a_24h(h2, p2)
-    if h1_24 is None or h2_24 is None:
-        return None
-    return (h1_24, m1), (h2_24, m2)
+    h_24 = _hora_a_24h(h, _normalizar_ampm(ampm))
+    return (h_24, mnt) if h_24 is not None else None
 
 
-def _interpretar_hora_relajada(texto: str) -> tuple[tuple[int, int], tuple[int, int]] | None:
-    """Segundo intento cuando el rango de hora no vino en el formato
-    exacto pero es reconocible con variaciones comunes (ej. "de 2pm a
-    7pm", "desde las 3 hasta las 5pm"). Igual que
-    `_interpretar_fecha_natural`, es una interpretación -- el llamador
-    debe confirmarla con el usuario antes de darla por buena."""
-    texto_limpio = re.sub(r"^\s*(de|desde|entre)\s+", "", texto, flags=re.IGNORECASE)
-    texto_limpio = re.sub(r"^\s*las\s+", "", texto_limpio, flags=re.IGNORECASE)
-    texto_limpio = re.sub(r"\bhasta\b", "a", texto_limpio, flags=re.IGNORECASE)
-    texto_limpio = re.sub(r"\ba\s+las\s+", "a ", texto_limpio, flags=re.IGNORECASE)
+def _interpretar_hora_individual_relajada(texto: str) -> tuple[int, int] | None:
+    """Segundo intento cuando la hora no vino en el formato exacto pero es
+    reconocible con variaciones comunes (ej. "a las 3pm", "las 15 horas").
+    Igual que `_interpretar_fecha_natural`, es una interpretación -- el
+    llamador debe confirmarla con el usuario antes de darla por buena."""
+    texto_limpio = re.sub(r"^\s*a\s+las\s+", "", texto, flags=re.IGNORECASE)
+    texto_limpio = re.sub(r"^\s*(a|las)\s+", "", texto_limpio, flags=re.IGNORECASE)
     texto_limpio = re.sub(r"\bhrs?\.?\b|\bhoras?\b", "", texto_limpio, flags=re.IGNORECASE)
     texto_limpio = re.sub(r"\s+", " ", texto_limpio).strip()
-    return _parsear_rango_horario(texto_limpio)
+    return _parsear_hora_individual(texto_limpio)
 
 
 # --- Wizard de reserva paso a paso -----------------------------------------
@@ -707,26 +786,60 @@ def _mover_item_resuelto_al_carrito(wizard: dict) -> str:
     return nombre
 
 
-OPCIONES_ACCESORIOS = [
-    ("incluir", "Sí, inclúyelos"),
-    ("excluir", "No, no los necesito"),
-]
-
-
-def _mensaje_confirmar_accesorios(nombre_padre: str, pendientes: list[str]) -> str:
+def _mensaje_confirmar_accesorios(nombre_padre: str, incluidos: list[str]) -> str:
     """Mensaje tipo factura, separado del resumen final, que confirma el
-    activo recién elegido y le pregunta al usuario si quiere sus accesorios
-    por defecto -- ANTES de pedir fecha/hora, no junto con esa pregunta."""
-    lineas = "\n".join(f"    • {n}" for n in pendientes)
+    activo recién elegido y sus accesorios por defecto -- que YA quedaron
+    incluidos en el carrito, no hace falta pedirlo (ver el fold-in en
+    `_avanzar_wizard`) -- y solo le pregunta al usuario si quiere QUITAR
+    alguno, uno o varios, no una decisión de todo o nada. ANTES de pedir
+    fecha/hora, no junto con esa pregunta (ver `_interpretar_seleccion_multiple`)."""
+    lineas = "\n".join(f"{i}. {n}" for i, n in enumerate(incluidos, start=1))
+    numero_ninguno = len(incluidos) + 1
     mensaje = (
         "*ACTIVO SELECCIONADO*\n"
         f"{_DIVISOR_FACTURA}\n"
         f"*{nombre_padre}*\n"
         "Incluye por defecto:\n"
         f"{lineas}\n"
-        f"{_DIVISOR_FACTURA}"
+        f"{numero_ninguno}. Ninguno (dejar todos incluidos)\n"
+        f"{_DIVISOR_FACTURA}\n"
+        "¿Quieres quitar alguno? Responde con los números separados por "
+        f"coma (ej. \"1,2\"), o {numero_ninguno} para no quitar ninguno."
     )
-    return mensaje + "\n\n" + _formatear_menu("¿Deseas incluirlos en tu reserva?", OPCIONES_ACCESORIOS)
+    return mensaje
+
+
+def _interpretar_seleccion_multiple(texto: str, cantidad: int) -> list[int] | None:
+    """Interpreta la respuesta a un menú donde se puede elegir más de una
+    opción a la vez por número (ej. qué accesorios por defecto quitar):
+    "1", "2", "1,2", "1 y 2" -- devuelve los índices (0-based) elegidos.
+    El número (cantidad + 1) es siempre la última línea del menú ("Ninguno"
+    -- ver `_mensaje_confirmar_accesorios`), así que también se puede
+    responder solo con números en vez de tener que escribir la palabra; si
+    aparece junto con otros números, gana "ninguno" (no tendría sentido
+    combinarlo). "todos"/"ninguno" en texto (y sinónimos, incluido el
+    clásico sí/no) se aceptan igual como atajo. None si no se reconoció
+    nada."""
+    texto_norm = _normalizar(texto.strip())
+
+    if texto_norm in ("todos", "todas", "ambos", "ambas", "todo", "si", "sí"):
+        return list(range(cantidad))
+    if texto_norm in ("ninguno", "ninguna", "ningun", "ningún", "no"):
+        return []
+
+    numeros = re.findall(r"\d+", texto_norm)
+    if not numeros:
+        return None
+
+    numeros_int = [int(n) - 1 for n in numeros]
+    if cantidad in numeros_int:  # 0-based: la opción "Ninguno" es cantidad + 1
+        return []
+
+    indices = []
+    for idx in numeros_int:
+        if 0 <= idx < cantidad and idx not in indices:
+            indices.append(idx)
+    return indices if indices else None
 
 
 def _iniciar_quitar_item(wizard: dict, sesion: dict) -> tuple[str, dict]:
@@ -780,8 +893,14 @@ def _siguiente_paso_wizard(wizard: dict) -> str:
         # (ver el chequeo al tope de su while), así que no debería pasar.
     if not wizard.get("fecha"):
         return "fecha"
-    if not wizard.get("inicio") or not wizard.get("fin"):
-        return "hora"
+    # La hora de inicio y la de fin se piden en pasos (mensajes) separados,
+    # no juntas en un solo mensaje tipo "3pm a 5pm" -- para no confundir al
+    # usuario con dos datos a la vez, sea la reserva de un día o de varios
+    # (ver pasos "hora_inicio"/"hora_fin" en `_avanzar_wizard`).
+    if not wizard.get("inicio"):
+        return "hora_inicio"
+    if not wizard.get("fin"):
+        return "hora_fin"
     if not wizard.get("confirmado"):
         return "confirmar"
     return "listo"
@@ -802,18 +921,21 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
         if wizard.get("resolviendo_item") and wizard.get("nombre_recurso"):
             nombre = _mover_item_resuelto_al_carrito(wizard)
             ya_en_carrito = {item["nombre_recurso"] for item in wizard["carrito"]}
-            pendientes = [a for a in _accesorios_por_defecto(nombre) if a not in ya_en_carrito]
+            nuevos = [a for a in _accesorios_por_defecto(nombre) if a not in ya_en_carrito]
 
-            if pendientes:
-                # Se detiene acá -- no se decide en silencio -- para
-                # preguntarle al usuario si quiere los accesorios por
-                # defecto ANTES de pedirle fecha/hora (ver
-                # `_mensaje_confirmar_accesorios` / paso "confirmar_accesorios").
-                wizard["accesorios_pendientes"] = pendientes
+            if nuevos:
+                # Se incluyen de una vez -- por defecto van, no hay que
+                # pedirle al usuario que los adicione -- y se le muestra un
+                # mensaje aparte (antes de pedirle fecha/hora) por si quiere
+                # QUITAR alguno (ver `_mensaje_confirmar_accesorios` / paso
+                # "confirmar_accesorios").
+                for nombre_accesorio in nuevos:
+                    wizard["carrito"].append({"nombre_recurso": nombre_accesorio, "auto": True, "por": nombre})
+                wizard["accesorios_incluidos"] = nuevos
                 wizard["item_padre_pendiente"] = nombre
-                wizard["opciones_actuales"] = OPCIONES_ACCESORIOS
+                wizard["opciones_actuales"] = None
                 wizard["paso"] = "confirmar_accesorios"
-                mensaje = _mensaje_confirmar_accesorios(nombre, pendientes)
+                mensaje = _mensaje_confirmar_accesorios(nombre, nuevos)
                 wizard["_mensaje_menu_actual"] = mensaje
                 return _con_avisos(avisos, mensaje), wizard, False
 
@@ -863,21 +985,53 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
             wizard["opciones_actuales"] = None
             wizard["paso"] = "fecha"
-            nombres_carrito = ", ".join(f"'{item['nombre_recurso']}'" for item in wizard["carrito"])
+            lineas_activos = "\n".join(
+                _formatear_item_factura(item["nombre_recurso"], item["auto"]) for item in wizard["carrito"]
+            )
             mensaje = (
-                f"Hoy es {_DIAS_ES[ahora_local.weekday()]} {ahora_local.strftime('%d/%m/%Y')}. "
-                f"¿Qué fecha necesitas {nombres_carrito}? "
-                "Escríbela en formato dd/mm/aaaa, por ejemplo 22/11/2026."
+                "*FECHA DE RESERVA*\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"{lineas_activos}\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"Hoy es {_DIAS_ES[ahora_local.weekday()]} {ahora_local.strftime('%d/%m/%Y')}.\n"
+                "¿Qué fecha necesitas? Un solo día: dd/mm/aaaa (ej. 22/11/2026). "
+                "Varios días: dd/mm/aaaa a dd/mm/aaaa (ej. 22/11/2026 a 25/11/2026)."
             )
             return _con_avisos(avisos, mensaje), wizard, False
 
-        if paso == "hora":
-            fecha_legible = date.fromisoformat(wizard["fecha"]).strftime("%d/%m/%Y")
+        if paso == "hora_inicio":
+            fecha_inicio = date.fromisoformat(wizard["fecha"])
             wizard["opciones_actuales"] = None
-            wizard["paso"] = "hora"
+            wizard["paso"] = "hora_inicio"
+            lineas_activos = "\n".join(
+                _formatear_item_factura(item["nombre_recurso"], item["auto"]) for item in wizard["carrito"]
+            )
             mensaje = (
-                f"¿De qué hora a qué hora, el {fecha_legible}? "
-                "Formato hh:mm am/pm, por ejemplo: 3:00pm a 5:00pm."
+                "*HORA DE INICIO*\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"{lineas_activos}\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"Fecha de inicio: {fecha_inicio.strftime('%d/%m/%Y')}\n"
+                "¿A qué hora empieza? Formato hh:mm am/pm, por ejemplo: 3:00pm."
+            )
+            return _con_avisos(avisos, mensaje), wizard, False
+
+        if paso == "hora_fin":
+            fecha_fin = date.fromisoformat(wizard["fecha_fin"])
+            inicio_local = datetime.fromisoformat(wizard["inicio"]).astimezone(ZONA_HORARIA_CPA)
+            wizard["opciones_actuales"] = None
+            wizard["paso"] = "hora_fin"
+            lineas_activos = "\n".join(
+                _formatear_item_factura(item["nombre_recurso"], item["auto"]) for item in wizard["carrito"]
+            )
+            mensaje = (
+                "*HORA DE FIN*\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"{lineas_activos}\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
+                f"Fecha de fin: {fecha_fin.strftime('%d/%m/%Y')}\n"
+                "¿A qué hora termina? Formato hh:mm am/pm, por ejemplo: 5:00pm."
             )
             return _con_avisos(avisos, mensaje), wizard, False
 
@@ -1016,7 +1170,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         f"{_DIVISOR_FACTURA}\n"
         f"Reservado por: {usuario.nombre}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
-        f"Fin: {_formatear_hora(fin_local)}\n"
+        f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
     )
     if notas_seguro:
@@ -1024,10 +1178,18 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     return mensaje, sesion_limpia
 
 
-def _aplicar_fecha_valida(wizard: dict, usuario: Usuario, sesion: dict, fecha: date) -> tuple[str, dict]:
+def _aplicar_fecha_valida(
+    wizard: dict, usuario: Usuario, sesion: dict, fecha: date, fecha_fin: date | None = None
+) -> tuple[str, dict]:
     """Guarda una fecha ya aceptada (venga del formato exacto o de una
-    interpretación que el usuario confirmó) y avanza el wizard."""
+    interpretación que el usuario confirmó) y avanza el wizard.
+    `fecha_fin` permite una reserva de varios días (ver
+    `_parsear_rango_fecha_dd_mm_aaaa`); si no se da, la reserva es de un
+    solo día (`fecha_fin = fecha`) -- los pasos "hora_inicio"/"hora_fin"
+    arman el inicio con la hora que dé el usuario sobre `fecha` y el fin
+    con la hora sobre `fecha_fin`, en mensajes separados."""
     wizard["fecha"] = fecha.isoformat()
+    wizard["fecha_fin"] = (fecha_fin or fecha).isoformat()
     wizard["opciones_actuales"] = None
     mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
     if listo:
@@ -1035,20 +1197,51 @@ def _aplicar_fecha_valida(wizard: dict, usuario: Usuario, sesion: dict, fecha: d
     return mensaje, {**sesion, "reserva_wizard": wizard}
 
 
-def _aplicar_hora_valida(
-    wizard: dict, usuario: Usuario, sesion: dict, inicio_str: str, fin_str: str
-) -> tuple[str, dict]:
-    """Guarda un rango de hora ya aceptado (formato exacto o interpretación
-    confirmada) y avanza el wizard. Si falla la validación (ya pasó, choca
-    con otra reserva), regresa al paso "hora" para que el usuario reintente
-    en vez de dejarlo en un paso de confirmación muerto."""
-    inicio_utc, fin_utc, error = _parsear_fecha_hora(inicio_str, fin_str, datetime.now(timezone.utc))
-    if error:
-        wizard["paso"] = "hora"
+def _aplicar_hora_inicio_valida(wizard: dict, usuario: Usuario, sesion: dict, hora: tuple[int, int]) -> tuple[str, dict]:
+    """Guarda la hora de inicio ya aceptada (formato exacto o interpretación
+    confirmada) sobre `wizard["fecha"]` y avanza el wizard -- que a
+    continuación pide la hora de fin en un mensaje aparte (paso
+    "hora_fin"), nunca junto con la de inicio. Si ya pasó, regresa al paso
+    "hora_inicio" para que el usuario reintente."""
+    h, m = hora
+    inicio_local = datetime.strptime(f"{wizard['fecha']} {h:02d}:{m:02d}", "%Y-%m-%d %H:%M").replace(
+        tzinfo=ZONA_HORARIA_CPA
+    )
+    inicio_utc = inicio_local.astimezone(timezone.utc)
+
+    if inicio_utc < datetime.now(timezone.utc) - MARGEN_INICIO_PASADO:
+        wizard["paso"] = "hora_inicio"
         wizard["opciones_actuales"] = None
-        return error, {**sesion, "reserva_wizard": wizard}
+        return "Esa hora ya pasó. Dime una hora de inicio futura.", {**sesion, "reserva_wizard": wizard}
 
     wizard["inicio"] = inicio_utc.isoformat()
+    wizard["opciones_actuales"] = None
+    mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+    if listo:
+        return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+    return mensaje, {**sesion, "reserva_wizard": wizard}
+
+
+def _aplicar_hora_fin_valida(wizard: dict, usuario: Usuario, sesion: dict, hora: tuple[int, int]) -> tuple[str, dict]:
+    """Guarda la hora de fin ya aceptada sobre `wizard["fecha_fin"]` (para
+    un solo día, es la misma fecha que el inicio) y avanza el wizard. Si
+    falla la validación (antes del inicio, choca con otra reserva), regresa
+    al paso "hora_fin" para que el usuario reintente en vez de dejarlo en
+    un paso de confirmación muerto."""
+    h, m = hora
+    fin_local = datetime.strptime(f"{wizard['fecha_fin']} {h:02d}:{m:02d}", "%Y-%m-%d %H:%M").replace(
+        tzinfo=ZONA_HORARIA_CPA
+    )
+    fin_utc = fin_local.astimezone(timezone.utc)
+    inicio_utc = datetime.fromisoformat(wizard["inicio"])
+
+    if fin_utc <= inicio_utc:
+        wizard["paso"] = "hora_fin"
+        wizard["opciones_actuales"] = None
+        return (
+            "La hora de fin debe ser después de la hora de inicio. ¿Puedes revisar la hora?"
+        ), {**sesion, "reserva_wizard": wizard}
+
     wizard["fin"] = fin_utc.isoformat()
     wizard["opciones_actuales"] = None
 
@@ -1092,6 +1285,7 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         "carrito": [],
         "resolviendo_item": True,
         "fecha": None,
+        "fecha_fin": None,
         "inicio": None,
         "fin": None,
         "confirmado": False,
@@ -1102,12 +1296,18 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
     if recurso is not None:
         wizard["nombre_recurso"] = recurso.nombre
     elif candidatos:
-        # el texto mencionaba algo genérico (ej. "una cámara") que matcheó
-        # varias unidades de la misma categoría -- nos saltamos el primer
-        # paso (tipo) y arrancamos directo en "qué marca"
+        # el texto mencionaba algo genérico (ej. "una cámara") o una marca
+        # sin modelo (ej. "cámara canon", ambiguo entre EOS R y EOS R6) que
+        # matcheó varias unidades -- nos saltamos los pasos que ya están
+        # claros en el texto (tipo, y marca si todos los candidatos
+        # comparten una) y arrancamos directo en el primero que sí hace
+        # falta preguntar.
         categorias_candidatos = {c.categoria for c in candidatos if c.categoria}
         if len(categorias_candidatos) == 1:
             wizard["categoria"] = next(iter(categorias_candidatos))
+            marcas_candidatos = {c.marca for c in candidatos if c.marca}
+            if len(marcas_candidatos) == 1:
+                wizard["marca"] = next(iter(marcas_candidatos))
 
     mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
     if listo:
@@ -1134,15 +1334,49 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
         ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
         texto = texto_usuario.strip()
 
+        # Reserva de varios días: "dd/mm/aaaa a dd/mm/aaaa" -- se prueba
+        # primero porque es más específico que una fecha única; si el texto
+        # no matchea ese patrón, devuelve (None, None, None) y se sigue de
+        # largo al caso de un solo día (ver `_parsear_rango_fecha_dd_mm_aaaa`).
+        fecha_inicio_rango, fecha_fin_rango, error_rango = _parsear_rango_fecha_dd_mm_aaaa(texto, ahora_local)
+        if error_rango:
+            return error_rango, {**sesion, "reserva_wizard": wizard}
+        if fecha_inicio_rango is not None:
+            return _aplicar_fecha_valida(wizard, usuario, sesion, fecha_inicio_rango, fecha_fin_rango)
+
         fecha, error = _parsear_fecha_dd_mm_aaaa(texto, ahora_local)
         if fecha is not None:
             return _aplicar_fecha_valida(wizard, usuario, sesion, fecha)
 
-        # No vino en dd/mm/aaaa -- se intenta reconocer en lenguaje natural
-        # ("mañana", "el viernes", "22 de noviembre"), pero nunca se acepta
-        # directo: siempre se le muestra al usuario qué fecha entendió el
-        # bot y se le pide confirmarla antes de seguir (ver
-        # `_interpretar_fecha_natural`).
+        # No vino en dd/mm/aaaa -- se intenta reconocer en lenguaje natural,
+        # primero un RANGO ("desde mañana hasta el viernes", "del lunes al
+        # viernes") antes que una fecha única, porque una fecha única
+        # buscando "viernes" dentro de esa misma frase la interpretaría
+        # completa como esa sola fecha, perdiendo el "desde mañana" (ver
+        # `_interpretar_rango_fecha_natural`). Nunca se acepta directo:
+        # siempre se le muestra al usuario qué entendió el bot y se le pide
+        # confirmar antes de seguir.
+        rango_interpretado = _interpretar_rango_fecha_natural(texto, ahora_local)
+        if rango_interpretado is not None:
+            fecha_inicio_interp, fecha_fin_interp = rango_interpretado
+            if fecha_inicio_interp < ahora_local.date():
+                return (
+                    "Esa fecha ya pasó. Dime una fecha de hoy en adelante, en formato dd/mm/aaaa."
+                ), {**sesion, "reserva_wizard": wizard}
+            if fecha_fin_interp < fecha_inicio_interp:
+                return (
+                    "La fecha de fin debe ser igual o después de la fecha de inicio. ¿Puedes revisar el rango?"
+                ), {**sesion, "reserva_wizard": wizard}
+            inicio_legible = f"{_DIAS_ES[fecha_inicio_interp.weekday()]} {fecha_inicio_interp.strftime('%d/%m/%Y')}"
+            fin_legible = f"{_DIAS_ES[fecha_fin_interp.weekday()]} {fecha_fin_interp.strftime('%d/%m/%Y')}"
+            wizard["fecha_pendiente"] = fecha_inicio_interp.isoformat()
+            wizard["fecha_fin_pendiente"] = fecha_fin_interp.isoformat()
+            wizard["paso"] = "confirmar_fecha_interpretada"
+            wizard["opciones_actuales"] = OPCIONES_CONFIRMAR_FECHA
+            mensaje = _formatear_menu(f"Entendí del {inicio_legible} al {fin_legible}. ¿Es correcto?", OPCIONES_CONFIRMAR_FECHA)
+            wizard["_mensaje_menu_actual"] = mensaje
+            return mensaje, {**sesion, "reserva_wizard": wizard}
+
         fecha_interpretada = _interpretar_fecha_natural(texto, ahora_local)
         if fecha_interpretada is not None:
             if fecha_interpretada < ahora_local.date():
@@ -1162,79 +1396,198 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
     if paso == "confirmar_fecha_interpretada":
         opciones = wizard.get("opciones_actuales") or OPCIONES_CONFIRMAR_FECHA
         valor = _interpretar_opcion(texto_usuario, opciones)
+
         if valor is None:
-            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
-                **sesion,
-                "reserva_wizard": wizard,
-            }
+            # No respondió "1"/"2" -- puede que haya vuelto a escribir la
+            # fecha en vez de responder el menú (ej. repetir "mañana" en
+            # lugar de escribir "1"). Se reintenta con el mismo criterio
+            # del paso "fecha": si da la MISMA fecha/rango ya pendiente, se
+            # toma como confirmación implícita (repetirla es reafirmarla);
+            # si da una fecha distinta, se actualiza lo pendiente y se
+            # vuelve a pedir confirmar -- nunca se acepta sin pasar por
+            # este menú.
+            texto = texto_usuario.strip()
+            ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
+            nueva_inicio, nueva_fin = None, None
+
+            r_inicio, r_fin, r_error = _parsear_rango_fecha_dd_mm_aaaa(texto, ahora_local)
+            if r_inicio is not None:
+                nueva_inicio, nueva_fin = r_inicio, r_fin
+            elif r_error is None:
+                f, _ = _parsear_fecha_dd_mm_aaaa(texto, ahora_local)
+                if f is not None:
+                    nueva_inicio = f
+                else:
+                    rango = _interpretar_rango_fecha_natural(texto, ahora_local)
+                    if rango is not None:
+                        nueva_inicio, nueva_fin = rango
+                    else:
+                        nueva_inicio = _interpretar_fecha_natural(texto, ahora_local)
+
+            if nueva_inicio is None:
+                return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                    **sesion,
+                    "reserva_wizard": wizard,
+                }
+            if nueva_inicio < ahora_local.date():
+                return (
+                    "Esa fecha ya pasó. Dime una fecha de hoy en adelante, en formato dd/mm/aaaa."
+                ), {**sesion, "reserva_wizard": wizard}
+            if nueva_fin is not None and nueva_fin < nueva_inicio:
+                return (
+                    "La fecha de fin debe ser igual o después de la fecha de inicio. ¿Puedes revisar el rango?"
+                ), {**sesion, "reserva_wizard": wizard}
+
+            pendiente_inicio = date.fromisoformat(wizard["fecha_pendiente"])
+            pendiente_fin_str = wizard.get("fecha_fin_pendiente")
+            pendiente_fin = date.fromisoformat(pendiente_fin_str) if pendiente_fin_str else None
+
+            if nueva_inicio == pendiente_inicio and nueva_fin == pendiente_fin:
+                valor = "si"
+            else:
+                wizard["fecha_pendiente"] = nueva_inicio.isoformat()
+                wizard["fecha_fin_pendiente"] = nueva_fin.isoformat() if nueva_fin else None
+                if nueva_fin is not None:
+                    inicio_legible = f"{_DIAS_ES[nueva_inicio.weekday()]} {nueva_inicio.strftime('%d/%m/%Y')}"
+                    fin_legible = f"{_DIAS_ES[nueva_fin.weekday()]} {nueva_fin.strftime('%d/%m/%Y')}"
+                    pregunta = f"Entendí del {inicio_legible} al {fin_legible}. ¿Es correcto?"
+                else:
+                    fecha_legible = f"{_DIAS_ES[nueva_inicio.weekday()]} {nueva_inicio.strftime('%d/%m/%Y')}"
+                    pregunta = f"Entendí {fecha_legible}. ¿Es correcto?"
+                mensaje = _formatear_menu(pregunta, OPCIONES_CONFIRMAR_FECHA)
+                wizard["_mensaje_menu_actual"] = mensaje
+                return mensaje, {**sesion, "reserva_wizard": wizard}
+
         if valor == "no":
             wizard["fecha_pendiente"] = None
+            wizard["fecha_fin_pendiente"] = None
             wizard["paso"] = "fecha"
             wizard["opciones_actuales"] = None
             return (
                 "Está bien, escribe la fecha en formato dd/mm/aaaa, por ejemplo 22/11/2026."
             ), {**sesion, "reserva_wizard": wizard}
         fecha = date.fromisoformat(wizard.pop("fecha_pendiente"))
-        return _aplicar_fecha_valida(wizard, usuario, sesion, fecha)
+        fecha_fin_str = wizard.pop("fecha_fin_pendiente", None)
+        fecha_fin = date.fromisoformat(fecha_fin_str) if fecha_fin_str else None
+        return _aplicar_fecha_valida(wizard, usuario, sesion, fecha, fecha_fin)
 
-    if paso == "hora":
+    if paso == "hora_inicio":
         texto = texto_usuario.strip()
-        fecha = wizard["fecha"]
 
-        rango = _parsear_rango_horario(texto)
-        if rango is not None:
-            (h1, m1), (h2, m2) = rango
-            inicio_str = f"{fecha} {h1:02d}:{m1:02d}"
-            fin_str = f"{fecha} {h2:02d}:{m2:02d}"
-            return _aplicar_hora_valida(wizard, usuario, sesion, inicio_str, fin_str)
+        hora = _parsear_hora_individual(texto)
+        if hora is not None:
+            return _aplicar_hora_inicio_valida(wizard, usuario, sesion, hora)
 
         # Igual que con la fecha: si no vino en el formato exacto pero es
-        # reconocible con variaciones comunes (ej. "de 2pm a 7pm"), se
+        # reconocible con variaciones comunes (ej. "a las 3pm"), se
         # interpreta pero se le pide confirmar antes de aceptarla.
-        rango_relajado = _interpretar_hora_relajada(texto)
-        if rango_relajado is not None:
-            (h1, m1), (h2, m2) = rango_relajado
-            inicio_str = f"{fecha} {h1:02d}:{m1:02d}"
-            fin_str = f"{fecha} {h2:02d}:{m2:02d}"
-            inicio_legible = _formatear_hora(
-                datetime.strptime(inicio_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA_CPA)
-            )
-            fin_legible = _formatear_hora(
-                datetime.strptime(fin_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA_CPA)
-            )
-            wizard["hora_pendiente_inicio"] = inicio_str
-            wizard["hora_pendiente_fin"] = fin_str
-            wizard["paso"] = "confirmar_hora_interpretada"
+        hora_relajada = _interpretar_hora_individual_relajada(texto)
+        if hora_relajada is not None:
+            h, m = hora_relajada
+            hora_legible = _formatear_hora(datetime(2000, 1, 1, h, m))
+            wizard["hora_inicio_pendiente"] = f"{h:02d}:{m:02d}"
+            wizard["paso"] = "confirmar_hora_inicio_interpretada"
             wizard["opciones_actuales"] = OPCIONES_CONFIRMAR_HORA
-            mensaje = _formatear_menu(
-                f"Entendí de {inicio_legible} a {fin_legible} ¿Es correcto?", OPCIONES_CONFIRMAR_HORA
-            )
+            mensaje = _formatear_menu(f"Entendí {hora_legible} ¿Es correcto?", OPCIONES_CONFIRMAR_HORA)
             wizard["_mensaje_menu_actual"] = mensaje
             return mensaje, {**sesion, "reserva_wizard": wizard}
 
         return (
-            "No reconocí ese formato de hora. Escribe algo como '3:00pm a 5:00pm' o '15:00 a 17:00'."
+            "No reconocí ese formato de hora. Escribe algo como '3:00pm' o '15:00'."
         ), {**sesion, "reserva_wizard": wizard}
 
-    if paso == "confirmar_hora_interpretada":
+    if paso == "confirmar_hora_inicio_interpretada":
         opciones = wizard.get("opciones_actuales") or OPCIONES_CONFIRMAR_HORA
         valor = _interpretar_opcion(texto_usuario, opciones)
+
         if valor is None:
-            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
-                **sesion,
-                "reserva_wizard": wizard,
-            }
+            # Mismo criterio que en "confirmar_fecha_interpretada": si
+            # volvió a escribir la hora en vez de responder "1"/"2" y da la
+            # MISMA hora ya pendiente, se toma como confirmación implícita;
+            # si da una hora distinta, se actualiza y se vuelve a preguntar.
+            texto = texto_usuario.strip()
+            nueva_hora = _parsear_hora_individual(texto) or _interpretar_hora_individual_relajada(texto)
+            if nueva_hora is None:
+                return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                    **sesion,
+                    "reserva_wizard": wizard,
+                }
+            h, m = nueva_hora
+            ph, pm = (int(x) for x in wizard["hora_inicio_pendiente"].split(":"))
+            if (h, m) == (ph, pm):
+                valor = "si"
+            else:
+                wizard["hora_inicio_pendiente"] = f"{h:02d}:{m:02d}"
+                hora_legible = _formatear_hora(datetime(2000, 1, 1, h, m))
+                mensaje = _formatear_menu(f"Entendí {hora_legible} ¿Es correcto?", OPCIONES_CONFIRMAR_HORA)
+                wizard["_mensaje_menu_actual"] = mensaje
+                return mensaje, {**sesion, "reserva_wizard": wizard}
+
         if valor == "no":
-            wizard["hora_pendiente_inicio"] = None
-            wizard["hora_pendiente_fin"] = None
-            wizard["paso"] = "hora"
+            wizard["hora_inicio_pendiente"] = None
+            wizard["paso"] = "hora_inicio"
             wizard["opciones_actuales"] = None
             return (
-                "Está bien, escribe la hora en formato hh:mm am/pm, por ejemplo 3:00pm a 5:00pm."
+                "Está bien, escribe la hora de inicio en formato hh:mm am/pm, por ejemplo 3:00pm."
             ), {**sesion, "reserva_wizard": wizard}
-        inicio_str = wizard.pop("hora_pendiente_inicio")
-        fin_str = wizard.pop("hora_pendiente_fin")
-        return _aplicar_hora_valida(wizard, usuario, sesion, inicio_str, fin_str)
+        h, m = (int(x) for x in wizard.pop("hora_inicio_pendiente").split(":"))
+        return _aplicar_hora_inicio_valida(wizard, usuario, sesion, (h, m))
+
+    if paso == "hora_fin":
+        texto = texto_usuario.strip()
+
+        hora = _parsear_hora_individual(texto)
+        if hora is not None:
+            return _aplicar_hora_fin_valida(wizard, usuario, sesion, hora)
+
+        hora_relajada = _interpretar_hora_individual_relajada(texto)
+        if hora_relajada is not None:
+            h, m = hora_relajada
+            hora_legible = _formatear_hora(datetime(2000, 1, 1, h, m))
+            wizard["hora_fin_pendiente"] = f"{h:02d}:{m:02d}"
+            wizard["paso"] = "confirmar_hora_fin_interpretada"
+            wizard["opciones_actuales"] = OPCIONES_CONFIRMAR_HORA
+            mensaje = _formatear_menu(f"Entendí {hora_legible} ¿Es correcto?", OPCIONES_CONFIRMAR_HORA)
+            wizard["_mensaje_menu_actual"] = mensaje
+            return mensaje, {**sesion, "reserva_wizard": wizard}
+
+        return (
+            "No reconocí ese formato de hora. Escribe algo como '5:00pm' o '17:00'."
+        ), {**sesion, "reserva_wizard": wizard}
+
+    if paso == "confirmar_hora_fin_interpretada":
+        opciones = wizard.get("opciones_actuales") or OPCIONES_CONFIRMAR_HORA
+        valor = _interpretar_opcion(texto_usuario, opciones)
+
+        if valor is None:
+            # Mismo criterio que en "confirmar_hora_inicio_interpretada".
+            texto = texto_usuario.strip()
+            nueva_hora = _parsear_hora_individual(texto) or _interpretar_hora_individual_relajada(texto)
+            if nueva_hora is None:
+                return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                    **sesion,
+                    "reserva_wizard": wizard,
+                }
+            h, m = nueva_hora
+            ph, pm = (int(x) for x in wizard["hora_fin_pendiente"].split(":"))
+            if (h, m) == (ph, pm):
+                valor = "si"
+            else:
+                wizard["hora_fin_pendiente"] = f"{h:02d}:{m:02d}"
+                hora_legible = _formatear_hora(datetime(2000, 1, 1, h, m))
+                mensaje = _formatear_menu(f"Entendí {hora_legible} ¿Es correcto?", OPCIONES_CONFIRMAR_HORA)
+                wizard["_mensaje_menu_actual"] = mensaje
+                return mensaje, {**sesion, "reserva_wizard": wizard}
+
+        if valor == "no":
+            wizard["hora_fin_pendiente"] = None
+            wizard["paso"] = "hora_fin"
+            wizard["opciones_actuales"] = None
+            return (
+                "Está bien, escribe la hora de fin en formato hh:mm am/pm, por ejemplo 5:00pm."
+            ), {**sesion, "reserva_wizard": wizard}
+        h, m = (int(x) for x in wizard.pop("hora_fin_pendiente").split(":"))
+        return _aplicar_hora_fin_valida(wizard, usuario, sesion, (h, m))
 
     if paso == "confirmar":
         opciones = wizard.get("opciones_actuales") or OPCIONES_CONFIRMAR
@@ -1259,7 +1612,7 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
         elif valor == "quitar_item":
             return _iniciar_quitar_item(wizard, sesion)
         elif valor == "cambiar_fecha":
-            wizard.update(fecha=None, inicio=None, fin=None)
+            wizard.update(fecha=None, fecha_fin=None, inicio=None, fin=None)
         elif valor == "cambiar_hora":
             wizard.update(inicio=None, fin=None)
 
@@ -1269,22 +1622,26 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
         return mensaje, {**sesion, "reserva_wizard": wizard}
 
     if paso == "confirmar_accesorios":
-        opciones = wizard.get("opciones_actuales") or OPCIONES_ACCESORIOS
-        valor = _interpretar_opcion(texto_usuario, opciones)
-        if valor is None:
+        incluidos = wizard.get("accesorios_incluidos") or []
+        indices = _interpretar_seleccion_multiple(texto_usuario, len(incluidos))
+        if indices is None:
             return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
                 **sesion,
                 "reserva_wizard": wizard,
             }
 
-        pendientes = wizard.pop("accesorios_pendientes", [])
-        nombre_padre = wizard.pop("item_padre_pendiente", None)
-        if valor == "incluir":
-            for nombre_accesorio in pendientes:
-                wizard["carrito"].append({"nombre_recurso": nombre_accesorio, "auto": True, "por": nombre_padre})
-            # No hace falta revisar disponibilidad acá -- ya se revisa en el
-            # paso "hora" (o al confirmar, si la hora ya estaba puesta por
-            # venir de "agregar otro activo"), ver `_pausar_por_no_disponibles`.
+        wizard.pop("accesorios_incluidos", None)
+        wizard.pop("item_padre_pendiente", None)
+        # Los accesorios ya estaban incluidos por defecto (ver el fold-in
+        # en `_avanzar_wizard`) -- los índices que el usuario eligió acá son
+        # los que quiere QUITAR, uno, varios o ninguno, no una lista de qué
+        # incluir (ver `_interpretar_seleccion_multiple`).
+        a_quitar = {incluidos[i] for i in indices}
+        if a_quitar:
+            wizard["carrito"] = [item for item in wizard["carrito"] if item["nombre_recurso"] not in a_quitar]
+        # No hace falta revisar disponibilidad acá -- ya se revisa en el
+        # paso "hora_fin" (o al confirmar, si la hora ya estaba puesta por
+        # venir de "agregar otro activo"), ver `_pausar_por_no_disponibles`.
 
         wizard["opciones_actuales"] = None
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
@@ -1388,7 +1745,8 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     palabras_cancelar = PALABRAS_CANCELAR
     if wizard is not None and wizard.get("paso") in (
         "confirmar_fecha_interpretada",
-        "confirmar_hora_interpretada",
+        "confirmar_hora_inicio_interpretada",
+        "confirmar_hora_fin_interpretada",
         "confirmar_accesorios",
     ):
         palabras_cancelar = {"cancelar", "cancela", "cerrar"}
@@ -1401,3 +1759,213 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     if wizard is None:
         return _iniciar_reserva(texto_usuario, usuario, sesion)
     return _continuar_reserva(texto_usuario, usuario, sesion, wizard)
+
+
+# --- Cancelación de una reserva ya confirmada ------------------------------
+#
+# Distinto del "cerrar"/PALABRAS_CANCELAR de arriba, que corta un wizard de
+# reserva EN CURSO antes de que se escriba nada en la base. Esto es para el
+# intent 'cancelar' de webhook.py: el usuario ya tiene una reserva
+# confirmada y quiere anularla.
+#
+# La única garantía de que nadie cancele la reserva de otro usuario es que
+# `usuario` llega a estas funciones ya resuelto por recursos_service a
+# partir del número de WhatsApp que mandó el mensaje (ver
+# `usuarios_service`/webhook.py) -- nunca de un id, nombre o placa que el
+# texto del chat pueda afirmar. Por eso toda consulta de acá filtra siempre
+# por `Reserva.usuario_id == usuario.id`, tanto al listar qué se puede
+# cancelar como al ejecutar la cancelación -- ese segundo filtro es el que
+# de verdad importa (el primero solo evita mostrarle a alguien una lista que
+# ni es suya).
+
+
+def _reservas_cancelables_de(usuario_id: int) -> list[list[Reserva]]:
+    """Reservas confirmadas y no terminadas (en curso o futuras) del usuario
+    dado, agrupadas por `grupo_id` -- un padre y sus accesorios se cancelan
+    juntos, como se reservaron juntos. Una reserva de antes de que existiera
+    el carrito (`grupo_id IS NULL`) se trata como su propio bundle de 1.
+    Ordenadas por fecha de inicio, para que la más próxima sea la opción 1."""
+    ahora = datetime.now(timezone.utc)
+    filas = (
+        Reserva.query.filter(
+            Reserva.usuario_id == usuario_id,
+            Reserva.estado == "confirmada",
+            Reserva.fin > ahora,
+        )
+        .order_by(Reserva.inicio)
+        .all()
+    )
+
+    return _agrupar_por_reserva_grupo(filas)
+
+
+def _agrupar_por_reserva_grupo(filas: list[Reserva]) -> list[list[Reserva]]:
+    """Junta una lista plana de `Reserva` en bundles por `grupo_id` (un
+    padre y sus accesorios quedan juntos, como se reservaron); una reserva
+    sin grupo (de antes del carrito) es su propio bundle de 1. Ordenados
+    por fecha de inicio -- se usa tanto para armar el menú inicial
+    (`_reservas_cancelables_de`) como para reagrupar lo que el usuario
+    seleccionó (ver paso "elegir_reserva" más abajo)."""
+    grupos: dict[int, list[Reserva]] = {}
+    bundles: list[list[Reserva]] = []
+    for r in filas:
+        if r.grupo_id:
+            grupos.setdefault(r.grupo_id, []).append(r)
+        else:
+            bundles.append([r])
+    bundles.extend(grupos.values())
+    bundles.sort(key=lambda b: b[0].inicio)
+    return bundles
+
+
+def _mensaje_elegir_reserva_a_cancelar(bundles: list[list[Reserva]]) -> str:
+    bloques = []
+    for i, bundle in enumerate(bundles, start=1):
+        nombres = "\n".join(f"    • {r.recurso.nombre}" for r in bundle)
+        inicio_local = bundle[0].inicio.astimezone(ZONA_HORARIA_CPA)
+        fin_local = bundle[0].fin.astimezone(ZONA_HORARIA_CPA)
+        bloques.append(
+            f"*{i}.*\n{nombres}\n"
+            f"    Inicio: {_formatear_fecha_hora(inicio_local)}\n"
+            f"    Fin: {_formatear_fecha_hora(fin_local)}"
+        )
+    cuerpo = "\n\n".join(bloques)
+    return (
+        "*TUS RESERVAS ACTIVAS*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"{cuerpo}\n"
+        f"{_DIVISOR_FACTURA}\n"
+        "¿Cuáles quieres cancelar? Responde con el número, con varios separados "
+        'por coma (ej. "1,2"), "todos" para cancelarlas todas, o "cerrar" para '
+        "no cancelar nada."
+    )
+
+
+OPCIONES_CONFIRMAR_CANCELACION = [
+    ("si", "Sí, cancelar"),
+    ("no", "No, dejar la reserva como está"),
+]
+
+
+def _mensaje_confirmar_cancelacion(bundles: list[list[Reserva]]) -> str:
+    bloques = []
+    for bundle in bundles:
+        nombres = "\n".join(f"    • {r.recurso.nombre}" for r in bundle)
+        inicio_local = bundle[0].inicio.astimezone(ZONA_HORARIA_CPA)
+        fin_local = bundle[0].fin.astimezone(ZONA_HORARIA_CPA)
+        bloques.append(
+            f"{nombres}\n"
+            f"    Inicio: {_formatear_fecha_hora(inicio_local)}\n"
+            f"    Fin: {_formatear_fecha_hora(fin_local)}"
+        )
+    cuerpo = "\n\n".join(bloques)
+    verbo = "esta reserva" if len(bundles) == 1 else f"estas {len(bundles)} reservas"
+    encabezado = (
+        "*CONFIRMAR CANCELACIÓN*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"{cuerpo}\n"
+        f"{_DIVISOR_FACTURA}"
+    )
+    return encabezado + "\n\n" + _formatear_menu(
+        f"¿Confirmas que quieres cancelar {verbo}?", OPCIONES_CONFIRMAR_CANCELACION
+    )
+
+
+def _iniciar_cancelacion(texto_usuario: str, usuario: Usuario, sesion: dict) -> tuple[str, dict]:
+    bundles = _reservas_cancelables_de(usuario.id)
+    if not bundles:
+        return (
+            "No tienes reservas activas para cancelar."
+        ), {**sesion, "cancelacion_wizard": None}
+
+    wizard = {"paso": "elegir_reserva", "bundles_ids": [[r.id for r in b] for b in bundles]}
+    return _mensaje_elegir_reserva_a_cancelar(bundles), {**sesion, "cancelacion_wizard": wizard}
+
+
+def _continuar_cancelacion(
+    texto_usuario: str, usuario: Usuario, sesion: dict, wizard: dict
+) -> tuple[str, dict]:
+    paso = wizard["paso"]
+
+    if paso == "elegir_reserva":
+        bundles_ids = wizard["bundles_ids"]
+        indices = _interpretar_seleccion_multiple(texto_usuario, len(bundles_ids))
+        if indices is None:
+            return (
+                "No reconocí esa opción. Responde con el número (o varios separados "
+                'por coma) de las reservas que quieres cancelar, "todos" para '
+                'cancelarlas todas, o "cerrar" para no cancelar nada.'
+            ), {**sesion, "cancelacion_wizard": wizard}
+        if not indices:
+            return "No cancelé ninguna reserva.", {**sesion, "cancelacion_wizard": None}
+
+        # Se relee de la base (no se confía en lo que se armó para el menú
+        # anterior) filtrando otra vez por usuario_id -- por si algo cambió
+        # entre que se mostró la lista y esta respuesta.
+        ids_elegidos = [rid for i in indices for rid in bundles_ids[i]]
+        filas = Reserva.query.filter(
+            Reserva.id.in_(ids_elegidos),
+            Reserva.usuario_id == usuario.id,
+            Reserva.estado == "confirmada",
+        ).all()
+        if not filas:
+            return (
+                "Esas reservas ya no están disponibles para cancelar (puede que ya se "
+                'hayan cancelado). Escribe "cancelar" de nuevo para ver tus reservas activas.'
+            ), {**sesion, "cancelacion_wizard": None}
+
+        bundles_elegidos = _agrupar_por_reserva_grupo(filas)
+        mensaje = _mensaje_confirmar_cancelacion(bundles_elegidos)
+        wizard["paso"] = "confirmar_cancelacion"
+        wizard["reserva_ids"] = [r.id for r in filas]
+        wizard["cantidad_reservas"] = len(bundles_elegidos)
+        wizard["opciones_actuales"] = OPCIONES_CONFIRMAR_CANCELACION
+        wizard["_mensaje_menu_actual"] = mensaje
+        return mensaje, {**sesion, "cancelacion_wizard": wizard}
+
+    if paso == "confirmar_cancelacion":
+        valor = _interpretar_opcion(texto_usuario, OPCIONES_CONFIRMAR_CANCELACION)
+        if valor is None:
+            return (
+                "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or "")
+            ), {**sesion, "cancelacion_wizard": wizard}
+        if valor == "no":
+            return "No cancelé ninguna reserva.", {**sesion, "cancelacion_wizard": None}
+
+        # El filtro por usuario_id acá (no solo al armar el menú) es la
+        # verificación que de verdad importa: es la que ejecuta el cambio en
+        # la base, así que es la que tiene que ser imposible de saltarse.
+        actualizadas = Reserva.query.filter(
+            Reserva.id.in_(wizard["reserva_ids"]),
+            Reserva.usuario_id == usuario.id,
+            Reserva.estado == "confirmada",
+        ).update({"estado": "cancelada"}, synchronize_session=False)
+        db.session.commit()
+
+        if not actualizadas:
+            return (
+                "Esas reservas ya no estaban activas, no se canceló nada."
+            ), {**sesion, "cancelacion_wizard": None}
+
+        cantidad = wizard.get("cantidad_reservas", 1)
+        verbo = "esa reserva" if cantidad == 1 else f"esas {cantidad} reservas"
+        return f"Listo, cancelé {verbo}.", {**sesion, "cancelacion_wizard": None}
+
+    return _iniciar_cancelacion(texto_usuario, usuario, {**sesion, "cancelacion_wizard": None})
+
+
+def gestionar_cancelacion(texto_usuario: str, usuario: Usuario, sesion: dict) -> tuple[str, dict]:
+    """Punto de entrada para el intent 'cancelar' (anular una reserva que ya
+    quedó confirmada -- para cortar un wizard de reserva que todavía está en
+    curso, ver PALABRAS_CANCELAR dentro de `gestionar_reserva`). Mientras
+    `sesion` tenga `cancelacion_wizard` distinto de None, webhook.py manda
+    la respuesta directo aquí en vez de pasar por clasificación de intent,
+    mismo motivo que `reserva_wizard` (ver `gestionar_reserva`)."""
+    wizard = sesion.get("cancelacion_wizard")
+
+    if wizard is not None and set(_normalizar(texto_usuario).split()) & PALABRAS_CANCELAR:
+        return "No cancelé ninguna reserva.", {**sesion, "cancelacion_wizard": None}
+
+    if wizard is None:
+        return _iniciar_cancelacion(texto_usuario, usuario, sesion)
+    return _continuar_cancelacion(texto_usuario, usuario, sesion, wizard)

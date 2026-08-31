@@ -150,6 +150,22 @@ def recibir_webhook():
         )
         return jsonify({"status": "ok" if enviado else "error_envio"}), 200
 
+    # Mismo motivo que el bloque de arriba: mientras haya un
+    # cancelacion_wizard en curso (ver recursos_service.gestionar_cancelacion),
+    # la respuesta del usuario (un número, "sí"/"no") va directo ahí, no a
+    # clasificación de intent.
+    if sesion.get("cancelacion_wizard"):
+        respuesta, sesion = recursos_service.gestionar_cancelacion(texto, usuario, sesion)
+        sesiones.guardar_sesion(numero, sesion)
+
+        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
+        guardrails.registrar_interaccion(
+            numero, texto, "cancelar", respuesta, permitido=True,
+            mensaje_id=mensaje_id,
+            estado_envio="pendiente" if enviado else "error_http",
+        )
+        return jsonify({"status": "ok" if enviado else "error_envio"}), 200
+
     # --- Clasificación de intent + whitelist ---
     intent = llm_client.clasificar_intent(texto)
     if not guardrails.intent_permitido(intent):
@@ -166,14 +182,17 @@ def recibir_webhook():
         )
         return jsonify({"status": "intent_bloqueado"}), 200
 
-    # Para reservar/consultar disponibilidad, la respuesta sale de datos
-    # reales de recursos/reservas (ver recursos_service) -- nunca del LLM,
-    # que podría inventar disponibilidad. El resto de intents permitidos
-    # (cancelar, ayuda) sigue delegando en el LLM por ahora.
+    # Para reservar/consultar disponibilidad/cancelar, la respuesta sale de
+    # datos reales de recursos/reservas (ver recursos_service) -- nunca del
+    # LLM, que podría inventar disponibilidad o dejar cancelar una reserva
+    # ajena. Solo 'ayuda' sigue delegando en el LLM.
     if intent == "consultar_disponibilidad":
         respuesta = recursos_service.evaluar_consulta_disponibilidad(texto)
     elif intent == "reservar":
         respuesta, sesion = recursos_service.gestionar_reserva(texto, usuario, sesion)
+        sesiones.guardar_sesion(numero, sesion)
+    elif intent == "cancelar":
+        respuesta, sesion = recursos_service.gestionar_cancelacion(texto, usuario, sesion)
         sesiones.guardar_sesion(numero, sesion)
     else:
         respuesta = llm_client.generar_respuesta(texto)

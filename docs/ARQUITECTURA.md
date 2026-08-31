@@ -20,16 +20,18 @@
      (`sesion["reserva_wizard"]`, ver "Memoria de conversación" y "Reserva
      paso a paso" más abajo), el mensaje se trata como la respuesta al paso
      exacto en que quedó ese wizard (`recursos_service.gestionar_reserva`),
-     también antes de clasificar intent.
+     también antes de clasificar intent. Lo mismo aplica a un **wizard de
+     cancelación en curso** (`sesion["cancelacion_wizard"]`, ver
+     "Cancelar una reserva ya confirmada" más abajo).
    - Clasifica el **intent** (`llm_client.clasificar_intent`) y lo valida
      contra la whitelist (`guardrails.intent_permitido`).
    - Ejecuta la lógica de negocio correspondiente:
-     - `consultar_disponibilidad` y `reservar` van a `recursos_service.py`,
-       que consulta `recursos`/`reservas` de verdad -- nunca al LLM en
-       modo libre (ver "Por qué separar el LLM de la lógica de reservas").
-     - `cancelar` y `ayuda` siguen delegando en el LLM conversacional
-       (`llm_client.generar_respuesta`) -- `cancelar` con lógica real
-       (identificar y anular una reserva existente) queda pendiente.
+     - `consultar_disponibilidad`, `reservar` y `cancelar` van a
+       `recursos_service.py`, que consulta/escribe `recursos`/`reservas` de
+       verdad -- nunca al LLM en modo libre (ver "Por qué separar el LLM de
+       la lógica de reservas").
+     - Solo `ayuda` sigue delegando en el LLM conversacional
+       (`llm_client.generar_respuesta`).
    - Envía la respuesta de vuelta por `whatsapp_client.enviar_mensaje_texto`,
      que hace `POST /send` al servicio `baileys-bot`.
    - Registra la interacción completa en `auditoria_bot`.
@@ -98,11 +100,30 @@ al LLM que devuelva `{recurso, inicio, fin}` como JSON a partir del texto
 libre del usuario, pero **solo el campo `recurso` se usa** -- `inicio`/
 `fin` se descartan a propósito (ver "Reserva paso a paso: fecha y hora sin
 LLM" más abajo; se detectó al modelo local inventando una hora que el
-usuario nunca dio). `recursos_service.py` es quien valida ese `recurso`
-contra el catálogo real (si el LLM alucina un nombre que no existe, se
-descarta y cae al matcher por palabras clave), quien consulta
-disponibilidad, y quien decide si se puede escribir en `reservas`. El LLM
-nunca toca la base de datos directamente.
+usuario nunca dio) y de hecho hoy no tienen ningún llamador real en
+`recursos_service.py` (el LLM los sigue calculando porque el prompt se los
+pide, pero se descartan siempre). `recursos_service.py` es quien valida
+ese `recurso` contra el catálogo real antes de confiarlo
+(`_resolver_recurso_para_reserva`), quien consulta disponibilidad, y quien
+decide si se puede escribir en `reservas`. El LLM nunca toca la base de
+datos directamente.
+
+**Ni siquiera el campo `recurso` se acepta a ciegas.** Dos casos reales
+encontrados probando el bot (no solo en teoría):
+
+- Un mensaje que no menciona ningún activo (ej. "Reservar" a secas) podía
+  volver con un `recurso` inventado -- el prompt le pide `null` en ese
+  caso, pero en la práctica no siempre lo respeta. Fix:
+  `_puntaje_nombre_en_texto(nombre, texto_norm)` exige que el nombre que
+  devuelve el LLM tenga respaldo real en el texto del usuario (al menos
+  una palabra clave, o el nombre completo, presente en el mensaje) antes
+  de confiarlo; si no, se trata como si hubiera dicho `null`.
+- Cuando el matcheo por palabra clave (`buscar_recursos_en_texto`) ya
+  encuentra **varios** candidatos empatados (ej. "cámara canon" con dos
+  modelos Canon en el catálogo, EOS R y EOS R6 -- nada en el texto
+  distingue cuál), el LLM no se consulta para desempatar: manda la
+  ambigüedad real y se le pregunta al usuario. El LLM solo se consulta
+  cuando el matcheo por palabra clave no encontró absolutamente nada.
 
 ## Inventario: varias unidades del mismo modelo (`recursos_service.py`)
 
@@ -169,53 +190,114 @@ Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
 ## Reserva paso a paso (`recursos_service.py`, wizard)
 
 `gestionar_reserva` (intent `reservar`) no le pide todo al usuario en un
-solo mensaje libre -- va preguntando un dato a la vez con menús numerados,
-guardando el progreso en `sesion["reserva_wizard"]` (ver "Memoria de
-conversación"). Progresión para un ítem (`_siguiente_paso_wizard`):
+solo mensaje libre -- va preguntando un dato a la vez con menús numerados
+(o mensajes tipo factura, ver más abajo), guardando el progreso en
+`sesion["reserva_wizard"]` (ver "Memoria de conversación"). Progresión
+para un ítem (`_siguiente_paso_wizard`):
 
 ```
-elegir_activo → elegir_marca → elegir_modelo → fecha → hora → confirmar → listo
+elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
+  → fecha → hora_inicio → hora_fin → confirmar → listo
 ```
 
-`_avanzar_wizard` salta solo cualquier paso que tenga una única opción
-posible (ej. una sola marca dentro de una categoría), avisando al usuario
-("solo tenemos una marca de dron, sigo con esa") en vez de preguntar algo
-que no tiene sentido elegir. Si el primer mensaje ya deja claro el activo
-(vía `llm_client.extraer_datos_reserva`, ver arriba), esos pasos se saltan
-también.
+`confirmar_accesorios` es condicional: solo aparece si el activo recién
+resuelto trae hijos marcados como incluidos por defecto (ver "Carrito de
+reserva" más abajo). `_avanzar_wizard` además salta solo cualquier paso
+que tenga una única opción posible (ej. una sola marca dentro de una
+categoría), avisando al usuario ("solo tenemos una marca de dron, sigo con
+esa") en vez de preguntar algo que no tiene sentido elegir. Si el primer
+mensaje ya deja claro el activo (vía `llm_client.extraer_datos_reserva`,
+ver arriba), esos pasos se saltan también; si dos activos empatan (ej.
+"cámara canon" con dos modelos Canon en catálogo), se pre-llenan
+`categoria` y `marca` si todos los candidatos las comparten, y el wizard
+arranca directo en el primer paso que sí hace falta preguntar (ver
+"Por qué separar el LLM..." más arriba).
 
 La reserva no se limita a un solo activo: `wizard["carrito"]` es la lista
 de ítems ya resueltos (ver "Carrito de reserva" más abajo). En cuanto un
 ítem termina de resolverse (`elegir_activo → ... → elegir_modelo`),
-`_agregar_item_al_carrito` lo mueve al carrito antes de seguir -- por eso
-`wizard["nombre_recurso"]` es solo "el ítem que se está resolviendo ahora",
-no "el único ítem de la reserva".
+`_mover_item_resuelto_al_carrito` lo mueve al carrito antes de seguir --
+por eso `wizard["nombre_recurso"]` es solo "el ítem que se está resolviendo
+ahora", no "el único ítem de la reserva".
 
 ### Fecha y hora: formato fijo, sin LLM -- con reconocimiento de lenguaje natural confirmado explícitamente
 
-Los pasos "fecha" y "hora" **no** usan el LLM: piden `dd/mm/aaaa` y
-`hh:mm am/pm` exactos, parseados con regex deterministas
-(`_parsear_fecha_dd_mm_aaaa`, `_parsear_rango_horario`). Esto es
+Los pasos de fecha y hora **no** usan el LLM: piden `dd/mm/aaaa` y
+`hh:mm am/pm` exactos, parseados con regex deterministas. Esto es
 deliberado -- se detectó que el LLM local, al interpretar fecha/hora en
 lenguaje libre, a veces inventa un dato que el usuario nunca dio (ej.
 respondió solo "Mañana" y el modelo agregó una hora de la nada). El paso
 de fecha además siempre muestra primero "Hoy es {día} {dd/mm/aaaa}..."
 para que el usuario note de inmediato si el bot tiene otra fecha en mente.
 
-Si el texto no viene en el formato exacto, antes de rechazarlo se intenta
-reconocerlo con patrones deterministas más flexibles (sin LLM tampoco):
-`_interpretar_fecha_natural` ("mañana", "pasado mañana", días de la
-semana, "en N días", "22 de noviembre") y `_interpretar_hora_relajada`
-("de 2pm a 7pm", "desde las 3 hasta las 5pm"). A diferencia del formato
-exacto, una interpretación **nunca se acepta directo**: el wizard entra en
-un paso de confirmación (`confirmar_fecha_interpretada` /
-`confirmar_hora_interpretada`) mostrando exactamente lo que entendió y
-pidiendo un sí/no antes de seguir. Si el usuario dice "no", solo se borra
-ese dato pendiente y se vuelve a pedir en el formato exacto, sin perder el
-resto de lo ya elegido. El atajo global de `gestionar_reserva` que
-cancela todo el wizard cuando el usuario escribe la palabra "no" se
-desactiva a propósito durante estos dos pasos (ahí "no" significa "esa
-interpretación está mal", no "cancela la reserva").
+**La reserva puede durar más de un día.** `wizard["fecha_fin"]` acompaña a
+`wizard["fecha"]` (igual a `fecha` para una reserva de un solo día).
+`_parsear_rango_fecha_dd_mm_aaaa` acepta el formato exacto `dd/mm/aaaa a
+dd/mm/aaaa`; en lenguaje natural, `_interpretar_rango_fecha_natural`
+reconoce conectores ("desde X hasta Y", "entre X y Y", "del X al Y", "de X
+a Y") y le pasa cada lado a los mismos intérpretes de una fecha única.
+Se prueba **antes** que la fecha única suelta a propósito: con "desde
+mañana hasta el viernes", el intérprete de fecha única encuentra la
+palabra "viernes" dentro de la frase y la interpretaría completa como esa
+sola fecha, perdiendo el "desde mañana".
+
+**La hora de inicio y la de fin se piden en mensajes separados**
+(`hora_inicio` y `hora_fin`), nunca juntas en un mismo mensaje tipo "3pm a
+5pm" -- pedido explícito para no confundir al usuario con dos datos a la
+vez, sea la reserva de un día o de varios. Cada paso usa
+`_parsear_hora_individual` (una sola hora, ej. "3:00pm") sobre la fecha
+que le corresponde (`fecha` para el inicio, `fecha_fin` para el fin).
+
+Si el texto no viene en el formato exacto (fecha o una hora), antes de
+rechazarlo se intenta reconocer con patrones deterministas más flexibles
+(sin LLM tampoco): `_interpretar_fecha_natural` ("mañana", "pasado
+mañana", días de la semana, "en N días", "22 de noviembre") y
+`_interpretar_hora_individual_relajada` ("a las 3pm", "las 15 horas"). A
+diferencia del formato exacto, una interpretación **nunca se acepta
+directo**: el wizard entra en un paso de confirmación
+(`confirmar_fecha_interpretada` / `confirmar_hora_inicio_interpretada` /
+`confirmar_hora_fin_interpretada`) mostrando exactamente lo que entendió y
+pidiendo un menú numerado (1. Sí / 2. No, ver `OPCIONES_CONFIRMAR_FECHA`/
+`OPCIONES_CONFIRMAR_HORA`) antes de seguir. Si el usuario dice "no", solo
+se borra ese dato pendiente y se vuelve a pedir en el formato exacto, sin
+perder el resto de lo ya elegido. El atajo global de `gestionar_reserva`
+que cancela todo el wizard cuando el usuario escribe la palabra "no" se
+desactiva a propósito durante estos pasos (ahí "no" significa "esa
+interpretación está mal", no "cancela la reserva") -- y también durante
+`confirmar_accesorios` (ver más abajo), donde "no" significa "no quiero
+esos accesorios".
+
+**Si en vez de "1"/"2" el usuario vuelve a escribir una fecha/hora** (ej.
+repetir "mañana" en lugar de responder "1"), los tres pasos de
+confirmación reintentan la interpretación con el mismo criterio del paso
+original antes de rechazarla: si da el mismo valor que ya estaba
+pendiente, se toma como una confirmación implícita (repetirlo es
+reafirmarlo, no una respuesta inválida); si da un valor distinto, se
+reemplaza lo pendiente y se le vuelve a preguntar (nunca se acepta sin
+pasar por el menú); solo si el texto no se reconoce como fecha/hora en
+absoluto se muestra "No reconocí esa opción."
+
+**Cortar el wizard en cualquier momento:** las palabras "cancelar",
+"cancela" y "cerrar" (`PALABRAS_CANCELAR`) se revisan en `gestionar_reserva`
+**antes** de despachar al paso actual, así que funcionan sin importar en
+qué parte del flujo esté el usuario -- solo borran `sesion["reserva_wizard"]`;
+nunca queda un activo/espacio a medio reservar porque nada se escribe en
+`reservas` hasta el paso final "confirmar".
+
+### Mensajes tipo factura
+
+Los pasos "activo seleccionado" (`confirmar_accesorios`), fecha, hora y el
+resumen final comparten una plantilla fija en código (no generada por el
+LLM): título en `*negrita*`, un divisor (`――――――――――――――――――`), cada
+activo del carrito en `*negrita*` con sus hijos incluidos por defecto
+sangrados debajo con viñeta (`_formatear_item_factura`), otro divisor, y
+los datos del paso. El aviso de seguro (`_nota_seguro`) es una línea
+aparte con el nombre del activo, no un sufijo pegado a la línea del
+activo -- si hay más de uno en el carrito que requiere seguro, hace falta
+saber cuál es cuál. Los menús numerados *seleccionables* (`OPCIONES_CONFIRMAR`,
+el menú de quitar un ítem) no llevan este formato: agregarle `*negrita*`
+ahí rompería el reconocimiento de "escribe el nombre de la opción en vez
+del número" (`_interpretar_opcion` compara substrings literales).
 
 ### Carrito de reserva y accesorios por defecto
 
@@ -225,33 +307,96 @@ Agregar otro activo o espacio / Quitar un activo de la reserva / Cambiar
 fecha / Cambiar hora / Cancelar` -- se comporta como un carrito de compras,
 no como una reserva de un solo activo:
 
-- **Accesorios por defecto:** al resolver un activo con hijos marcados
-  `incluido_por_defecto=True` (ver "Accesorios en bundle" arriba),
-  `_accesorios_por_defecto` los agrega solos al carrito -- el usuario no
-  tiene que pedirlos aparte, solo quitarlos si no los quiere.
+- **Accesorios por defecto van incluidos de una vez, no hay que pedirlos.**
+  Al resolver un activo con hijos marcados `incluido_por_defecto=True`
+  (ver "Accesorios en bundle" arriba), se agregan todos al carrito
+  inmediatamente y el wizard entra al paso `confirmar_accesorios`: un
+  mensaje tipo factura que los lista numerados (más una última opción
+  "Ninguno") y pregunta **cuáles quitar**, no cuáles incluir --
+  `_interpretar_seleccion_multiple` acepta números sueltos, varios
+  separados por coma ("1,2"), o las palabras "todos"/"ninguno". Los
+  índices que el usuario responde se **restan** del carrito. Diseño
+  invertido a propósito respecto a un primer intento (pedirle al usuario
+  que aprobara la inclusión): el usuario prefirió que el valor por
+  defecto ya esté puesto y que la única acción posible sea excluir.
 - **"Agregar otro activo o espacio"** reentra a `elegir_activo` para un
-  ítem nuevo en el mismo horario ya elegido; al resolverse, se suma al
-  carrito (con sus propios accesorios por defecto si aplica).
+  ítem nuevo en el mismo horario ya elegido; al resolverse, pasa por el
+  mismo `confirmar_accesorios` si aplica.
 - **"Quitar un activo de la reserva"** abre un menú numerado
   (`quitar_item_menu`) con lo que hay en el carrito; quitar un padre
   también quita los accesorios que se agregaron por él. Si el carrito
   queda vacío, vuelve a pedir un activo.
-- Elegir "Cambiar fecha" (por ejemplo) borra solo `fecha`/`inicio`/`fin`
-  del wizard y hace que `_avanzar_wizard` vuelva a preguntar justo eso,
-  conservando el carrito ya armado.
+- Elegir "Cambiar fecha" (por ejemplo) borra `fecha`/`fecha_fin`/`inicio`/
+  `fin` del wizard y hace que `_avanzar_wizard` vuelva a preguntar justo
+  eso, conservando el carrito ya armado.
 
-Solo cuando el usuario elige "Confirmar" se llama a
-`_crear_reserva_desde_wizard`. Antes de escribir nada,
-`_resolver_disponibilidad_carrito` revisa cada ítem: uno que el usuario
-**eligió explícitamente** y ya no está disponible (alguien más lo reservó
-mientras confirmaba) bloquea todo y pide cambiar la hora o quitarlo; un
-**accesorio por defecto** que ya no está disponible se quita del carrito
-en silencio (con un aviso) sin bloquear el resto -- nadie pidió ese
-accesorio a propósito. Si todo el carrito queda disponible,
-`crear_reservas_grupo` crea un `ReservaGrupo` y una `Reserva` por cada
-unidad **en una sola transacción**: si la restricción `EXCLUDE` de
+**Disponibilidad: siempre se pregunta, nunca se decide en silencio.**
+`_resolver_disponibilidad_carrito` ya no distingue accesorio automático de
+ítem elegido a mano -- cualquiera sin unidad libre en el horario elegido
+se reporta, y el wizard se detiene en el paso `resolver_disponibilidad`
+(mensaje tipo factura con la lista de lo no disponible) ofreciendo
+"Quitar esos activos y continuar con el resto" o "Cancelar esta reserva y
+elegir otro activo". Se usa tanto al fijar la hora de fin por primera vez
+como en la verificación final antes de confirmar (por si algo cambió justo
+mientras el usuario decidía). Quitar arrastra los accesorios automáticos
+del activo quitado, igual que el menú "Quitar un activo de la reserva".
+
+Solo cuando el usuario elige "Confirmar" (y el carrito pasa esa revisión
+de disponibilidad sin nada pendiente) se llama a
+`_crear_reserva_desde_wizard`, que le pasa el carrito final a
+`crear_reservas_grupo`: crea un `ReservaGrupo` y una `Reserva` por cada
+unidad **en una sola transacción**. Si la restricción `EXCLUDE` de
 Postgres rechaza alguna justo al confirmar (condición de carrera), se
 revierte el carrito completo en vez de dejar una reserva parcial.
+
+### Cancelar una reserva ya confirmada
+
+Distinto de "cortar el wizard" de arriba (que aborta una reserva que
+**todavía no se escribió** en la base): esto es el intent `cancelar`,
+para anular una reserva que ya quedó `confirmada`. Vive en
+`gestionar_cancelacion` (`recursos_service.py`), con su propio wizard corto
+en `sesion["cancelacion_wizard"]` que webhook.py trata igual que
+`reserva_wizard` -- mientras esté activo, la respuesta del usuario (un
+número) va directo ahí, no a clasificación de intent.
+
+**Solo el usuario que reservó puede cancelar esa reserva.** El único punto
+de entrada real es `usuario`, que llega ya resuelto por el número de
+WhatsApp que mandó el mensaje (`usuarios_service`, antes de esta función);
+nada del texto del chat puede afirmar "soy tal usuario" o "cancela la
+reserva con id X". Por eso toda consulta filtra siempre por
+`Reserva.usuario_id == usuario.id`:
+
+- `_reservas_cancelables_de(usuario.id)` -- la única lista que se le
+  muestra al usuario, ya filtrada por dueño (y por `estado='confirmada'`
+  y `fin` en el futuro), agrupada por `grupo_id` igual que se reservó (un
+  padre y sus accesorios se cancelan juntos).
+- El `UPDATE ... SET estado='cancelada'` final repite el mismo filtro por
+  `usuario_id`, sobre **todos** los ids que el usuario haya elegido -- ese
+  es el que de verdad importa, porque es el que ejecuta el cambio; el
+  filtro al listar solo evita mostrarle a alguien una lista ajena, no
+  evitaría por sí solo que alguien cancelara algo que no es suyo si se
+  saltara el menú.
+
+**Selección múltiple.** El paso "elegir reserva" reutiliza
+`_interpretar_seleccion_multiple` (la misma función del paso
+`confirmar_accesorios`): un número, varios separados por coma ("1,3") o
+"todos" -- se puede cancelar más de una reserva en la misma conversación
+sin repetir todo el flujo por cada una. Las reservas elegidas se
+reagrupan (`_agrupar_por_reserva_grupo`) para el paso de confirmación, así
+que un grupo elegido a medias sigue mostrándose junto.
+
+El paso de confirmación (`confirmar_cancelacion`) es un menú numerado
+(`OPCIONES_CONFIRMAR_CANCELACION`: "1. Sí, cancelar" / "2. No, dejar la
+reserva como está"), no una pregunta de sí/no en texto libre -- mismo
+mecanismo (`_interpretar_opcion`) que el resto de los menús del bot, a
+pedido explícito para que la respuesta sea inequívoca por número.
+
+Mensaje tipo factura para listar (`_mensaje_elegir_reserva_a_cancelar`) y
+para confirmar (`_mensaje_confirmar_cancelacion`), mismo criterio que el
+resto del wizard de reserva: nunca se cancela de una sola respuesta, hay
+un paso `confirmar_cancelacion` explícito de por medio. `PALABRAS_CANCELAR`
+("cancelar", "cancela", "cerrar") aborta el wizard de cancelación en
+cualquier paso sin tocar la base, igual que en `gestionar_reserva`.
 
 ## Identidad y registro (`registro_service.py`, `usuarios_service.py`)
 
@@ -284,9 +429,11 @@ se limpia sola sin necesidad de un job de limpieza aparte.
 
 Es un punto de extensión genérico: cualquier flujo futuro que necesite
 recordar contexto entre mensajes puede guardar su propio estado ahí bajo
-su propia clave, igual que `registro_campo_pendiente` y
-`reserva_wizard` (este último, un dict completo con el progreso del
-wizard de reserva paso a paso -- ver "Reserva paso a paso" más arriba).
+su propia clave, igual que `registro_campo_pendiente`, `reserva_wizard`
+(dict completo con el progreso del wizard de reserva paso a paso -- ver
+"Reserva paso a paso" más arriba) y `cancelacion_wizard` (mismo patrón
+para cancelar una reserva ya confirmada -- ver "Cancelar una reserva ya
+confirmada" más arriba).
 
 ## Analítica en tiempo real
 
