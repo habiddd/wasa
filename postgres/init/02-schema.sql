@@ -68,12 +68,18 @@ CREATE TABLE IF NOT EXISTS recursos (
     modelo          VARCHAR(100),
     identificador   VARCHAR(100),                     -- número de serie o IMEI (alfanumérico), si lo tiene
     requiere_seguro BOOLEAN NOT NULL DEFAULT FALSE,  -- activa secuencia de seguro de equipos
-    activo          BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Estado de inventario del recurso -- no confundir con el estado de
+    -- agenda que calcula recursos_service._estado_recurso() a partir de
+    -- `reservas` ("en uso ahora mismo", "libre hasta tal hora"): este es
+    -- manual, lo fija quien administra el inventario desde el dashboard.
+    -- Antes era un simple BOOLEAN `activo` -- ver migración más abajo.
+    estado          VARCHAR(20) NOT NULL DEFAULT 'disponible',
     creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT recursos_placa_formato CHECK (placa IS NULL OR placa ~ '^[A-Z0-9]{7,8}$'),
     CONSTRAINT recursos_placa_requerida_equipo CHECK (tipo <> 'equipo' OR placa IS NOT NULL),
     CONSTRAINT recursos_categoria_requerida_equipo CHECK (tipo <> 'equipo' OR categoria IS NOT NULL),
-    CONSTRAINT recursos_padre_no_self CHECK (padre_id IS NULL OR padre_id <> id)
+    CONSTRAINT recursos_padre_no_self CHECK (padre_id IS NULL OR padre_id <> id),
+    CONSTRAINT recursos_estado_valido CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible'))
 );
 
 -- Único por activo, pero permite múltiples NULL (para 'espacio', que no
@@ -209,6 +215,35 @@ BEGIN
     ) THEN
         ALTER TABLE recursos ADD CONSTRAINT recursos_padre_no_self
             CHECK (padre_id IS NULL OR padre_id <> id);
+    END IF;
+END $$;
+
+-- Migración: `activo` (BOOLEAN) -> `estado` (VARCHAR: 'disponible' |
+-- 'en_mantenimiento' | 'no_disponible'). Solo corre si la base todavía
+-- tiene la columna vieja (una base recién creada ya nace con `estado`
+-- directamente, por el CREATE TABLE de arriba).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'recursos' AND column_name = 'activo'
+    ) THEN
+        ALTER TABLE recursos ADD COLUMN IF NOT EXISTS estado VARCHAR(20);
+        UPDATE recursos SET estado = CASE WHEN activo THEN 'disponible' ELSE 'no_disponible' END
+            WHERE estado IS NULL;
+        ALTER TABLE recursos ALTER COLUMN estado SET DEFAULT 'disponible';
+        ALTER TABLE recursos ALTER COLUMN estado SET NOT NULL;
+        ALTER TABLE recursos DROP COLUMN activo;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'recursos_estado_valido'
+    ) THEN
+        ALTER TABLE recursos ADD CONSTRAINT recursos_estado_valido
+            CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible'));
     END IF;
 END $$;
 

@@ -121,6 +121,50 @@
 
   .actualizado { font-size: 0.75rem; color: var(--text-muted); margin-top: 1rem; }
   h2.titulo-panel { margin-top: 0; font-size: 1rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+  h2.titulo-panel { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  h2.titulo-panel > span { display: flex; gap: 0.4rem; }
+
+  button.boton {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  button.boton:hover { border-color: var(--accent); }
+  button.boton.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.boton.pequeno { padding: 0.2rem 0.5rem; font-size: 0.75rem; }
+
+  .pill.clicable { cursor: pointer; border: none; appearance: none; font: inherit; }
+
+  .activo-card { margin-bottom: 0.6rem; }
+  .activo-card .cabecera { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+  .activo-card .cabecera-info { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .activo-card .cabecera-acciones { display: flex; gap: 0.4rem; }
+  .activo-card .meta { margin: 0.35rem 0 0; font-size: 0.8rem; color: var(--text-muted); }
+
+  form.form-activo { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px dashed var(--border); display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.6rem; }
+  form.form-activo label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.75rem; color: var(--text-muted); }
+  form.form-activo input[type="text"], form.form-activo select, form.form-activo textarea {
+    font: inherit; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text);
+  }
+  form.form-activo label.checkbox { flex-direction: row; align-items: center; font-size: 0.8rem; color: var(--text); }
+  form.form-activo .full { grid-column: 1 / -1; }
+  form.form-activo .acciones-form { grid-column: 1 / -1; display: flex; gap: 0.5rem; justify-content: flex-end; }
+  form.form-activo .error-form { grid-column: 1 / -1; color: var(--fail); font-size: 0.8rem; margin: 0; }
+
+  .subtabs-activos { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.75rem 0 1rem; }
+  .subtabs-activos button.subtab {
+    appearance: none; border: 1px solid var(--border); background: var(--panel); color: var(--text-muted);
+    border-radius: 999px; padding: 0.3rem 0.7rem; font-size: 0.78rem; cursor: pointer;
+  }
+  .subtabs-activos button.subtab:hover { border-color: var(--accent); }
+  .subtabs-activos button.subtab.activo { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .subtabs-activos .contador { opacity: 0.7; font-size: 0.7rem; }
 </style>
 </head>
 <body>
@@ -134,6 +178,8 @@
   <button data-tab="servicios" class="activo">Servicios</button>
   <button data-tab="qr">QR / WhatsApp</button>
   <button data-tab="metricas">Métricas</button>
+  <button data-tab="activos">Activos</button>
+  <button data-tab="lugares">Lugares</button>
 </nav>
 
 <main>
@@ -165,16 +211,51 @@
       <tbody></tbody>
     </table>
   </section>
+
+  <section id="activos" class="panel">
+    <h2 class="titulo-panel">
+      Equipos y relaciones
+      <span>
+        <button class="boton pequeno" id="btn-nuevo-activo">+ Agregar activo</button>
+        <button class="boton pequeno" id="btn-refrescar-activos">Refrescar</button>
+      </span>
+    </h2>
+    <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: -0.5rem;">
+      Los datos no se refrescan solos en esta pestaña para no perder ediciones en curso — usa "Refrescar".
+    </p>
+    <div class="card" id="activos-nuevo" hidden></div>
+    <div class="subtabs-activos" id="activos-subtabs"></div>
+    <div id="activos-lista"><p>Cargando…</p></div>
+  </section>
+
+  <section id="lugares" class="panel">
+    <h2 class="titulo-panel">
+      Lugares
+      <span>
+        <button class="boton pequeno" id="btn-nuevo-lugar">+ Agregar lugar</button>
+        <button class="boton pequeno" id="btn-refrescar-lugares">Refrescar</button>
+      </span>
+    </h2>
+    <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: -0.5rem;">
+      Espacios reservables (salas, estudios, etc.). Los datos no se refrescan solos en esta pestaña — usa "Refrescar".
+    </p>
+    <div class="card" id="lugares-nuevo" hidden></div>
+    <div id="lugares-lista"><p>Cargando…</p></div>
+  </section>
 </main>
 
 <script>
 (function () {
   const tabs = document.querySelectorAll("nav.tabs button");
   const panels = document.querySelectorAll("section.panel");
+  const TAB_STORAGE_KEY = "dashboard-cpa-tab-activa";
 
-  function activarTab(nombre) {
+  function activarTab(nombre, opts) {
+    opts = opts || {};
     tabs.forEach((b) => b.classList.toggle("activo", b.dataset.tab === nombre));
     panels.forEach((p) => p.classList.toggle("activo", p.id === nombre));
+    try { localStorage.setItem(TAB_STORAGE_KEY, nombre); } catch (err) { /* localStorage no disponible */ }
+    if ((nombre === "activos" || nombre === "lugares") && !opts.silencioso) cargarActivos();
   }
 
   tabs.forEach((b) => b.addEventListener("click", () => activarTab(b.dataset.tab)));
@@ -284,9 +365,552 @@
     }
   }
 
+  // --- Activos: árbol de padres/hijos, edición de datos/estado/relaciones ---
+
+  let activosCache = [];
+  // Ids de activos cuyos hijos están desplegados. Vacío = todo colapsado por
+  // defecto; se conserva entre renders (no se resetea al editar/guardar).
+  const activosExpandidos = new Set();
+
+  function hijosDe(padreId, lista) {
+    return lista.filter((r) => r.padre_id === padreId);
+  }
+
+  function descendientesDe(id, lista) {
+    const directos = hijosDe(id, lista);
+    let todos = directos.slice();
+    directos.forEach((h) => { todos = todos.concat(descendientesDe(h.id, lista)); });
+    return todos;
+  }
+
+  function opcionesPadre(recurso, lista) {
+    const excluidos = new Set([recurso.id, ...descendientesDe(recurso.id, lista).map((r) => r.id)]);
+    return lista
+      .filter((r) => !excluidos.has(r.id))
+      .map((r) => `<option value="${r.id}" ${recurso.padre_id === r.id ? "selected" : ""}>${escapeHtml(r.nombre)}${r.placa ? " (" + escapeHtml(r.placa) + ")" : ""}</option>`)
+      .join("");
+  }
+
+  // Para un activo nuevo (todavía sin id): no hay descendientes propios que
+  // excluir, así que cualquier equipo existente es un padre válido.
+  function opcionesPadreNuevo() {
+    return equiposCache()
+      .map((r) => `<option value="${r.id}">${escapeHtml(r.nombre)}${r.placa ? " (" + escapeHtml(r.placa) + ")" : ""}</option>`)
+      .join("");
+  }
+
+  function escapeHtml(texto) {
+    const div = document.createElement("div");
+    div.textContent = texto == null ? "" : String(texto);
+    return div.innerHTML;
+  }
+
+  function escapeAttr(texto) {
+    return escapeHtml(texto).replace(/"/g, "&quot;");
+  }
+
+  // --- Estado de inventario de un activo (disponible/mantenimiento/no disp.) ---
+
+  const ESTADOS_ACTIVO = {
+    disponible: { texto: "Disponible", clase: "ok" },
+    en_mantenimiento: { texto: "En mantenimiento", clase: "warn" },
+    no_disponible: { texto: "No disponible", clase: "fail" },
+  };
+
+  function opcionesEstado(estadoActual) {
+    return Object.entries(ESTADOS_ACTIVO)
+      .map(([valor, { texto }]) => `<option value="${valor}" ${estadoActual === valor ? "selected" : ""}>${texto}</option>`)
+      .join("");
+  }
+
+  // Select compacto en la cabecera de la tarjeta: cambia el estado con un
+  // solo clic, sin tener que abrir el formulario completo de edición.
+  function selectorEstado(recurso) {
+    const clase = (ESTADOS_ACTIVO[recurso.estado] || { clase: "muted" }).clase;
+    return `<select class="pill clicable selector-estado ${clase}" data-anterior="${escapeAttr(recurso.estado)}">${opcionesEstado(recurso.estado)}</select>`;
+  }
+
+  // --- Agrupación por categoría (subpestañas dentro de Activos = equipos) ---
+  // Los espacios ya no pasan por aquí: viven en su propia pestaña "Lugares".
+
+  const SUBTAB_STORAGE_KEY = "dashboard-cpa-activos-subtab";
+  const GRUPO_TODOS = "__todos__";
+  const GRUPO_SIN_CATEGORIA = "__sin_categoria__";
+
+  let subtabActiva = GRUPO_TODOS;
+  try { subtabActiva = localStorage.getItem(SUBTAB_STORAGE_KEY) || GRUPO_TODOS; } catch (err) { /* localStorage no disponible */ }
+
+  function equiposCache() {
+    return activosCache.filter((r) => r.tipo === "equipo");
+  }
+
+  function espaciosCache() {
+    return activosCache.filter((r) => r.tipo === "espacio");
+  }
+
+  function grupoDe(r) {
+    return r.categoria || GRUPO_SIN_CATEGORIA;
+  }
+
+  function etiquetaGrupo(clave) {
+    if (clave === GRUPO_SIN_CATEGORIA) return "Sin categoría";
+    return clave.charAt(0).toUpperCase() + clave.slice(1);
+  }
+
+  function gruposDisponibles(lista) {
+    const claves = Array.from(new Set(lista.map(grupoDe)));
+    claves.sort((a, b) => etiquetaGrupo(a).localeCompare(etiquetaGrupo(b), "es"));
+    return claves;
+  }
+
+  function renderSubtabsActivos() {
+    const cont = document.getElementById("activos-subtabs");
+    const equipos = equiposCache();
+    const grupos = gruposDisponibles(equipos);
+    const claves = [GRUPO_TODOS, ...grupos];
+    cont.innerHTML = claves
+      .map((clave) => {
+        const total = clave === GRUPO_TODOS ? equipos.length : equipos.filter((r) => grupoDe(r) === clave).length;
+        const etiqueta = clave === GRUPO_TODOS ? "Todos" : etiquetaGrupo(clave);
+        return `<button type="button" class="subtab ${clave === subtabActiva ? "activo" : ""}" data-grupo="${escapeAttr(clave)}">${escapeHtml(etiqueta)} <span class="contador">${total}</span></button>`;
+      })
+      .join("");
+  }
+
+  function formularioActivo(recurso, lista) {
+    return `
+      <form class="form-activo" data-id="${recurso.id}">
+        <label class="full">Nombre
+          <input type="text" name="nombre" value="${escapeHtml(recurso.nombre)}" required>
+        </label>
+        <label>Tipo
+          <select name="tipo">
+            <option value="equipo" ${recurso.tipo === "equipo" ? "selected" : ""}>Equipo</option>
+            <option value="espacio" ${recurso.tipo === "espacio" ? "selected" : ""}>Espacio</option>
+          </select>
+        </label>
+        <label>Categoría
+          <input type="text" name="categoria" value="${escapeHtml(recurso.categoria)}">
+        </label>
+        <label>Placa
+          <input type="text" name="placa" value="${escapeHtml(recurso.placa)}" placeholder="7-8 caracteres">
+        </label>
+        <label>Marca
+          <input type="text" name="marca" value="${escapeHtml(recurso.marca)}">
+        </label>
+        <label>Modelo
+          <input type="text" name="modelo" value="${escapeHtml(recurso.modelo)}">
+        </label>
+        <label>Identificador / serie
+          <input type="text" name="identificador" value="${escapeHtml(recurso.identificador)}">
+        </label>
+        <label>Ubicación
+          <input type="text" name="ubicacion" value="${escapeHtml(recurso.ubicacion)}">
+        </label>
+        <label class="full">Descripción
+          <textarea name="descripcion" rows="2">${escapeHtml(recurso.descripcion)}</textarea>
+        </label>
+        <label>Padre (activo del que depende)
+          <select name="padre_id">
+            <option value="">— Ninguno —</option>
+            ${opcionesPadre(recurso, lista)}
+          </select>
+        </label>
+        <label class="checkbox"><input type="checkbox" name="incluido_por_defecto" ${recurso.incluido_por_defecto ? "checked" : ""}> Incluido por defecto con su padre</label>
+        <label class="checkbox"><input type="checkbox" name="requiere_seguro" ${recurso.requiere_seguro ? "checked" : ""}> Requiere seguro</label>
+        <label>Estado
+          <select name="estado">${opcionesEstado(recurso.estado)}</select>
+        </label>
+        <p class="error-form" hidden></p>
+        <div class="acciones-form">
+          <button type="button" class="boton cancelar-edicion">Cancelar</button>
+          <button type="submit" class="boton primario">Guardar</button>
+        </div>
+      </form>`;
+  }
+
+  function formularioNuevoActivo() {
+    return `
+      <h3 style="margin-top:0">Nuevo activo</h3>
+      <form class="form-activo form-nuevo" data-tipo="equipo">
+        <label class="full">Nombre
+          <input type="text" name="nombre" required>
+        </label>
+        <label>Categoría
+          <input type="text" name="categoria" required>
+        </label>
+        <label>Placa
+          <input type="text" name="placa" placeholder="7-8 caracteres" required>
+        </label>
+        <label>Marca
+          <input type="text" name="marca">
+        </label>
+        <label>Modelo
+          <input type="text" name="modelo">
+        </label>
+        <label>Identificador / serie
+          <input type="text" name="identificador">
+        </label>
+        <label>Ubicación
+          <input type="text" name="ubicacion">
+        </label>
+        <label class="full">Descripción
+          <textarea name="descripcion" rows="2"></textarea>
+        </label>
+        <label class="full">¿Es hijo de otro activo?
+          <select name="padre_id">
+            <option value="">No, es un activo independiente (padre)</option>
+            ${opcionesPadreNuevo()}
+          </select>
+        </label>
+        <label class="checkbox"><input type="checkbox" name="incluido_por_defecto" checked> Si es hijo, ¿va incluido por defecto con su padre?</label>
+        <label class="checkbox"><input type="checkbox" name="requiere_seguro"> Requiere seguro</label>
+        <label>Estado
+          <select name="estado">${opcionesEstado("disponible")}</select>
+        </label>
+        <p class="error-form" hidden></p>
+        <div class="acciones-form">
+          <button type="button" class="boton cancelar-nuevo">Cancelar</button>
+          <button type="submit" class="boton primario">Crear activo</button>
+        </div>
+      </form>`;
+  }
+
+  function formularioNuevoLugar() {
+    return `
+      <h3 style="margin-top:0">Nuevo lugar</h3>
+      <form class="form-activo form-nuevo" data-tipo="espacio">
+        <label class="full">Nombre
+          <input type="text" name="nombre" required>
+        </label>
+        <label class="full">Ubicación
+          <input type="text" name="ubicacion">
+        </label>
+        <label class="full">Descripción
+          <textarea name="descripcion" rows="2"></textarea>
+        </label>
+        <label>Estado
+          <select name="estado">${opcionesEstado("disponible")}</select>
+        </label>
+        <p class="error-form" hidden></p>
+        <div class="acciones-form">
+          <button type="button" class="boton cancelar-nuevo">Cancelar</button>
+          <button type="submit" class="boton primario">Crear lugar</button>
+        </div>
+      </form>`;
+  }
+
+  function tarjetaActivo(recurso, lista, nivel) {
+    const hijos = hijosDe(recurso.id, lista);
+    const tieneHijos = hijos.length > 0;
+    const expandido = activosExpandidos.has(recurso.id);
+    const sangria = nivel * 1.25;
+    return `
+      <div class="card activo-card" style="margin-left:${sangria}rem" data-recurso-id="${recurso.id}">
+        <div class="cabecera">
+          <div class="cabecera-info">
+            ${tieneHijos ? `<button type="button" class="boton pequeno toggle-hijos" aria-expanded="${expandido}">${expandido ? "▾" : "▸"} ${hijos.length} hijo${hijos.length === 1 ? "" : "s"}</button>` : ""}
+            <strong>${escapeHtml(recurso.nombre)}</strong>
+            <span class="pill muted">${recurso.tipo === "equipo" ? "Equipo" : "Espacio"}</span>
+            ${recurso.categoria ? `<span class="pill muted">${escapeHtml(recurso.categoria)}</span>` : ""}
+            ${selectorEstado(recurso)}
+          </div>
+          <div class="cabecera-acciones">
+            <button type="button" class="boton pequeno editar-activo">Editar</button>
+          </div>
+        </div>
+        <p class="meta">
+          ${recurso.placa ? "Placa: " + escapeHtml(recurso.placa) + " · " : ""}
+          ${recurso.marca || recurso.modelo ? [recurso.marca, recurso.modelo].filter(Boolean).map(escapeHtml).join(" ") + " · " : ""}
+          ${recurso.ubicacion ? "Ubicación: " + escapeHtml(recurso.ubicacion) : ""}
+        </p>
+        <div class="contenedor-form" hidden></div>
+      </div>
+      ${tieneHijos ? `<div class="hijos-activo" ${expandido ? "" : "hidden"}>${hijos.map((h) => tarjetaActivo(h, lista, nivel + 1)).join("")}</div>` : ""}`;
+  }
+
+  function renderActivos() {
+    const cont = document.getElementById("activos-lista");
+    renderSubtabsActivos();
+
+    const equipos = equiposCache();
+    if (!equipos.length) {
+      cont.innerHTML = "<p>No hay equipos registrados.</p>";
+      return;
+    }
+
+    const grupos = gruposDisponibles(equipos);
+    if (subtabActiva !== GRUPO_TODOS && !grupos.includes(subtabActiva)) {
+      // La categoría guardada ya no existe en los datos actuales (se renombró o ya no hay activos con ella).
+      subtabActiva = GRUPO_TODOS;
+      renderSubtabsActivos();
+    }
+
+    if (subtabActiva === GRUPO_TODOS) {
+      const raiz = equipos.filter((r) => r.padre_id === null);
+      cont.innerHTML = raiz.map((r) => tarjetaActivo(r, equipos, 0)).join("");
+      return;
+    }
+
+    // Equipos que realmente pertenecen a esta categoría.
+    const directos = equipos.filter((r) => grupoDe(r) === subtabActiva);
+    if (!directos.length) {
+      cont.innerHTML = "<p>No hay activos en esta categoría.</p>";
+      return;
+    }
+    const idsDirectos = new Set(directos.map((r) => r.id));
+
+    // Un activo padre siempre arrastra a sus hijos, aunque esos hijos estén
+    // en otra categoría (ej. los lentes de una cámara aparecen bajo la
+    // cámara al ver "Cámara", aunque su propia categoría sea "Lente").
+    const visiblesMap = new Map(directos.map((r) => [r.id, r]));
+    directos.forEach((r) => {
+      descendientesDe(r.id, equipos).forEach((d) => visiblesMap.set(d.id, d));
+    });
+    const visibles = Array.from(visiblesMap.values());
+
+    // Raíz de este subconjunto: activos de la categoría sin padre, o cuyo
+    // padre no es (a su vez) de esta misma categoría — los hijos "prestados"
+    // de otras categorías nunca son raíz, solo se muestran anidados.
+    const raiz = directos.filter((r) => r.padre_id === null || !idsDirectos.has(r.padre_id));
+    cont.innerHTML = raiz.map((r) => tarjetaActivo(r, visibles, 0)).join("");
+  }
+
+  function renderLugares() {
+    const cont = document.getElementById("lugares-lista");
+    const espacios = espaciosCache();
+    if (!espacios.length) {
+      cont.innerHTML = "<p>No hay lugares registrados.</p>";
+      return;
+    }
+    const raiz = espacios.filter((r) => r.padre_id === null);
+    cont.innerHTML = raiz.map((r) => tarjetaActivo(r, espacios, 0)).join("");
+  }
+
+  async function cargarActivos() {
+    try {
+      const resp = await fetch("/dashboard/api/activos");
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      activosCache = await resp.json();
+      renderActivos();
+      renderLugares();
+    } catch (err) {
+      document.getElementById("activos-lista").innerHTML = "<p>No se pudieron cargar los activos.</p>";
+      document.getElementById("lugares-lista").innerHTML = "<p>No se pudieron cargar los lugares.</p>";
+    }
+  }
+
+  async function guardarActivo(id, cambios) {
+    const resp = await fetch(`/dashboard/api/activos/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cambios),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "No se pudo guardar.");
+    return data;
+  }
+
+  async function crearActivo(cambios) {
+    const resp = await fetch("/dashboard/api/activos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cambios),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "No se pudo crear.");
+    return data;
+  }
+
+  document.getElementById("btn-refrescar-activos").addEventListener("click", cargarActivos);
+  document.getElementById("btn-refrescar-lugares").addEventListener("click", cargarActivos);
+
+  function alternarFormularioNuevo(idContenedor, generarFormulario) {
+    const cont = document.getElementById(idContenedor);
+    const abierto = !cont.hidden;
+    cont.hidden = true;
+    cont.innerHTML = "";
+    if (!abierto) {
+      cont.innerHTML = generarFormulario();
+      cont.hidden = false;
+    }
+  }
+
+  document.getElementById("btn-nuevo-activo").addEventListener("click", () => {
+    alternarFormularioNuevo("activos-nuevo", formularioNuevoActivo);
+  });
+  document.getElementById("btn-nuevo-lugar").addEventListener("click", () => {
+    alternarFormularioNuevo("lugares-nuevo", formularioNuevoLugar);
+  });
+
+  async function manejarSubmitNuevo(ev) {
+    if (!ev.target.classList.contains("form-nuevo")) return;
+    ev.preventDefault();
+    const form = ev.target;
+    const tipo = form.dataset.tipo;
+    const errorEl = form.querySelector(".error-form");
+    errorEl.hidden = true;
+
+    const datos = new FormData(form);
+    const cambios = {
+      tipo,
+      nombre: datos.get("nombre"),
+      ubicacion: datos.get("ubicacion") || null,
+      descripcion: datos.get("descripcion") || null,
+      estado: datos.get("estado"),
+    };
+    if (tipo === "equipo") {
+      cambios.categoria = datos.get("categoria") || null;
+      cambios.placa = datos.get("placa") ? datos.get("placa").toUpperCase() : null;
+      cambios.marca = datos.get("marca") || null;
+      cambios.modelo = datos.get("modelo") || null;
+      cambios.identificador = datos.get("identificador") || null;
+      cambios.padre_id = datos.get("padre_id") ? Number(datos.get("padre_id")) : null;
+      cambios.incluido_por_defecto = form.querySelector('[name="incluido_por_defecto"]').checked;
+      cambios.requiere_seguro = form.querySelector('[name="requiere_seguro"]').checked;
+    }
+
+    const boton = form.querySelector('button[type="submit"]');
+    boton.disabled = true;
+    try {
+      const nuevo = await crearActivo(cambios);
+      // Si se creó como hijo de otro activo, lo desplegamos de una vez para
+      // que el usuario vea dónde quedó en el árbol, sin tener que buscarlo.
+      if (nuevo.padre_id) activosExpandidos.add(nuevo.padre_id);
+      const contenedor = form.parentElement;
+      contenedor.hidden = true;
+      contenedor.innerHTML = "";
+      await cargarActivos();
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.hidden = false;
+      boton.disabled = false;
+    }
+  }
+
+  document.getElementById("activos-nuevo").addEventListener("submit", manejarSubmitNuevo);
+  document.getElementById("lugares-nuevo").addEventListener("submit", manejarSubmitNuevo);
+
+  document.getElementById("activos-nuevo").addEventListener("click", (ev) => {
+    if (ev.target.classList.contains("cancelar-nuevo")) alternarFormularioNuevo("activos-nuevo", formularioNuevoActivo);
+  });
+  document.getElementById("lugares-nuevo").addEventListener("click", (ev) => {
+    if (ev.target.classList.contains("cancelar-nuevo")) alternarFormularioNuevo("lugares-nuevo", formularioNuevoLugar);
+  });
+
+  document.getElementById("activos-subtabs").addEventListener("click", (ev) => {
+    const boton = ev.target.closest(".subtab");
+    if (!boton) return;
+    subtabActiva = boton.dataset.grupo;
+    try { localStorage.setItem(SUBTAB_STORAGE_KEY, subtabActiva); } catch (err) { /* localStorage no disponible */ }
+    renderActivos();
+  });
+
+  async function manejarClickActivo(ev) {
+    const tarjeta = ev.target.closest(".activo-card");
+    if (!tarjeta) return;
+    const id = Number(tarjeta.dataset.recursoId);
+    const recurso = activosCache.find((r) => r.id === id);
+
+    if (ev.target.closest(".toggle-hijos")) {
+      if (activosExpandidos.has(id)) activosExpandidos.delete(id);
+      else activosExpandidos.add(id);
+      renderActivos();
+      return;
+    }
+
+    if (ev.target.classList.contains("editar-activo")) {
+      const contenedor = tarjeta.querySelector(".contenedor-form");
+      const abierto = !contenedor.hidden;
+      // Cierra cualquier otro formulario abierto para evitar ediciones a medias en paralelo.
+      document.querySelectorAll(".contenedor-form").forEach((c) => { c.hidden = true; c.innerHTML = ""; });
+      if (!abierto) {
+        contenedor.innerHTML = formularioActivo(recurso, activosCache);
+        contenedor.hidden = false;
+      }
+      return;
+    }
+
+    if (ev.target.classList.contains("cancelar-edicion")) {
+      const contenedor = tarjeta.querySelector(".contenedor-form");
+      contenedor.hidden = true;
+      contenedor.innerHTML = "";
+    }
+  }
+
+  document.getElementById("activos-lista").addEventListener("click", manejarClickActivo);
+  document.getElementById("lugares-lista").addEventListener("click", manejarClickActivo);
+
+  async function manejarChangeActivo(ev) {
+    if (!ev.target.classList.contains("selector-estado")) return;
+    const select = ev.target;
+    const tarjeta = select.closest(".activo-card");
+    const id = Number(tarjeta.dataset.recursoId);
+    const anterior = select.dataset.anterior;
+    select.disabled = true;
+    try {
+      await guardarActivo(id, { estado: select.value });
+      await cargarActivos();
+    } catch (err) {
+      select.value = anterior;
+      select.disabled = false;
+      alert(err.message);
+    }
+  }
+
+  document.getElementById("activos-lista").addEventListener("change", manejarChangeActivo);
+  document.getElementById("lugares-lista").addEventListener("change", manejarChangeActivo);
+
+  async function manejarSubmitActivo(ev) {
+    if (!ev.target.classList.contains("form-activo")) return;
+    ev.preventDefault();
+    const form = ev.target;
+    const id = Number(form.dataset.id);
+    const errorEl = form.querySelector(".error-form");
+    errorEl.hidden = true;
+
+    const datos = new FormData(form);
+    const cambios = {
+      tipo: datos.get("tipo"),
+      nombre: datos.get("nombre"),
+      categoria: datos.get("categoria") || null,
+      placa: datos.get("placa") ? datos.get("placa").toUpperCase() : null,
+      marca: datos.get("marca") || null,
+      modelo: datos.get("modelo") || null,
+      identificador: datos.get("identificador") || null,
+      ubicacion: datos.get("ubicacion") || null,
+      descripcion: datos.get("descripcion") || null,
+      padre_id: datos.get("padre_id") ? Number(datos.get("padre_id")) : null,
+      incluido_por_defecto: form.querySelector('[name="incluido_por_defecto"]').checked,
+      requiere_seguro: form.querySelector('[name="requiere_seguro"]').checked,
+      estado: datos.get("estado"),
+    };
+
+    const boton = form.querySelector('button[type="submit"]');
+    boton.disabled = true;
+    try {
+      await guardarActivo(id, cambios);
+      await cargarActivos();
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.hidden = false;
+      boton.disabled = false;
+    }
+  }
+
+  document.getElementById("activos-lista").addEventListener("submit", manejarSubmitActivo);
+  document.getElementById("lugares-lista").addEventListener("submit", manejarSubmitActivo);
+
   cargarServicios();
   cargarQr();
   cargarMetricas();
+
+  let tabInicial = "servicios";
+  try {
+    const guardada = localStorage.getItem(TAB_STORAGE_KEY);
+    if (guardada && document.getElementById(guardada)) tabInicial = guardada;
+  } catch (err) { /* localStorage no disponible */ }
+  activarTab(tabInicial);
 
   setInterval(cargarServicios, 10000);
   setInterval(cargarQr, 5000);

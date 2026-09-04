@@ -15,10 +15,11 @@ import qrcode
 import requests
 from flask import Blueprint, Response, current_app, jsonify, render_template, request
 from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 
 from app import estado_bot
 from app.extensions import db, redis_client
-from app.models import AuditoriaBot, Reserva
+from app.models import AuditoriaBot, Recurso, Reserva
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 
@@ -184,3 +185,167 @@ def api_metricas():
             ],
         }
     )
+
+
+# --- Activos (equipos/espacios) y sus relaciones padre/hijo -----------------
+
+# Campos que el panel de Activos puede modificar. No incluye `id` ni
+# `creado_en`. `tipo` se puede editar pero sigue sujeto al CHECK de Postgres
+# (equipo|espacio) y a las constraints de placa/categoría requeridas.
+_CAMPOS_EDITABLES_ACTIVO = {
+    "tipo",
+    "nombre",
+    "descripcion",
+    "ubicacion",
+    "placa",
+    "categoria",
+    "marca",
+    "modelo",
+    "identificador",
+    "requiere_seguro",
+    "estado",
+    "padre_id",
+    "incluido_por_defecto",
+}
+
+# Debe coincidir con el CHECK `recursos_estado_valido` de
+# postgres/init/02-schema.sql. Solo 'disponible' es reservable (ver
+# recursos_service.ESTADO_DISPONIBLE) -- 'en_mantenimiento' y
+# 'no_disponible' quedan fuera del catálogo que ve el bot.
+_ESTADOS_VALIDOS = {"disponible", "en_mantenimiento", "no_disponible"}
+
+# Traduce violaciones de constraints de Postgres (ver postgres/init/02-schema.sql)
+# a mensajes legibles, en vez de exponer el error crudo de asyncpg/psycopg.
+_MENSAJES_INTEGRIDAD = {
+    "recursos_placa_formato": "La placa debe tener 7-8 caracteres alfanuméricos en mayúsculas.",
+    "recursos_placa_requerida_equipo": "Los equipos requieren una placa.",
+    "recursos_categoria_requerida_equipo": "Los equipos requieren una categoría.",
+    "recursos_padre_no_self": "Un activo no puede ser su propio padre.",
+    "idx_recursos_placa_unica": "Ya existe otro activo con esa placa.",
+    "recursos_tipo_check": "El tipo debe ser 'equipo' o 'espacio'.",
+    "recursos_estado_valido": "El estado debe ser 'disponible', 'en_mantenimiento' o 'no_disponible'.",
+}
+
+
+def _mensaje_integridad(exc: IntegrityError) -> str:
+    detalle = str(exc.orig)
+    for clave, texto in _MENSAJES_INTEGRIDAD.items():
+        if clave in detalle:
+            return texto
+    return "No se pudo guardar: revisa los datos ingresados."
+
+
+def _serializar_recurso(r: Recurso) -> dict:
+    return {
+        "id": r.id,
+        "tipo": r.tipo,
+        "nombre": r.nombre,
+        "descripcion": r.descripcion,
+        "ubicacion": r.ubicacion,
+        "placa": r.placa,
+        "padre_id": r.padre_id,
+        "incluido_por_defecto": r.incluido_por_defecto,
+        "categoria": r.categoria,
+        "marca": r.marca,
+        "modelo": r.modelo,
+        "identificador": r.identificador,
+        "requiere_seguro": r.requiere_seguro,
+        "estado": r.estado,
+        "creado_en": r.creado_en.isoformat() if r.creado_en else None,
+    }
+
+
+@bp.route("/api/activos")
+def api_activos():
+    recursos = Recurso.query.order_by(Recurso.nombre).all()
+    return jsonify([_serializar_recurso(r) for r in recursos])
+
+
+@bp.route("/api/activos", methods=["POST"])
+def api_crear_activo():
+    datos = request.get_json(silent=True) or {}
+
+    campos_desconocidos = set(datos) - _CAMPOS_EDITABLES_ACTIVO
+    if campos_desconocidos:
+        return jsonify({"error": f"Campos no editables: {', '.join(sorted(campos_desconocidos))}"}), 400
+
+    if not datos.get("tipo"):
+        return jsonify({"error": "El tipo es obligatorio (equipo o espacio)."}), 400
+    if not datos.get("nombre"):
+        return jsonify({"error": "El nombre es obligatorio."}), 400
+
+    estado = datos.get("estado") or "disponible"
+    if estado not in _ESTADOS_VALIDOS:
+        return jsonify({"error": _MENSAJES_INTEGRIDAD["recursos_estado_valido"]}), 400
+
+    padre_id = datos.get("padre_id")
+    if padre_id is not None and Recurso.query.get(padre_id) is None:
+        # No hace falta chequear ciclos aquí: un recurso recién creado no
+        # tiene descendientes todavía, así que no puede formar uno.
+        return jsonify({"error": "El padre indicado no existe."}), 400
+
+    recurso = Recurso(
+        tipo=datos.get("tipo"),
+        nombre=datos.get("nombre"),
+        descripcion=datos.get("descripcion"),
+        ubicacion=datos.get("ubicacion"),
+        placa=datos.get("placa"),
+        categoria=datos.get("categoria"),
+        marca=datos.get("marca"),
+        modelo=datos.get("modelo"),
+        identificador=datos.get("identificador"),
+        requiere_seguro=bool(datos.get("requiere_seguro", False)),
+        estado=estado,
+        padre_id=padre_id,
+        incluido_por_defecto=bool(datos.get("incluido_por_defecto", True)),
+    )
+    db.session.add(recurso)
+
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        return jsonify({"error": _mensaje_integridad(exc)}), 400
+
+    return jsonify(_serializar_recurso(recurso)), 201
+
+
+@bp.route("/api/activos/<int:recurso_id>", methods=["PATCH"])
+def api_actualizar_activo(recurso_id):
+    recurso = Recurso.query.get_or_404(recurso_id)
+    datos = request.get_json(silent=True) or {}
+
+    campos_desconocidos = set(datos) - _CAMPOS_EDITABLES_ACTIVO
+    if campos_desconocidos:
+        return jsonify({"error": f"Campos no editables: {', '.join(sorted(campos_desconocidos))}"}), 400
+
+    if "estado" in datos and datos["estado"] not in _ESTADOS_VALIDOS:
+        return jsonify({"error": _MENSAJES_INTEGRIDAD["recursos_estado_valido"]}), 400
+
+    if "padre_id" in datos:
+        nuevo_padre_id = datos["padre_id"]
+        if nuevo_padre_id is not None and nuevo_padre_id != recurso.padre_id:
+            if nuevo_padre_id == recurso.id:
+                return jsonify({"error": "Un activo no puede ser su propio padre."}), 400
+            padre = Recurso.query.get(nuevo_padre_id)
+            if padre is None:
+                return jsonify({"error": "El padre indicado no existe."}), 400
+            # Evita ciclos: si recurso.id aparece en la cadena de padres del
+            # nuevo padre, ese nuevo padre es en realidad descendiente de
+            # recurso, y asignarlo lo convertiría en un ciclo.
+            actual = padre
+            while actual is not None:
+                if actual.id == recurso.id:
+                    return jsonify({"error": "Esa relación crearía un ciclo entre activos."}), 400
+                actual = actual.padre
+
+    for campo, valor in datos.items():
+        setattr(recurso, campo, valor)
+
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        return jsonify({"error": _mensaje_integridad(exc)}), 400
+
+    return jsonify(_serializar_recurso(recurso))

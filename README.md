@@ -66,7 +66,8 @@ curl http://localhost:5000/webhook/qr
 
 ## 5. Dashboard interno de monitoreo
 
-En `http://localhost:5000/dashboard` tienes un panel con tres pestañas:
+En `http://localhost:5000/dashboard` tienes un panel con cinco pestañas
+(la pestaña activa se recuerda entre recargas, vía `localStorage`):
 
 - **Servicios**: estado en vivo de Postgres, Redis, Baileys/WhatsApp, el LLM
   local y el propio Flask (se refresca solo cada 10s).
@@ -74,6 +75,26 @@ En `http://localhost:5000/dashboard` tienes un panel con tres pestañas:
   conectado, o el número vinculado una vez lo esté.
 - **Métricas**: reservas y mensajes bloqueados por guardrails en los
   últimos 30 días, y las últimas interacciones registradas en `auditoria_bot`.
+- **Activos**: equipos (`tipo='equipo'`) agrupados en subpestañas por
+  categoría, con su árbol de relaciones padre/hijo (ej. una cámara y sus
+  lentes -- los hijos se pueden desplegar/colapsar por tarjeta). Permite
+  editar cualquier dato del activo, cambiar su estado (Disponible / En
+  mantenimiento / No disponible) desde un selector en la propia tarjeta sin
+  abrir el formulario completo, y reasignar su padre (la UI no deja elegir
+  un descendiente propio, para no crear un ciclo). Solo los activos
+  "Disponible" entran al catálogo que ofrece el bot por WhatsApp. El botón
+  "+ Agregar activo" crea uno nuevo, decidiendo ahí mismo si es un activo
+  independiente (padre) o un hijo de otro equipo ya existente. No se
+  auto-refresca -- botón "Refrescar" manual, para no perder una edición a
+  medio hacer.
+- **Lugares**: espacios reservables (`tipo='espacio'`, ej. salas/estudios),
+  misma tarjeta editable que Activos (más su propio botón "+ Agregar
+  lugar") pero sin agrupación por categoría ni relación padre/hijo.
+
+Estas dos últimas comparten los endpoints `GET/POST /dashboard/api/activos`
+y `PATCH /dashboard/api/activos/<id>` (ver
+`flask-app/app/routes/dashboard.py`), protegidos por la misma autenticación
+básica del resto del dashboard.
 
 Está protegido con autenticación básica (`DASHBOARD_USER` /
 `DASHBOARD_PASSWORD` en `.env` — genera una contraseña real, no dejes el

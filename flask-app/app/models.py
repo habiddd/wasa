@@ -45,7 +45,12 @@ class Recurso(db.Model):
     modelo = db.Column(db.String(100))
     identificador = db.Column(db.String(100))             # número de serie o IMEI, si lo tiene
     requiere_seguro = db.Column(db.Boolean, nullable=False, default=False)
-    activo = db.Column(db.Boolean, nullable=False, default=True)
+    # 'disponible' | 'en_mantenimiento' | 'no_disponible' -- estado de
+    # inventario que fija quien administra desde el dashboard, distinto del
+    # estado de agenda que calcula recursos_service._estado_recurso() a
+    # partir de las reservas. Antes era un BOOLEAN `activo` simple -- ver
+    # migración en postgres/init/02-schema.sql.
+    estado = db.Column(db.String(20), nullable=False, default="disponible")
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
     padre = db.relationship("Recurso", remote_side=[id], backref="hijos")

@@ -19,6 +19,10 @@ from app.textutils import normalizar as _normalizar
 
 LONGITUD_MINIMA_PALABRA_CLAVE = 4
 ZONA_HORARIA_CPA = ZoneInfo("America/Bogota")
+# Único estado de `recursos.estado` que se puede reservar -- 'en_mantenimiento'
+# y 'no_disponible' quedan fuera del catálogo que ve el bot, igual que antes
+# se hacía con `activo=False` (ver models.py y postgres/init/02-schema.sql).
+ESTADO_DISPONIBLE = "disponible"
 MARGEN_INICIO_PASADO = timedelta(minutes=5)
 
 
@@ -89,7 +93,7 @@ def _grupos_activos() -> list[tuple[str, Recurso]]:
     recursos activos, ordenados por tipo y nombre. Varias filas de
     `recursos` pueden compartir nombre/marca/modelo (una por placa) --
     esto colapsa esas filas a una sola entrada por modelo."""
-    recursos = Recurso.query.filter_by(activo=True).order_by(Recurso.tipo, Recurso.nombre, Recurso.id).all()
+    recursos = Recurso.query.filter_by(estado=ESTADO_DISPONIBLE).order_by(Recurso.tipo, Recurso.nombre, Recurso.id).all()
     vistos: dict[str, Recurso] = {}
     orden: list[str] = []
     for r in recursos:
@@ -104,7 +108,7 @@ def _grupo(nombre: str) -> list[Recurso]:
     normalmente distinta placa). Son intercambiables para efectos de
     reserva -- al usuario
     le basta con pedir el modelo, no la placa específica."""
-    return Recurso.query.filter_by(activo=True, nombre=nombre).order_by(Recurso.id).all()
+    return Recurso.query.filter_by(estado=ESTADO_DISPONIBLE, nombre=nombre).order_by(Recurso.id).all()
 
 
 def _accesorios_por_defecto(nombre_padre: str) -> list[str]:
@@ -117,7 +121,7 @@ def _accesorios_por_defecto(nombre_padre: str) -> list[str]:
     if not ids_padres:
         return []
     hijos = (
-        Recurso.query.filter_by(activo=True, incluido_por_defecto=True)
+        Recurso.query.filter_by(estado=ESTADO_DISPONIBLE, incluido_por_defecto=True)
         .filter(Recurso.padre_id.in_(ids_padres))
         .order_by(Recurso.id)
         .all()
@@ -373,7 +377,7 @@ def _resolver_recurso_para_reserva(
     # de dónde sacar esa información y aun así "elegía" uno.
     if nombre_llm and not candidatos:
         candidato_llm = next(
-            (r for r in Recurso.query.filter_by(activo=True).all() if r.nombre.strip().lower() == nombre_llm),
+            (r for r in Recurso.query.filter_by(estado=ESTADO_DISPONIBLE).all() if r.nombre.strip().lower() == nombre_llm),
             None,
         )
         # El prompt le pide al LLM "recurso: null si el mensaje no lo
