@@ -31,15 +31,11 @@ class Recurso(db.Model):
     # Inventario físico -- solo aplica a tipo='equipo' (ver constraints
     # recursos_placa_formato / recursos_placa_requerida_equipo en
     # postgres/init/02-schema.sql). Un 'espacio' los deja en NULL.
-    placa = db.Column(db.String(10), unique=True)         # placa/inventario: 7-8 caracteres alfanuméricos
+    placa = db.Column(db.String(10), unique=True)         # placa/inventario: padre 8 dígitos numéricos, hijo (padre_id no NULL) 7-10 caracteres alfanuméricos
     # FK al equipo principal cuando este recurso es un accesorio/hijo que
     # viene en bundle con otro equipo (ej. los lentes de una cámara). NULL
     # si el equipo no es hijo de otro.
     padre_id = db.Column(db.Integer, db.ForeignKey("recursos.id"))
-    # Solo tiene sentido cuando padre_id no es None: si este hijo se agrega
-    # automáticamente a la reserva del padre (ej. los lentes que siempre van
-    # con la cámara) o si hay que pedirlo aparte.
-    incluido_por_defecto = db.Column(db.Boolean, nullable=False, default=True)
     categoria = db.Column(db.String(50))                  # 'camara' | 'celular' | 'dron' | ... (texto libre)
     marca = db.Column(db.String(100))
     modelo = db.Column(db.String(100))

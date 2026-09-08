@@ -65,12 +65,12 @@ def seed_recursos_cmd():
         Recurso(
             tipo="equipo", nombre="Lente Sony 24-70mm f/2.8", descripcion="Zoom estándar",
             placa="LEN0022", categoria="lente", marca="Sony", modelo="FE 24-70mm f/2.8 GM",
-            padre_id=camara_sony.id, incluido_por_defecto=True,
+            padre_id=camara_sony.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Sony 70-200mm f/2.8", descripcion="Zoom telefoto",
             placa="LEN0023", categoria="lente", marca="Sony", modelo="FE 70-200mm f/2.8 GM",
-            padre_id=camara_sony.id, incluido_por_defecto=True,
+            padre_id=camara_sony.id,
         ),
     ]
     db.session.add_all(lentes_sony)
@@ -86,27 +86,27 @@ def seed_recursos_cmd():
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 24-105mm f/4L", descripcion="Zoom estándar",
             placa="LEN0024", categoria="lente", marca="Canon", modelo="RF 24-105mm f/4L",
-            padre_id=camara_canon_r.id, incluido_por_defecto=True,
+            padre_id=camara_canon_r.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 50mm f/1.2L", descripcion="Fijo retrato",
             placa="LEN0025", categoria="lente", marca="Canon", modelo="RF 50mm f/1.2L",
-            padre_id=camara_canon_r.id, incluido_por_defecto=True,
+            padre_id=camara_canon_r.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 16-35mm f/2.8L", descripcion="Gran angular",
             placa="LEN0026", categoria="lente", marca="Canon", modelo="RF 16-35mm f/2.8L",
-            padre_id=camara_canon_r6.id, incluido_por_defecto=True,
+            padre_id=camara_canon_r6.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 70-200mm f/2.8L", descripcion="Zoom telefoto",
             placa="LEN0027", categoria="lente", marca="Canon", modelo="RF 70-200mm f/2.8L",
-            padre_id=camara_canon_r6.id, incluido_por_defecto=True,
+            padre_id=camara_canon_r6.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 100-500mm f/4.5-7.1L", descripcion="Supertelefoto",
             placa="LEN0028", categoria="lente", marca="Canon", modelo="RF 100-500mm f/4.5-7.1L",
-            padre_id=camara_canon_r6.id, incluido_por_defecto=True,
+            padre_id=camara_canon_r6.id,
         ),
     ]
     db.session.add_all(lentes_canon)

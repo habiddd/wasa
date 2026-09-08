@@ -66,7 +66,7 @@ curl http://localhost:5000/webhook/qr
 
 ## 5. Dashboard interno de monitoreo
 
-En `http://localhost:5000/dashboard` tienes un panel con cinco pestañas
+En `http://localhost:5000/dashboard` tienes un panel con seis pestañas
 (la pestaña activa se recuerda entre recargas, vía `localStorage`):
 
 - **Servicios**: estado en vivo de Postgres, Redis, Baileys/WhatsApp, el LLM
@@ -75,6 +75,12 @@ En `http://localhost:5000/dashboard` tienes un panel con cinco pestañas
   conectado, o el número vinculado una vez lo esté.
 - **Métricas**: reservas y mensajes bloqueados por guardrails en los
   últimos 30 días, y las últimas interacciones registradas en `auditoria_bot`.
+- **Usuarios**: lista los usuarios que completaron el registro por WhatsApp
+  (`registro_completo=True` -- deja afuera contactos a medio registrar y el
+  usuario dummy de `seed.py`). Botón "Editar" por fila para cambiar nombre,
+  teléfono, código Uninorte, cédula, rol (estudiante/staff/admin) y si está
+  activo, vía `GET/PATCH /dashboard/api/usuarios[/<id>]`. Se refresca sola
+  cada 30s, más el botón "Refrescar" manual.
 - **Activos**: equipos (`tipo='equipo'`) agrupados en subpestañas por
   categoría, con su árbol de relaciones padre/hijo (ej. una cámara y sus
   lentes -- los hijos se pueden desplegar/colapsar por tarjeta). Permite

@@ -113,15 +113,17 @@ def _grupo(nombre: str) -> list[Recurso]:
 
 def _accesorios_por_defecto(nombre_padre: str) -> list[str]:
     """Nombres (modelo) de los accesorios que se agregan automáticamente al
-    reservar `nombre_padre` -- hijos activos con `incluido_por_defecto=True`
-    de cualquier unidad del grupo (no de una placa específica: el wizard ya
-    trata todo por modelo y solo baja a una unidad concreta al crear la
-    reserva, ver `_unidad_libre_en_rango`). Deduplicado por nombre."""
+    reservar `nombre_padre` -- todo hijo activo (de cualquier unidad del
+    grupo, no de una placa específica: el wizard ya trata todo por modelo y
+    solo baja a una unidad concreta al crear la reserva, ver
+    `_unidad_libre_en_rango`) va incluido por defecto; el usuario lo quita de
+    la selección si no lo quiere (ver paso "confirmar_accesorios" en
+    `_avanzar_wizard`). Deduplicado por nombre."""
     ids_padres = [u.id for u in _grupo(nombre_padre)]
     if not ids_padres:
         return []
     hijos = (
-        Recurso.query.filter_by(estado=ESTADO_DISPONIBLE, incluido_por_defecto=True)
+        Recurso.query.filter_by(estado=ESTADO_DISPONIBLE)
         .filter(Recurso.padre_id.in_(ids_padres))
         .order_by(Recurso.id)
         .all()

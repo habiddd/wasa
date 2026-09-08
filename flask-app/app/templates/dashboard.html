@@ -178,6 +178,7 @@
   <button data-tab="servicios" class="activo">Servicios</button>
   <button data-tab="qr">QR / WhatsApp</button>
   <button data-tab="metricas">Métricas</button>
+  <button data-tab="usuarios">Usuarios</button>
   <button data-tab="activos">Activos</button>
   <button data-tab="lugares">Lugares</button>
 </nav>
@@ -209,6 +210,21 @@
         <tr><th>Fecha</th><th>Teléfono</th><th>Intent</th><th>Permitido</th><th>Motivo bloqueo</th><th>Entrega</th></tr>
       </thead>
       <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="usuarios" class="panel">
+    <h2 class="titulo-panel">
+      Usuarios registrados
+      <span>
+        <button class="boton pequeno" id="btn-refrescar-usuarios">Refrescar</button>
+      </span>
+    </h2>
+    <table id="tabla-usuarios">
+      <thead>
+        <tr><th>Nombre</th><th>Teléfono</th><th>Código Uninorte</th><th>Cédula</th><th>Rol</th><th>Activo</th><th>Registrado</th><th></th></tr>
+      </thead>
+      <tbody><tr><td colspan="8">Cargando…</td></tr></tbody>
     </table>
   </section>
 
@@ -365,6 +381,140 @@
     }
   }
 
+  let usuariosCache = [];
+  const ROLES_USUARIO = ["estudiante", "staff", "admin"];
+
+  function filaUsuario(u) {
+    return `
+      <tr data-id="${u.id}">
+        <td>${escapeHtml(u.nombre) || "-"}</td>
+        <td>${escapeHtml(u.telefono_wa)}</td>
+        <td>${escapeHtml(u.codigo_uninorte) || "-"}</td>
+        <td>${escapeHtml(u.cedula) || "-"}</td>
+        <td>${escapeHtml(u.rol)}</td>
+        <td>${u.activo ? "sí" : "no"}</td>
+        <td>${u.creado_en ? new Date(u.creado_en).toLocaleString() : "-"}</td>
+        <td><button type="button" class="boton pequeno editar-usuario">Editar</button></td>
+      </tr>
+      <tr class="fila-form-usuario" data-id-form="${u.id}" hidden><td colspan="8"></td></tr>`;
+  }
+
+  function formularioUsuario(u) {
+    return `
+      <form class="form-activo form-usuario" data-id="${u.id}">
+        <label>Nombre
+          <input type="text" name="nombre" value="${escapeHtml(u.nombre)}">
+        </label>
+        <label>Teléfono
+          <input type="text" name="telefono_wa" value="${escapeHtml(u.telefono_wa)}" required>
+        </label>
+        <label>Código Uninorte
+          <input type="text" name="codigo_uninorte" value="${escapeHtml(u.codigo_uninorte)}">
+        </label>
+        <label>Cédula
+          <input type="text" name="cedula" value="${escapeHtml(u.cedula)}">
+        </label>
+        <label>Rol
+          <select name="rol">
+            ${ROLES_USUARIO.map((r) => `<option value="${r}" ${u.rol === r ? "selected" : ""}>${r}</option>`).join("")}
+          </select>
+        </label>
+        <label class="checkbox"><input type="checkbox" name="activo" ${u.activo ? "checked" : ""}> Activo</label>
+        <p class="error-form" hidden></p>
+        <div class="acciones-form">
+          <button type="button" class="boton cancelar-edicion-usuario">Cancelar</button>
+          <button type="submit" class="boton primario">Guardar</button>
+        </div>
+      </form>`;
+  }
+
+  async function cargarUsuarios() {
+    try {
+      const resp = await fetch("/dashboard/api/usuarios");
+      const data = await resp.json();
+      usuariosCache = data;
+      const tbody = document.querySelector("#tabla-usuarios tbody");
+      if (!data.length) {
+        tbody.innerHTML = "<tr><td colspan=\"8\">No hay usuarios registrados.</td></tr>";
+        return;
+      }
+      tbody.innerHTML = data.map(filaUsuario).join("");
+    } catch (err) {
+      document.querySelector("#tabla-usuarios tbody").innerHTML =
+        "<tr><td colspan=\"8\">No se pudieron cargar los usuarios.</td></tr>";
+    }
+  }
+
+  document.getElementById("btn-refrescar-usuarios").addEventListener("click", cargarUsuarios);
+
+  async function guardarUsuario(id, cambios) {
+    const resp = await fetch(`/dashboard/api/usuarios/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cambios),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "No se pudo guardar.");
+    return data;
+  }
+
+  function cerrarFormularioUsuario(id) {
+    const filaForm = document.querySelector(`.fila-form-usuario[data-id-form="${id}"]`);
+    filaForm.hidden = true;
+    filaForm.querySelector("td").innerHTML = "";
+  }
+
+  document.querySelector("#tabla-usuarios tbody").addEventListener("click", (ev) => {
+    if (ev.target.classList.contains("editar-usuario")) {
+      const fila = ev.target.closest("tr");
+      const id = Number(fila.dataset.id);
+      const usuario = usuariosCache.find((u) => u.id === id);
+      const filaForm = document.querySelector(`.fila-form-usuario[data-id-form="${id}"]`);
+      const abierto = !filaForm.hidden;
+      // Cierra cualquier otro formulario abierto para evitar ediciones a medias en paralelo.
+      document.querySelectorAll(".fila-form-usuario").forEach((f) => { f.hidden = true; f.querySelector("td").innerHTML = ""; });
+      if (!abierto) {
+        filaForm.querySelector("td").innerHTML = formularioUsuario(usuario);
+        filaForm.hidden = false;
+      }
+      return;
+    }
+    if (ev.target.classList.contains("cancelar-edicion-usuario")) {
+      const id = Number(ev.target.closest("form").dataset.id);
+      cerrarFormularioUsuario(id);
+    }
+  });
+
+  document.querySelector("#tabla-usuarios tbody").addEventListener("submit", async (ev) => {
+    if (!ev.target.classList.contains("form-usuario")) return;
+    ev.preventDefault();
+    const form = ev.target;
+    const id = Number(form.dataset.id);
+    const errorEl = form.querySelector(".error-form");
+    errorEl.hidden = true;
+
+    const datos = new FormData(form);
+    const cambios = {
+      nombre: datos.get("nombre") || null,
+      telefono_wa: datos.get("telefono_wa"),
+      codigo_uninorte: datos.get("codigo_uninorte") || null,
+      cedula: datos.get("cedula") || null,
+      rol: datos.get("rol"),
+      activo: form.querySelector('[name="activo"]').checked,
+    };
+
+    const boton = form.querySelector('button[type="submit"]');
+    boton.disabled = true;
+    try {
+      await guardarUsuario(id, cambios);
+      await cargarUsuarios();
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.hidden = false;
+      boton.disabled = false;
+    }
+  });
+
   // --- Activos: árbol de padres/hijos, edición de datos/estado/relaciones ---
 
   let activosCache = [];
@@ -493,7 +643,7 @@
           <input type="text" name="categoria" value="${escapeHtml(recurso.categoria)}">
         </label>
         <label>Placa
-          <input type="text" name="placa" value="${escapeHtml(recurso.placa)}" placeholder="7-8 caracteres">
+          <input type="text" name="placa" value="${escapeHtml(recurso.placa)}" placeholder="Padre: 8 dígitos · Hijo: 7-10 caracteres">
         </label>
         <label>Marca
           <input type="text" name="marca" value="${escapeHtml(recurso.marca)}">
@@ -516,7 +666,6 @@
             ${opcionesPadre(recurso, lista)}
           </select>
         </label>
-        <label class="checkbox"><input type="checkbox" name="incluido_por_defecto" ${recurso.incluido_por_defecto ? "checked" : ""}> Incluido por defecto con su padre</label>
         <label class="checkbox"><input type="checkbox" name="requiere_seguro" ${recurso.requiere_seguro ? "checked" : ""}> Requiere seguro</label>
         <label>Estado
           <select name="estado">${opcionesEstado(recurso.estado)}</select>
@@ -540,7 +689,7 @@
           <input type="text" name="categoria" required>
         </label>
         <label>Placa
-          <input type="text" name="placa" placeholder="7-8 caracteres" required>
+          <input type="text" name="placa" placeholder="Padre: 8 dígitos · Hijo: 7-10 caracteres" required>
         </label>
         <label>Marca
           <input type="text" name="marca">
@@ -563,7 +712,6 @@
             ${opcionesPadreNuevo()}
           </select>
         </label>
-        <label class="checkbox"><input type="checkbox" name="incluido_por_defecto" checked> Si es hijo, ¿va incluido por defecto con su padre?</label>
         <label class="checkbox"><input type="checkbox" name="requiere_seguro"> Requiere seguro</label>
         <label>Estado
           <select name="estado">${opcionesEstado("disponible")}</select>
@@ -766,7 +914,6 @@
       cambios.modelo = datos.get("modelo") || null;
       cambios.identificador = datos.get("identificador") || null;
       cambios.padre_id = datos.get("padre_id") ? Number(datos.get("padre_id")) : null;
-      cambios.incluido_por_defecto = form.querySelector('[name="incluido_por_defecto"]').checked;
       cambios.requiere_seguro = form.querySelector('[name="requiere_seguro"]').checked;
     }
 
@@ -881,7 +1028,6 @@
       ubicacion: datos.get("ubicacion") || null,
       descripcion: datos.get("descripcion") || null,
       padre_id: datos.get("padre_id") ? Number(datos.get("padre_id")) : null,
-      incluido_por_defecto: form.querySelector('[name="incluido_por_defecto"]').checked,
       requiere_seguro: form.querySelector('[name="requiere_seguro"]').checked,
       estado: datos.get("estado"),
     };
@@ -904,6 +1050,7 @@
   cargarServicios();
   cargarQr();
   cargarMetricas();
+  cargarUsuarios();
 
   let tabInicial = "servicios";
   try {
@@ -915,6 +1062,7 @@
   setInterval(cargarServicios, 10000);
   setInterval(cargarQr, 5000);
   setInterval(cargarMetricas, 30000);
+  setInterval(cargarUsuarios, 30000);
 })();
 </script>
 

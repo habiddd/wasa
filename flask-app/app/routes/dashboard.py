@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app import estado_bot
 from app.extensions import db, redis_client
-from app.models import AuditoriaBot, Recurso, Reserva
+from app.models import AuditoriaBot, Recurso, Reserva, Usuario
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 
@@ -187,6 +187,75 @@ def api_metricas():
     )
 
 
+# Campos que el panel de Usuarios puede modificar. No incluye `id`,
+# `registro_completo` ni `creado_en` -- el registro se completa vía el flujo
+# de WhatsApp (ver registro_service.py), no desde el dashboard.
+_CAMPOS_EDITABLES_USUARIO = {
+    "nombre",
+    "telefono_wa",
+    "codigo_uninorte",
+    "cedula",
+    "rol",
+    "activo",
+}
+
+# Ver comentario de Usuario.rol en postgres/init/02-schema.sql.
+_ROLES_VALIDOS = {"estudiante", "staff", "admin"}
+
+
+def _serializar_usuario(u: Usuario) -> dict:
+    return {
+        "id": u.id,
+        "nombre": u.nombre,
+        "telefono_wa": u.telefono_wa,
+        "codigo_uninorte": u.codigo_uninorte,
+        "cedula": u.cedula,
+        "rol": u.rol,
+        "activo": u.activo,
+        "creado_en": u.creado_en.isoformat() if u.creado_en else None,
+    }
+
+
+@bp.route("/api/usuarios")
+def api_usuarios():
+    # Solo usuarios que terminaron el flujo de registro por WhatsApp -- deja
+    # afuera contactos a medio registrar y el usuario dummy de seed.py
+    # (registro_completo=False), que no es un registro real del bot.
+    usuarios = (
+        Usuario.query.filter_by(registro_completo=True)
+        .order_by(Usuario.creado_en.desc())
+        .all()
+    )
+    return jsonify([_serializar_usuario(u) for u in usuarios])
+
+
+@bp.route("/api/usuarios/<int:usuario_id>", methods=["PATCH"])
+def api_actualizar_usuario(usuario_id):
+    usuario = Usuario.query.get_or_404(usuario_id)
+    datos = request.get_json(silent=True) or {}
+
+    campos_desconocidos = set(datos) - _CAMPOS_EDITABLES_USUARIO
+    if campos_desconocidos:
+        return jsonify({"error": f"Campos no editables: {', '.join(sorted(campos_desconocidos))}"}), 400
+
+    if "rol" in datos and datos["rol"] not in _ROLES_VALIDOS:
+        return jsonify({"error": f"El rol debe ser uno de: {', '.join(sorted(_ROLES_VALIDOS))}."}), 400
+
+    if "telefono_wa" in datos and not datos["telefono_wa"]:
+        return jsonify({"error": "El teléfono no puede quedar vacío."}), 400
+
+    for campo, valor in datos.items():
+        setattr(usuario, campo, valor)
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "Ya existe otro usuario con ese teléfono."}), 400
+
+    return jsonify(_serializar_usuario(usuario))
+
+
 # --- Activos (equipos/espacios) y sus relaciones padre/hijo -----------------
 
 # Campos que el panel de Activos puede modificar. No incluye `id` ni
@@ -205,7 +274,6 @@ _CAMPOS_EDITABLES_ACTIVO = {
     "requiere_seguro",
     "estado",
     "padre_id",
-    "incluido_por_defecto",
 }
 
 # Debe coincidir con el CHECK `recursos_estado_valido` de
@@ -217,7 +285,7 @@ _ESTADOS_VALIDOS = {"disponible", "en_mantenimiento", "no_disponible"}
 # Traduce violaciones de constraints de Postgres (ver postgres/init/02-schema.sql)
 # a mensajes legibles, en vez de exponer el error crudo de asyncpg/psycopg.
 _MENSAJES_INTEGRIDAD = {
-    "recursos_placa_formato": "La placa debe tener 7-8 caracteres alfanuméricos en mayúsculas.",
+    "recursos_placa_formato": "La placa de un padre debe ser 8 dígitos numéricos; la de un hijo, 7-10 caracteres alfanuméricos en mayúsculas.",
     "recursos_placa_requerida_equipo": "Los equipos requieren una placa.",
     "recursos_categoria_requerida_equipo": "Los equipos requieren una categoría.",
     "recursos_padre_no_self": "Un activo no puede ser su propio padre.",
@@ -244,7 +312,6 @@ def _serializar_recurso(r: Recurso) -> dict:
         "ubicacion": r.ubicacion,
         "placa": r.placa,
         "padre_id": r.padre_id,
-        "incluido_por_defecto": r.incluido_por_defecto,
         "categoria": r.categoria,
         "marca": r.marca,
         "modelo": r.modelo,
@@ -297,7 +364,6 @@ def api_crear_activo():
         requiere_seguro=bool(datos.get("requiere_seguro", False)),
         estado=estado,
         padre_id=padre_id,
-        incluido_por_defecto=bool(datos.get("incluido_por_defecto", True)),
     )
     db.session.add(recurso)
 

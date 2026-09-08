@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS recursos (
     -- Número de placa/inventario, único. El equipo padre usa 8 dígitos
     -- numéricos terminados en 0 (ej. '12345670'). Un equipo hijo (accesorio
     -- que viene en bundle con un padre, ver `padre_id` abajo) puede tener
-    -- su propia placa de 7-8 caracteres alfanuméricos: o la misma placa del
+    -- su propia placa de 7-10 caracteres alfanuméricos: o la misma placa del
     -- padre con el último dígito distinto de 0 (ej. '12345671', '12345673'),
     -- o un código independiente con numeración propia (ej. 'LEN0022' para
     -- un lente, 'LEN0023' para otro).
@@ -51,11 +51,6 @@ CREATE TABLE IF NOT EXISTS recursos (
     -- responda "qué accesorios tiene la cámara X" (recursos con padre_id =
     -- id de la cámara) o "de qué equipo es hijo el lente Y" (seguir padre_id).
     padre_id        INTEGER REFERENCES recursos(id),
-    -- Solo tiene sentido cuando `padre_id` no es NULL (un hijo/accesorio):
-    -- indica si este hijo se agrega automáticamente a la reserva del padre
-    -- (ej. los lentes que siempre van con la cámara) o si hay que pedirlo
-    -- aparte. Se ignora en equipos sin padre.
-    incluido_por_defecto BOOLEAN NOT NULL DEFAULT TRUE,
     -- Categoría del equipo (ej. 'camara', 'celular', 'dron', 'microfono',
     -- 'tripode', 'luces') -- distinta de la columna `tipo` de arriba
     -- (equipo/espacio). Permite que el bot responda "qué cámaras tenemos"
@@ -75,7 +70,14 @@ CREATE TABLE IF NOT EXISTS recursos (
     -- Antes era un simple BOOLEAN `activo` -- ver migración más abajo.
     estado          VARCHAR(20) NOT NULL DEFAULT 'disponible',
     creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT recursos_placa_formato CHECK (placa IS NULL OR placa ~ '^[A-Z0-9]{7,8}$'),
+    -- El padre es siempre 8 dígitos numéricos (ver comentario de `placa`
+    -- arriba); un hijo (padre_id NOT NULL) puede ser alfanumérico, de 7 a
+    -- 10 caracteres.
+    CONSTRAINT recursos_placa_formato CHECK (
+        placa IS NULL
+        OR (padre_id IS NULL AND placa ~ '^[0-9]{8}$')
+        OR (padre_id IS NOT NULL AND placa ~ '^[A-Z0-9]{7,10}$')
+    ),
     CONSTRAINT recursos_placa_requerida_equipo CHECK (tipo <> 'equipo' OR placa IS NOT NULL),
     CONSTRAINT recursos_categoria_requerida_equipo CHECK (tipo <> 'equipo' OR categoria IS NOT NULL),
     CONSTRAINT recursos_padre_no_self CHECK (padre_id IS NULL OR padre_id <> id),
@@ -179,7 +181,11 @@ ALTER TABLE recursos ADD COLUMN IF NOT EXISTS modelo VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS identificador VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS categoria VARCHAR(50);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS padre_id INTEGER REFERENCES recursos(id);
-ALTER TABLE recursos ADD COLUMN IF NOT EXISTS incluido_por_defecto BOOLEAN NOT NULL DEFAULT TRUE;
+-- Reemplazada por la regla fija "todo hijo va incluido por defecto con su
+-- padre, el usuario lo quita de la selección si no lo quiere" (ver
+-- recursos_service._accesorios_por_defecto) -- ya no es configurable por
+-- activo.
+ALTER TABLE recursos DROP COLUMN IF EXISTS incluido_por_defecto;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recursos_placa_unica ON recursos (placa);
 CREATE INDEX IF NOT EXISTS idx_recursos_padre_id ON recursos (padre_id);
@@ -194,10 +200,18 @@ DO $$
 BEGIN
     -- Se recrea (no solo "si no existe") porque el formato cambió de
     -- 8 dígitos numéricos a 7-8 caracteres alfanuméricos, para admitir
-    -- placas de equipos hijo (ej. '12345671' o 'LEN0022').
+    -- placas de equipos hijo (ej. '12345671' o 'LEN0022'); luego para
+    -- permitir hasta 10 caracteres en las placas de hijos; y de nuevo para
+    -- volver a exigirle al padre (padre_id NULL) su formato propio de
+    -- 8 dígitos numéricos, ya que el rango alfanumérico de 7-8 solo
+    -- correspondía al hijo.
     ALTER TABLE recursos DROP CONSTRAINT IF EXISTS recursos_placa_formato;
     ALTER TABLE recursos ADD CONSTRAINT recursos_placa_formato
-        CHECK (placa IS NULL OR placa ~ '^[A-Z0-9]{7,8}$');
+        CHECK (
+            placa IS NULL
+            OR (padre_id IS NULL AND placa ~ '^[0-9]{8}$')
+            OR (padre_id IS NOT NULL AND placa ~ '^[A-Z0-9]{7,10}$')
+        );
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'recursos_placa_requerida_equipo'
     ) THEN
