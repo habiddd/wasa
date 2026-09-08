@@ -18,14 +18,12 @@ import { ActivosPanel } from "@/features/activos/ActivosPanel"
 import { ActivosProvider } from "@/features/activos/activos-context"
 import { LugaresPanel } from "@/features/activos/LugaresPanel"
 import { MetricasPanel } from "@/features/metricas/MetricasPanel"
-import { QrPanel } from "@/features/qr/QrPanel"
 import { ServiciosPanel } from "@/features/servicios/ServiciosPanel"
 import { UsuariosPanel } from "@/features/usuarios/UsuariosPanel"
 
 const TAB_STORAGE_KEY = "dashboard-cpa-tab-activa"
 const TABS = [
   { value: "servicios", label: "Servicios", Panel: ServiciosPanel },
-  { value: "qr", label: "QR / WhatsApp", Panel: QrPanel },
   { value: "metricas", label: "Métricas", Panel: MetricasPanel },
   { value: "usuarios", label: "Usuarios", Panel: UsuariosPanel },
   { value: "activos", label: "Activos", Panel: ActivosPanel },

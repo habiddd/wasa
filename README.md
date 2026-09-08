@@ -66,13 +66,14 @@ curl http://localhost:5000/webhook/qr
 
 ## 5. Dashboard interno de monitoreo
 
-En `http://localhost:8080/dashboard` tienes un panel con seis pestañas
+En `http://localhost:8080/dashboard` tienes un panel con cinco pestañas
 (la pestaña activa se recuerda entre recargas, vía `localStorage`):
 
-- **Servicios**: estado en vivo de Postgres, Redis, Baileys/WhatsApp, el LLM
-  local y el propio Flask (se refresca solo cada 10s).
-- **QR / WhatsApp**: muestra el código QR de vinculación mientras no esté
-  conectado, o el número vinculado una vez lo esté.
+- **Servicios**: dos sub-pestañas. "Estado" muestra el estado en vivo de
+  Postgres, Redis, Baileys/WhatsApp, el LLM local y el propio Flask (se
+  refresca solo cada 10s); "QR / WhatsApp" muestra el código QR de
+  vinculación mientras no esté conectado, o el número vinculado una vez lo
+  esté (se refresca sola cada 5s).
 - **Métricas**: reservas y mensajes bloqueados por guardrails en los
   últimos 30 días, y las últimas interacciones registradas en `auditoria_bot`.
 - **Usuarios**: lista los usuarios que completaron el registro por WhatsApp

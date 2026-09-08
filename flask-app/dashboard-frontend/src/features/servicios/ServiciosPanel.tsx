@@ -3,8 +3,9 @@ import { AlertTriangle } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { usePolling } from "@/hooks/use-polling"
-import { fetchStatus, type EstadoServicio } from "@/lib/api"
+import { fetchQr, fetchStatus, type EstadoServicio } from "@/lib/api"
 
 const NOMBRES: Record<string, string> = {
   postgres: "Postgres",
@@ -45,7 +46,7 @@ function ServicioCard({ clave, servicio }: { clave: string; servicio: EstadoServ
   )
 }
 
-export function ServiciosPanel() {
+function EstadoServiciosTab() {
   const { data, error, loading } = usePolling(fetchStatus, 10000)
 
   return (
@@ -71,5 +72,52 @@ export function ServiciosPanel() {
         </p>
       )}
     </div>
+  )
+}
+
+function QrWhatsappTab() {
+  const { data, error } = usePolling(fetchQr, 5000)
+
+  let texto = "Cargando…"
+  if (error) {
+    texto = "No se pudo consultar el estado de WhatsApp."
+  } else if (data) {
+    if (data.conectado) {
+      texto = "✅ WhatsApp conectado" + (data.numero ? ` (número ${data.numero})` : "")
+    } else if (data.qr_imagen) {
+      texto = "Escanea este código con WhatsApp → Dispositivos vinculados:"
+    } else {
+      texto = "Esperando código QR de Baileys…"
+    }
+  }
+
+  return (
+    <div className="text-center">
+      <p className="text-muted-foreground">{texto}</p>
+      {data && !data.conectado && data.qr_imagen && (
+        <img
+          src={data.qr_imagen}
+          alt="Código QR de vinculación"
+          className="mx-auto mt-4 max-w-[260px] rounded-lg border"
+        />
+      )}
+    </div>
+  )
+}
+
+export function ServiciosPanel() {
+  return (
+    <Tabs defaultValue="estado" className="gap-4">
+      <TabsList>
+        <TabsTrigger value="estado">Estado</TabsTrigger>
+        <TabsTrigger value="qr">QR / WhatsApp</TabsTrigger>
+      </TabsList>
+      <TabsContent value="estado">
+        <EstadoServiciosTab />
+      </TabsContent>
+      <TabsContent value="qr">
+        <QrWhatsappTab />
+      </TabsContent>
+    </Tabs>
   )
 }
