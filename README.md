@@ -107,6 +107,19 @@ Está protegido con autenticación básica (`DASHBOARD_USER` /
 placeholder). Si `DASHBOARD_PASSWORD` no está configurada, el dashboard
 responde `503` en vez de quedar abierto.
 
+La UI es una app React + [shadcn/ui](https://ui.shadcn.com/) (Tailwind v4,
+selector de tema claro/oscuro/sistema) en `flask-app/dashboard-frontend/`,
+compilada a estático y servida por Flask desde `app/dashboard_dist/`
+(`GET /dashboard/` sirve el `index.html`, `GET /dashboard/assets/<...>` los
+JS/CSS). Al construir la imagen Docker el build ocurre solo, en un stage
+Node del `Dockerfile`. Para desarrollar la UI en caliente:
+
+```bash
+cd flask-app/dashboard-frontend
+npm install
+npm run dev   # sirve en http://localhost:5173/dashboard/, con proxy hacia Flask :5000
+```
+
 ## 6. Migrar a la API oficial de Meta (cuando estés listo para producción)
 
 Si en el futuro quieres migrar a la API oficial de Meta:
@@ -173,12 +186,12 @@ cpa-reservas-bot/
 │   │   ├── estado_bot.py     # último QR recibido (compartido webhook/dashboard)
 │   │   ├── whatsapp_client.py
 │   │   ├── llm_client.py
-│   │   ├── templates/
-│   │   │   └── dashboard.html
+│   │   ├── dashboard_dist/   # build de dashboard-frontend (generado, no en git)
 │   │   └── routes/
 │   │       ├── webhook.py       # recibe mensajes de WhatsApp
 │   │       ├── analytics.py     # endpoints de analítica
 │   │       └── dashboard.py     # panel de monitoreo (/dashboard)
+│   ├── dashboard-frontend/   # UI del dashboard: React + shadcn/ui (ver sección 5)
 │   └── wsgi.py
 └── docs/
     ├── ARQUITECTURA.md

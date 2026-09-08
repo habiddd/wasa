@@ -1,3 +1,15 @@
+# Build del dashboard React/shadcn (ver dashboard-frontend/) -- se compila
+# acá para no depender de que el dist/ esté versionado en git.
+FROM node:20-slim AS frontend-build
+
+WORKDIR /frontend
+
+COPY dashboard-frontend/package.json dashboard-frontend/package-lock.json ./
+RUN npm ci
+
+COPY dashboard-frontend/ .
+RUN npm run build
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -10,6 +22,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+COPY --from=frontend-build /app/dashboard_dist ./app/dashboard_dist
 
 EXPOSE 5000
 

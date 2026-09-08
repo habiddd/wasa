@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+instance/
+
+dashboard-frontend/node_modules/
+dashboard-frontend/dist/
+app/dashboard_dist/

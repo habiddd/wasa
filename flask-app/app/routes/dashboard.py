@@ -10,10 +10,11 @@ import base64
 import io
 import secrets
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import qrcode
 import requests
-from flask import Blueprint, Response, current_app, jsonify, render_template, request
+from flask import Blueprint, Response, current_app, jsonify, request, send_from_directory
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 
@@ -22,6 +23,11 @@ from app.extensions import db, redis_client
 from app.models import AuditoriaBot, Recurso, Reserva, Usuario
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
+
+# Build estático del frontend React/shadcn (flask-app/dashboard-frontend),
+# generado por `npm run build` (local) o el stage `frontend-build` del
+# Dockerfile (en la imagen). No se versiona en git.
+_DIST_DIR = Path(__file__).resolve().parent.parent / "dashboard_dist"
 
 
 @bp.before_request
@@ -101,7 +107,12 @@ def _check_llm() -> dict:
 
 @bp.route("/")
 def index():
-    return render_template("dashboard.html")
+    return send_from_directory(_DIST_DIR, "index.html")
+
+
+@bp.route("/assets/<path:filename>")
+def assets(filename):
+    return send_from_directory(_DIST_DIR / "assets", filename)
 
 
 @bp.route("/api/status")

@@ -435,6 +435,55 @@ su propia clave, igual que `registro_campo_pendiente`, `reserva_wizard`
 para cancelar una reserva ya confirmada -- ver "Cancelar una reserva ya
 confirmada" más arriba).
 
+## Dashboard interno: por qué React + shadcn/ui con un build separado
+
+El panel de monitoreo (`/dashboard`, ver `README.md` sección 5 y
+`flask-app/app/routes/dashboard.py`) empezó como una sola plantilla Jinja
+(`dashboard.html`) con HTML/CSS/JS vanilla, sin build step -- suficiente
+mientras era un puñado de tarjetas y un par de tablas. Al pedirse una
+migración a [shadcn/ui](https://ui.shadcn.com/) (ver
+`docs/SESION_2026-09-08.md`, sección 3) hubo que decidir entre dos caminos:
+
+- Imitar la estética de shadcn con CSS a mano, sin tocar el resto del
+  stack (Jinja + JS vanilla).
+- Migrar de verdad a los componentes de shadcn, que son React sobre
+  Tailwind + Radix UI y requieren un bundler -- no hay forma de usarlos
+  tal cual sobre una plantilla Jinja.
+
+Se optó por la segunda porque era lo que se pidió explícitamente (no una
+imitación visual). El costo es que `flask-app/` -- hasta ese momento un
+proyecto 100% Python, sin Node en ninguna parte -- ahora tiene un
+subproyecto de frontend con su propio ciclo de build:
+
+- **`flask-app/dashboard-frontend/`** es una SPA de React (Vite + TS +
+  Tailwind v4 + shadcn/ui) independiente del resto de la app Flask. No
+  usa server-side rendering ni comparte código Python -- habla con el
+  backend solo por los mismos endpoints JSON de siempre
+  (`/dashboard/api/*`, sin cambios de contrato).
+- **Flask no compila nada en runtime.** `dashboard.py` sirve el `index.html`
+  y los assets con hash que deja el build de Vite en `app/dashboard_dist/`
+  (`send_from_directory`) -- ese directorio es generado, no se versiona en
+  git (ver `.gitignore`).
+- **El build ocurre en la imagen Docker, no a mano.** `flask-app/Dockerfile`
+  es multi-stage: un stage `node:20-slim` corre `npm ci && npm run build`
+  sobre `dashboard-frontend/`, y el stage Python final solo copia el
+  `dist/` resultante. Antes de esto, construir la imagen de `flask-app` no
+  necesitaba Node para nada; ahora sí, aunque el contenedor que finalmente
+  corre sigue siendo puro Python (Node no llega a la imagen final).
+- **La autenticación no cambió de mecanismo.** El `before_request` de Basic
+  Auth del blueprint (`DASHBOARD_USER`/`DASHBOARD_PASSWORD`) sigue cubriendo
+  todo -- ahora también la ruta nueva de assets (`GET
+  /dashboard/assets/<...>`) -- así que el navegador cachea las credenciales
+  una sola vez por origen y las reusa tanto para pedir el HTML como para
+  cada llamada a `/api/*`, sin necesidad de CORS ni de un esquema de auth
+  aparte para la SPA.
+- **En desarrollo**, `dashboard-frontend/` corre con su propio servidor de
+  Vite (`npm run dev`, puerto 5173) con un proxy configurado hacia
+  `http://localhost:5000` para `/dashboard/api/*` -- así los cambios de UI
+  recargan al instante sin tener que reconstruir la imagen Docker cada vez
+  (a diferencia de cuando era una plantilla Jinja, donde cualquier cambio
+  solo llegaba reconstruyendo `flask-app`).
+
 ## Analítica en tiempo real
 
 Los endpoints en `app/routes/analytics.py` consultan directamente la
