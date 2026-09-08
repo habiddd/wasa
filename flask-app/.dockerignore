@@ -5,6 +5,6 @@ venv/
 *.log
 instance/
 
-dashboard-frontend/node_modules/
-dashboard-frontend/dist/
-app/dashboard_dist/
+# El frontend del dashboard vive en su propio contenedor (ver
+# dashboard-frontend/Dockerfile) -- la imagen de flask-app no lo necesita.
+dashboard-frontend/

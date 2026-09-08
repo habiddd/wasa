@@ -123,3 +123,29 @@ services:
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
     networks:
       - backend
+
+  # ---------------------------------------------------------------
+  # Frontend del dashboard (React/shadcn): estáticos servidos por Nginx,
+  # con proxy de /dashboard/api/ hacia flask-app. Contenedor propio para
+  # no acoplar el build de Node a la imagen del backend.
+  # ---------------------------------------------------------------
+  dashboard-frontend:
+    build:
+      context: ./flask-app/dashboard-frontend
+    container_name: cpa_dashboard_frontend
+    restart: unless-stopped
+    depends_on:
+      flask-app:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:80"
+    environment:
+      # Mismas credenciales que flask-app: Nginx exige el login para servir
+      # el shell estático (igual que antes hacía Flask); las peticiones a
+      # /dashboard/api/ las sigue validando flask-app (ver dashboard.py
+      # _requiere_auth), así que las credenciales no se duplican en un
+      # tercer lugar.
+      DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    networks:
+      - backend

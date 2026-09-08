@@ -460,29 +460,34 @@ subproyecto de frontend con su propio ciclo de build:
   usa server-side rendering ni comparte código Python -- habla con el
   backend solo por los mismos endpoints JSON de siempre
   (`/dashboard/api/*`, sin cambios de contrato).
-- **Flask no compila nada en runtime.** `dashboard.py` sirve el `index.html`
-  y los assets con hash que deja el build de Vite en `app/dashboard_dist/`
-  (`send_from_directory`) -- ese directorio es generado, no se versiona en
-  git (ver `.gitignore`).
-- **El build ocurre en la imagen Docker, no a mano.** `flask-app/Dockerfile`
-  es multi-stage: un stage `node:20-slim` corre `npm ci && npm run build`
-  sobre `dashboard-frontend/`, y el stage Python final solo copia el
-  `dist/` resultante. Antes de esto, construir la imagen de `flask-app` no
-  necesitaba Node para nada; ahora sí, aunque el contenedor que finalmente
-  corre sigue siendo puro Python (Node no llega a la imagen final).
-- **La autenticación no cambió de mecanismo.** El `before_request` de Basic
-  Auth del blueprint (`DASHBOARD_USER`/`DASHBOARD_PASSWORD`) sigue cubriendo
-  todo -- ahora también la ruta nueva de assets (`GET
-  /dashboard/assets/<...>`) -- así que el navegador cachea las credenciales
-  una sola vez por origen y las reusa tanto para pedir el HTML como para
-  cada llamada a `/api/*`, sin necesidad de CORS ni de un esquema de auth
-  aparte para la SPA.
+- **Contenedor propio, servido por Nginx.** `dashboard-frontend` es un
+  servicio aparte en `docker-compose.yml` (no un stage dentro de la imagen
+  de `flask-app`). Su `Dockerfile` es multi-stage: un stage `node:20-slim`
+  corre `npm ci && npm run build`, y el stage final es `nginx:alpine`
+  sirviendo el `dist/` resultante. `flask-app` quedó de nuevo como un
+  proyecto 100% Python -- no necesita Node para construirse, y
+  `dashboard.py` ya no sirve HTML/assets, solo la API bajo
+  `/dashboard/api/*`.
+- **Nginx conecta ambos contenedores.** `dashboard-frontend/nginx.conf`
+  sirve el shell estático en `/dashboard/` y hace `proxy_pass` de
+  `/dashboard/api/` hacia `http://flask-app:5000/dashboard/api/` sobre la
+  red interna `backend` de Compose -- el navegador solo ve un origen
+  (el puerto publicado por `dashboard-frontend`, `8080` por defecto).
+- **Autenticación en dos capas, sin duplicar credenciales en un tercer
+  formato.** Nginx exige Basic Auth (`auth_basic` con un `.htpasswd`
+  generado al arrancar el contenedor, en `docker-entrypoint.sh`, a partir
+  de las mismas `DASHBOARD_USER`/`DASHBOARD_PASSWORD`) para servir el
+  shell estático -- así el navegador sigue pidiendo login apenas se
+  navega a `/dashboard/`, igual que cuando Flask servía el HTML
+  directamente. Las llamadas a `/dashboard/api/*` viajan con ese mismo
+  header `Authorization` (Nginx lo reenvía tal cual al hacer proxy) y
+  `flask-app` las revalida con su propio `before_request` -- el chequeo de
+  Flask no se quitó, queda como defensa en profundidad por si algo llega
+  a `flask-app:5000` sin pasar por Nginx.
 - **En desarrollo**, `dashboard-frontend/` corre con su propio servidor de
   Vite (`npm run dev`, puerto 5173) con un proxy configurado hacia
   `http://localhost:5000` para `/dashboard/api/*` -- así los cambios de UI
-  recargan al instante sin tener que reconstruir la imagen Docker cada vez
-  (a diferencia de cuando era una plantilla Jinja, donde cualquier cambio
-  solo llegaba reconstruyendo `flask-app`).
+  recargan al instante sin tener que reconstruir ninguna imagen Docker.
 
 ## Analítica en tiempo real
 

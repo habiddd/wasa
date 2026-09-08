@@ -66,7 +66,7 @@ curl http://localhost:5000/webhook/qr
 
 ## 5. Dashboard interno de monitoreo
 
-En `http://localhost:5000/dashboard` tienes un panel con seis pestañas
+En `http://localhost:8080/dashboard` tienes un panel con seis pestañas
 (la pestaña activa se recuerda entre recargas, vía `localStorage`):
 
 - **Servicios**: estado en vivo de Postgres, Redis, Baileys/WhatsApp, el LLM
@@ -104,15 +104,18 @@ básica del resto del dashboard.
 
 Está protegido con autenticación básica (`DASHBOARD_USER` /
 `DASHBOARD_PASSWORD` en `.env` — genera una contraseña real, no dejes el
-placeholder). Si `DASHBOARD_PASSWORD` no está configurada, el dashboard
-responde `503` en vez de quedar abierto.
+placeholder). Nginx pide ese login para servir el shell estático, y
+`flask-app` vuelve a validarlo de forma independiente en cada llamada a
+`/dashboard/api/*` (si `DASHBOARD_PASSWORD` no está configurada, esas
+llamadas responden `503` en vez de quedar abiertas).
 
 La UI es una app React + [shadcn/ui](https://ui.shadcn.com/) (Tailwind v4,
 selector de tema claro/oscuro/sistema) en `flask-app/dashboard-frontend/`,
-compilada a estático y servida por Flask desde `app/dashboard_dist/`
-(`GET /dashboard/` sirve el `index.html`, `GET /dashboard/assets/<...>` los
-JS/CSS). Al construir la imagen Docker el build ocurre solo, en un stage
-Node del `Dockerfile`. Para desarrollar la UI en caliente:
+con su propio contenedor (`dashboard-frontend` en `docker-compose.yml`):
+un build multi-stage compila la SPA con Node y la sirve un Nginx que hace
+proxy de `/dashboard/api/*` hacia `flask-app:5000`. El backend ya no sirve
+ni compila HTML/JS -- solo expone esa API. Para desarrollar la UI en
+caliente:
 
 ```bash
 cd flask-app/dashboard-frontend
@@ -171,7 +174,7 @@ Si en el futuro quieres migrar a la API oficial de Meta:
 
 ```
 cpa-reservas-bot/
-├── docker-compose.yml       # Postgres + Redis + Baileys + Flask
+├── docker-compose.yml       # Postgres + Redis + Baileys + Flask + dashboard-frontend
 ├── .env.example
 ├── postgres/init/           # esquema inicial (se ejecuta 1 sola vez)
 ├── baileys-bot/
@@ -186,12 +189,13 @@ cpa-reservas-bot/
 │   │   ├── estado_bot.py     # último QR recibido (compartido webhook/dashboard)
 │   │   ├── whatsapp_client.py
 │   │   ├── llm_client.py
-│   │   ├── dashboard_dist/   # build de dashboard-frontend (generado, no en git)
 │   │   └── routes/
 │   │       ├── webhook.py       # recibe mensajes de WhatsApp
 │   │       ├── analytics.py     # endpoints de analítica
-│   │       └── dashboard.py     # panel de monitoreo (/dashboard)
-│   ├── dashboard-frontend/   # UI del dashboard: React + shadcn/ui (ver sección 5)
+│   │       └── dashboard.py     # API del panel de monitoreo (/dashboard/api/*)
+│   ├── dashboard-frontend/   # UI del dashboard: React + shadcn/ui, contenedor propio
+│   │   ├── Dockerfile          # build Node -> estáticos servidos por Nginx
+│   │   └── nginx.conf          # sirve el shell y hace proxy de /dashboard/api/ a flask-app
 │   └── wsgi.py
 └── docs/
     ├── ARQUITECTURA.md

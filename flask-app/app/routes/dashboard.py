@@ -1,20 +1,23 @@
 """
-Dashboard interno de monitoreo para el equipo de la CPA: estado de los
-servicios (Postgres, Redis, Baileys/WhatsApp, LLM local), código QR de
+API del dashboard interno de monitoreo para el equipo de la CPA: estado de
+los servicios (Postgres, Redis, Baileys/WhatsApp, LLM local), código QR de
 vinculación y métricas básicas de uso. Protegido con autenticación básica
 (DASHBOARD_USER / DASHBOARD_PASSWORD) porque expone el QR de vinculación
 de WhatsApp, que no debería poder escanear cualquiera con acceso a la red.
+
+El frontend (React/shadcn, ver dashboard-frontend/) corre en su propio
+contenedor Nginx, que sirve los estáticos y hace proxy de /dashboard/api/
+hacia acá -- este blueprint ya no sirve HTML ni assets.
 """
 
 import base64
 import io
 import secrets
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import qrcode
 import requests
-from flask import Blueprint, Response, current_app, jsonify, request, send_from_directory
+from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 
@@ -23,11 +26,6 @@ from app.extensions import db, redis_client
 from app.models import AuditoriaBot, Recurso, Reserva, Usuario
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
-
-# Build estático del frontend React/shadcn (flask-app/dashboard-frontend),
-# generado por `npm run build` (local) o el stage `frontend-build` del
-# Dockerfile (en la imagen). No se versiona en git.
-_DIST_DIR = Path(__file__).resolve().parent.parent / "dashboard_dist"
 
 
 @bp.before_request
@@ -104,16 +102,6 @@ def _check_llm() -> dict:
 
 
 # --- Rutas -------------------------------------------------------------------
-
-@bp.route("/")
-def index():
-    return send_from_directory(_DIST_DIR, "index.html")
-
-
-@bp.route("/assets/<path:filename>")
-def assets(filename):
-    return send_from_directory(_DIST_DIR / "assets", filename)
-
 
 @bp.route("/api/status")
 def api_status():
