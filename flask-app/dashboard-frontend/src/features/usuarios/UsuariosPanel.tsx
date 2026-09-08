@@ -9,12 +9,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { usePolling } from "@/hooks/use-polling"
 import { actualizarUsuario, fetchUsuarios, type CambiosUsuario } from "@/lib/api"
 
+import { SesionesTab } from "./SesionesTab"
 import { UsuarioEditForm } from "./UsuarioEditForm"
 
-export function UsuariosPanel() {
+function ListaUsuariosTab() {
   const { data, error, reload } = usePolling(fetchUsuarios, 30000)
   const [editandoId, setEditandoId] = useState<number | null>(null)
 
@@ -99,5 +101,22 @@ export function UsuariosPanel() {
         </Table>
       </div>
     </div>
+  )
+}
+
+export function UsuariosPanel() {
+  return (
+    <Tabs defaultValue="usuarios" className="gap-4">
+      <TabsList>
+        <TabsTrigger value="usuarios">Usuarios</TabsTrigger>
+        <TabsTrigger value="sesiones">Sesiones</TabsTrigger>
+      </TabsList>
+      <TabsContent value="usuarios">
+        <ListaUsuariosTab />
+      </TabsContent>
+      <TabsContent value="sesiones">
+        <SesionesTab />
+      </TabsContent>
+    </Tabs>
   )
 }

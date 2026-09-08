@@ -102,6 +102,29 @@ export function actualizarUsuario(id: number, cambios: CambiosUsuario) {
   })
 }
 
+// --- Sesiones (reservas) -----------------------------------------------
+
+export type EstadoReserva = "confirmada" | "cancelada" | "completada" | "no_show"
+
+export type Sesion = {
+  id: number
+  usuario_id: number
+  usuario_nombre: string | null
+  usuario_telefono: string
+  usuario_rol: Rol
+  recurso_id: number
+  recurso_nombre: string | null
+  inicio: string | null
+  fin: string | null
+  estado: EstadoReserva
+  canal_origen: string
+  creado_en: string | null
+}
+
+export function fetchSesiones() {
+  return request<Sesion[]>("/reservas")
+}
+
 // --- Activos -----------------------------------------------------------
 
 export type TipoRecurso = "equipo" | "espacio"

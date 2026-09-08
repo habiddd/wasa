@@ -76,12 +76,17 @@ En `http://localhost:8080/dashboard` tienes un panel con cinco pestañas
   esté (se refresca sola cada 5s).
 - **Métricas**: reservas y mensajes bloqueados por guardrails en los
   últimos 30 días, y las últimas interacciones registradas en `auditoria_bot`.
-- **Usuarios**: lista los usuarios que completaron el registro por WhatsApp
-  (`registro_completo=True` -- deja afuera contactos a medio registrar y el
-  usuario dummy de `seed.py`). Botón "Editar" por fila para cambiar nombre,
-  teléfono, código Uninorte, cédula, rol (estudiante/staff/admin) y si está
-  activo, vía `GET/PATCH /dashboard/api/usuarios[/<id>]`. Se refresca sola
-  cada 30s, más el botón "Refrescar" manual.
+- **Usuarios**: dos sub-pestañas. "Usuarios" lista los usuarios que
+  completaron el registro por WhatsApp (`registro_completo=True` -- deja
+  afuera contactos a medio registrar y el usuario dummy de `seed.py`), con
+  botón "Editar" por fila para cambiar nombre, teléfono, código Uninorte,
+  cédula, rol (estudiante/staff/admin) y si está activo, vía
+  `GET/PATCH /dashboard/api/usuarios[/<id>]` (se refresca sola cada 30s, más
+  el botón "Refrescar" manual). "Sesiones" lista las reservas de cada
+  usuario vía `GET /dashboard/api/reservas`, ordenables por "Más reciente" o
+  agrupadas "Por usuario" (una tarjeta por persona, con su nombre y todas
+  sus sesiones), y filtrables por categoría (el mismo campo `rol` de
+  Usuarios).
 - **Activos**: equipos (`tipo='equipo'`) agrupados en subpestañas por
   categoría, con su árbol de relaciones padre/hijo (ej. una cámara y sus
   lentes -- los hijos se pueden desplegar/colapsar por tarjeta). Permite

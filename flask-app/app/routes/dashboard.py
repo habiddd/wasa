@@ -20,6 +20,7 @@ import requests
 from flask import Blueprint, Response, current_app, jsonify, request
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 
 from app import estado_bot
 from app.extensions import db, redis_client
@@ -253,6 +254,37 @@ def api_actualizar_usuario(usuario_id):
         return jsonify({"error": "Ya existe otro usuario con ese teléfono."}), 400
 
     return jsonify(_serializar_usuario(usuario))
+
+
+def _serializar_reserva(r: Reserva) -> dict:
+    return {
+        "id": r.id,
+        "usuario_id": r.usuario_id,
+        "usuario_nombre": r.usuario.nombre if r.usuario else None,
+        "usuario_telefono": r.usuario.telefono_wa if r.usuario else None,
+        "usuario_rol": r.usuario.rol if r.usuario else None,
+        "recurso_id": r.recurso_id,
+        "recurso_nombre": r.recurso.nombre if r.recurso else None,
+        "inicio": r.inicio.isoformat() if r.inicio else None,
+        "fin": r.fin.isoformat() if r.fin else None,
+        "estado": r.estado,
+        "canal_origen": r.canal_origen,
+        "creado_en": r.creado_en.isoformat() if r.creado_en else None,
+    }
+
+
+@bp.route("/api/reservas")
+def api_reservas():
+    # Sesiones de uso (reservas) de cada usuario, para el sub-panel de
+    # "Sesiones" dentro de Usuarios en el dashboard. Trae usuario/recurso
+    # con joinedload para no hacer una query por fila.
+    reservas = (
+        Reserva.query.options(joinedload(Reserva.usuario), joinedload(Reserva.recurso))
+        .order_by(Reserva.creado_en.desc())
+        .limit(500)
+        .all()
+    )
+    return jsonify([_serializar_reserva(r) for r in reservas])
 
 
 # --- Activos (equipos/espacios) y sus relaciones padre/hijo -----------------
