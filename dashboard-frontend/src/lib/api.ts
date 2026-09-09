@@ -111,6 +111,7 @@ export type Sesion = {
   usuario_id: number
   usuario_nombre: string | null
   usuario_telefono: string
+  usuario_codigo_uninorte: string | null
   usuario_rol: Rol
   recurso_id: number
   recurso_nombre: string | null
@@ -147,6 +148,20 @@ export function actualizarReserva(id: number, cambios: CambiosReserva) {
     method: "PATCH",
     body: JSON.stringify(cambios),
   })
+}
+
+export function actualizarReservaGrupo(
+  grupoId: number,
+  cambios: CambiosReserva & { recurso_ids?: number[] }
+) {
+  return request<Sesion[]>(`/reservas/grupo/${grupoId}`, {
+    method: "PATCH",
+    body: JSON.stringify(cambios),
+  })
+}
+
+export function eliminarReservaGrupo(grupoId: number) {
+  return request<void>(`/reservas/grupo/${grupoId}`, { method: "DELETE" })
 }
 
 // Una reserva hecha para varios activos se edita como un bloque: el backend

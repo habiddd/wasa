@@ -12,6 +12,10 @@
 - [x] Dashboard interno (`/dashboard`) protegido con autenticación básica
       (`DASHBOARD_USER`/`DASHBOARD_PASSWORD`) — expone el QR de vinculación
       de WhatsApp, así que no puede quedar abierto
+- [x] Ediciones administrativas del calendario protegidas por la misma
+      autenticación del dashboard: cambio de horario, estado y activos de una
+      reserva se aplican por `grupo_id` en una sola transacción; la eliminación
+      completa exige confirmación explícita en un popup antes del `DELETE`.
 - [x] Registro obligatorio antes de dejar reservar/consultar nada: el
       primer mensaje de un número dispara un flujo paso a paso (nombre
       completo, código de estudiante, cédula) y hasta que no está completo
@@ -95,6 +99,10 @@
 - [ ] Logs sin datos sensibles innecesarios (evita loguear el cuerpo
       completo de cada mensaje en texto plano de forma indefinida; define
       una política de retención para `auditoria_bot`).
+- [ ] Definir si la eliminación física desde el dashboard debe mantenerse
+      para producción o reemplazarse por una cancelación lógica/auditable;
+      el flujo actual elimina las líneas de `reservas` y su `reserva_grupos`
+      después de la confirmación del administrador.
 
 ### Modelo / LLM
 - [x] El LLM nunca debe ser el que decide disponibilidad o ejecuta la

@@ -521,19 +521,27 @@ tener presentes antes de tocarlo:
   cosas distintas según quién lo abre. Todo pasa por `Intl.DateTimeFormat`
   con `timeZone` fijo en `calendario-utils.ts`, incluidos los
   `<input type="datetime-local">` del formulario de edición.
-- **Un evento agrupa las reservas del mismo usuario y horario**, no las del
-  mismo `grupo_id`. Una reserva hecha para cinco activos llenaba el día de
-  cajas idénticas. Se agrupa por `(usuario_id, inicio, fin)` a propósito:
-  cubre también el caso de dos confirmaciones distintas del mismo usuario a
-  la misma hora (se ven como un evento con dos números de reserva), y hace
-  que una línea movida a otro horario salga como evento aparte. El filtrado
-  (tipo, recurso, estado) ocurre **antes** de agrupar.
-- **Editar un evento de varios activos es atómico.** El modal usa
-  `PATCH /dashboard/api/reservas/bloque` con los ids de todas sus líneas:
-  el horario y el estado se aplican a todas o a ninguna, en una sola
-  transacción. El solapamiento no se re-valida en Python -- lo garantiza el
-  `EXCLUDE` de Postgres descrito más arriba, y el backend solo traduce esa
-  violación a un mensaje legible.
+- **Un evento agrupa las líneas de un mismo `grupo_id` y horario.** Una
+  reserva hecha para cinco activos llena el día con un solo evento. El
+  `grupo_id` evita mezclar dos reservas independientes del mismo usuario a
+  la misma hora; el filtrado (tipo, recurso, usuario y estado) ocurre
+  **antes** de agrupar. El filtro de usuario usa `usuarios.codigo_uninorte`.
+- **El modal permite editar los activos reservados.** La lista principal
+  muestra solo las líneas de ese grupo, agrupando visualmente los padres y
+  sus hijos con indentación. El botón `+` abre un árbol con casillas para
+  seleccionar varios activos nuevos; cada línea reservada se puede quitar,
+  pero la reserva debe conservar al menos un activo.
+- **La edición del grupo es atómica.**
+  `PATCH /dashboard/api/reservas/grupo/<grupo_id>` puede cambiar horario,
+  estado y conjunto de `recurso_ids` en una sola transacción. Las líneas
+  eliminadas, agregadas o modificadas se aplican todas o ninguna. El
+  solapamiento no se re-valida en Python: lo garantiza el `EXCLUDE` de
+  Postgres descrito más arriba.
+- **La eliminación completa requiere confirmación.** El botón del modal
+  abre un segundo popup, no elimina directamente. Si se confirma, se borran
+  todas las líneas del grupo y el `ReservaGrupo` mediante
+  `DELETE /dashboard/api/reservas/grupo/<grupo_id>`; el toast solo informa
+  el resultado posterior.
 
 ## Analítica en tiempo real
 

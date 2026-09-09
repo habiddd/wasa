@@ -24,7 +24,7 @@ from sqlalchemy.orm import joinedload
 
 from app import estado_bot
 from app.extensions import db, redis_client
-from app.models import AuditoriaBot, Recurso, Reserva, Usuario
+from app.models import AuditoriaBot, Recurso, Reserva, ReservaGrupo, Usuario
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 
@@ -262,6 +262,7 @@ def _serializar_reserva(r: Reserva) -> dict:
         "usuario_id": r.usuario_id,
         "usuario_nombre": r.usuario.nombre if r.usuario else None,
         "usuario_telefono": r.usuario.telefono_wa if r.usuario else None,
+        "usuario_codigo_uninorte": r.usuario.codigo_uninorte if r.usuario else None,
         "usuario_rol": r.usuario.rol if r.usuario else None,
         "recurso_id": r.recurso_id,
         "recurso_nombre": r.recurso.nombre if r.recurso else None,
@@ -406,6 +407,88 @@ def api_actualizar_reserva(reserva_id):
         return jsonify({"error": _error_integridad_reserva(exc)}), 400
 
     return jsonify(_serializar_reserva(reserva))
+
+
+@bp.route("/api/reservas/grupo/<int:grupo_id>", methods=["PATCH"])
+def api_actualizar_reserva_grupo(grupo_id):
+    """Actualiza horario/estado y activos de una reserva completa atomically."""
+    datos = request.get_json(silent=True) or {}
+    recurso_ids = datos.pop("recurso_ids", None)
+    cambios, error = _preparar_cambios_reserva(datos, _CAMPOS_EDITABLES_RESERVA)
+    if error:
+        return jsonify({"error": error}), 400
+
+    if recurso_ids is not None:
+        if (
+            not isinstance(recurso_ids, list)
+            or not recurso_ids
+            or any(not isinstance(recurso_id, int) for recurso_id in recurso_ids)
+            or len(recurso_ids) != len(set(recurso_ids))
+        ):
+            return jsonify({"error": "Debes conservar al menos un activo y no repetir activos."}), 400
+        recursos = Recurso.query.filter(Recurso.id.in_(recurso_ids)).all()
+        if len(recursos) != len(recurso_ids):
+            return jsonify({"error": "Alguno de los activos indicados no existe."}), 400
+
+    grupo = ReservaGrupo.query.get_or_404(grupo_id)
+    reservas = Reserva.query.filter_by(grupo_id=grupo.id).order_by(Reserva.id).all()
+    if not reservas:
+        return jsonify({"error": "La reserva no tiene activos."}), 404
+
+    for reserva in reservas:
+        error = _aplicar_cambios_reserva(reserva, cambios)
+        if error:
+            return jsonify({"error": error}), 400
+
+    if recurso_ids is not None:
+        ids_actuales = {reserva.recurso_id for reserva in reservas}
+        ids_nuevos = set(recurso_ids)
+        for reserva in reservas:
+            if reserva.recurso_id not in ids_nuevos:
+                db.session.delete(reserva)
+
+        reserva_base = reservas[0]
+        estado_nuevo = cambios.get("estado", reserva_base.estado)
+        inicio_nuevo = cambios.get("inicio", reserva_base.inicio)
+        fin_nuevo = cambios.get("fin", reserva_base.fin)
+        for recurso_id in ids_nuevos - ids_actuales:
+            db.session.add(
+                Reserva(
+                    usuario_id=reserva_base.usuario_id,
+                    recurso_id=recurso_id,
+                    inicio=inicio_nuevo,
+                    fin=fin_nuevo,
+                    estado=estado_nuevo,
+                    canal_origen=reserva_base.canal_origen,
+                    grupo_id=grupo.id,
+                )
+            )
+
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        return jsonify({"error": _error_integridad_reserva(exc)}), 400
+
+    actualizadas = Reserva.query.filter_by(grupo_id=grupo.id).order_by(Reserva.id).all()
+    return jsonify([_serializar_reserva(reserva) for reserva in actualizadas])
+
+
+@bp.route("/api/reservas/grupo/<int:grupo_id>", methods=["DELETE"])
+def api_eliminar_reserva_grupo(grupo_id):
+    """Elimina todas las líneas y el número de una reserva completa."""
+    grupo = ReservaGrupo.query.get_or_404(grupo_id)
+    for reserva in Reserva.query.filter_by(grupo_id=grupo.id).all():
+        db.session.delete(reserva)
+    db.session.delete(grupo)
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "No se puede eliminar la reserva porque tiene información asociada."}), 400
+
+    return "", 204
 
 
 @bp.route("/api/reservas/bloque", methods=["PATCH"])

@@ -36,6 +36,7 @@ const REFRESCO_MS = 60000
 
 type FiltroEstado = "vigentes" | "todas" | EstadoReserva
 type FiltroTipo = "todos" | "equipo" | "espacio"
+const USUARIO_SIN_CODIGO = "__sin_codigo__"
 
 const ESTADOS: { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: "vigentes", etiqueta: "Sin canceladas" },
@@ -77,6 +78,7 @@ export function CalendarioPanel() {
     guardado("tipo", ["todos", "equipo", "espacio"] as const, "todos")
   )
   const [recursoId, setRecursoId] = useState("todos")
+  const [usuarioCodigo, setUsuarioCodigo] = useState("todos")
   const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>(() =>
     guardado("estado", ESTADOS.map((e) => e.valor) as FiltroEstado[], "vigentes")
   )
@@ -129,16 +131,33 @@ export function CalendarioPanel() {
     return [...lista].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
   }, [activos, tipo])
 
+  const usuarios = useMemo(() => {
+    const vistos = new Map<string, string>()
+    for (const { reserva } of ubicadas) {
+      const codigo = reserva.usuario_codigo_uninorte || USUARIO_SIN_CODIGO
+      if (!vistos.has(codigo)) {
+        vistos.set(codigo, reserva.usuario_nombre || reserva.usuario_telefono)
+      }
+    }
+    return [...vistos.entries()].sort(([codigoA], [codigoB]) =>
+      codigoA.localeCompare(codigoB, "es")
+    )
+  }, [ubicadas])
+
   const filtradas = useMemo(
     () =>
       ubicadas.filter(({ reserva }) => {
         if (tipo !== "todos" && reserva.recurso_tipo !== tipo) return false
         if (recursoId !== "todos" && String(reserva.recurso_id) !== recursoId) return false
+        if (usuarioCodigo !== "todos") {
+          const codigo = reserva.usuario_codigo_uninorte || USUARIO_SIN_CODIGO
+          if (codigo !== usuarioCodigo) return false
+        }
         if (filtroEstado === "vigentes") return reserva.estado !== "cancelada"
         if (filtroEstado !== "todas") return reserva.estado === filtroEstado
         return true
       }),
-    [ubicadas, tipo, recursoId, filtroEstado]
+    [ubicadas, tipo, recursoId, usuarioCodigo, filtroEstado]
   )
 
   // Se agrupa después de filtrar: si se filtra por un activo concreto, el
@@ -203,6 +222,20 @@ export function CalendarioPanel() {
               {recursos.map((r) => (
                 <SelectItem key={r.id} value={String(r.id)}>
                   {r.nombre}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={usuarioCodigo} onValueChange={setUsuarioCodigo}>
+            <SelectTrigger size="sm" className="max-w-60">
+              <SelectValue placeholder="Todos los usuarios" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="todos">Todos los usuarios</SelectItem>
+              {usuarios.map(([codigo, nombre]) => (
+                <SelectItem key={codigo} value={codigo}>
+                  {codigo === USUARIO_SIN_CODIGO ? "Sin código Uninorte" : `${codigo} · ${nombre}`}
                 </SelectItem>
               ))}
             </SelectContent>

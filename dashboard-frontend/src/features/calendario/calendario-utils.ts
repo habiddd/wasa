@@ -181,11 +181,14 @@ export type EventoCalendario = {
 // vigente, porque es el que le importa a quien mira el calendario.
 const PRIORIDAD_ESTADO: EstadoReserva[] = ["confirmada", "no_show", "completada", "cancelada"]
 
-/** Junta en un solo evento las reservas del mismo usuario y horario. */
+/** Junta en un solo evento las líneas de una misma reserva y horario. */
 export function agruparEnEventos(reservas: ReservaUbicada[]): EventoCalendario[] {
   const porClave = new Map<string, ReservaUbicada[]>()
   for (const item of reservas) {
-    const clave = `${item.reserva.usuario_id}|${item.inicio.getTime()}|${item.fin.getTime()}`
+    // El grupo identifica la reserva completa. El fallback conserva juntas
+    // las líneas antiguas que aún no tenían grupo_id.
+    const grupo = item.reserva.grupo_id ?? `${item.reserva.usuario_id}|${item.inicio.getTime()}|${item.fin.getTime()}`
+    const clave = `${grupo}|${item.inicio.getTime()}|${item.fin.getTime()}`
     const lista = porClave.get(clave)
     if (lista) lista.push(item)
     else porClave.set(clave, [item])
