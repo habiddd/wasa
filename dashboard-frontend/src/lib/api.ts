@@ -197,7 +197,11 @@ export type Recurso = {
   ubicacion: string | null
   placa: string | null
   padre_id: number | null
+  // Lugar/espacio donde vive el activo -- jerarquía distinta e
+  // independiente de padre_id (ver flask-app/app/models.py).
+  espacio_id: number | null
   categoria: string | null
+  subcategoria: string | null
   marca: string | null
   modelo: string | null
   identificador: string | null
@@ -215,12 +219,14 @@ export type CambiosActivo = Partial<
     | "ubicacion"
     | "placa"
     | "categoria"
+    | "subcategoria"
     | "marca"
     | "modelo"
     | "identificador"
     | "requiere_seguro"
     | "estado"
     | "padre_id"
+    | "espacio_id"
   >
 >
 
@@ -235,8 +241,16 @@ export function crearActivo(cambios: CambiosActivo) {
   })
 }
 
-export function actualizarActivo(id: number, cambios: CambiosActivo) {
-  return request<Recurso>(`/activos/${id}`, {
+// `propagar_espacio` no es un campo de Recurso: es una opción de la
+// petición que le dice al backend si debe arrastrar a los hijos (por
+// padre_id) que estaban en el mismo lugar (ver dashboard.py). El backend
+// puede devolver `hijos_actualizados` cuando hubo propagación, solo para
+// que el toast de confirmación diga cuántos se movieron.
+export function actualizarActivo(
+  id: number,
+  cambios: CambiosActivo & { propagar_espacio?: boolean }
+) {
+  return request<Recurso & { hijos_actualizados?: number }>(`/activos/${id}`, {
     method: "PATCH",
     body: JSON.stringify(cambios),
   })

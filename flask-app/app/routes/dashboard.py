@@ -543,12 +543,14 @@ _CAMPOS_EDITABLES_ACTIVO = {
     "ubicacion",
     "placa",
     "categoria",
+    "subcategoria",
     "marca",
     "modelo",
     "identificador",
     "requiere_seguro",
     "estado",
     "padre_id",
+    "espacio_id",
 }
 
 # Debe coincidir con el CHECK `recursos_estado_valido` de
@@ -564,6 +566,7 @@ _MENSAJES_INTEGRIDAD = {
     "recursos_placa_requerida_equipo": "Los equipos requieren una placa.",
     "recursos_categoria_requerida_equipo": "Los equipos requieren una categoría.",
     "recursos_padre_no_self": "Un activo no puede ser su propio padre.",
+    "recursos_espacio_no_self": "Un activo no puede estar dentro de sí mismo.",
     "idx_recursos_placa_unica": "Ya existe otro activo con esa placa.",
     "recursos_tipo_check": "El tipo debe ser 'equipo' o 'espacio'.",
     "recursos_estado_valido": "El estado debe ser 'disponible', 'en_mantenimiento' o 'no_disponible'.",
@@ -587,7 +590,9 @@ def _serializar_recurso(r: Recurso) -> dict:
         "ubicacion": r.ubicacion,
         "placa": r.placa,
         "padre_id": r.padre_id,
+        "espacio_id": r.espacio_id,
         "categoria": r.categoria,
+        "subcategoria": r.subcategoria,
         "marca": r.marca,
         "modelo": r.modelo,
         "identificador": r.identificador,
@@ -595,6 +600,67 @@ def _serializar_recurso(r: Recurso) -> dict:
         "estado": r.estado,
         "creado_en": r.creado_en.isoformat() if r.creado_en else None,
     }
+
+
+def _validar_espacio(recurso_id: int | None, espacio_id) -> str | None:
+    """Valida un `espacio_id` propuesto para `recurso_id` (None si es un alta).
+
+    Devuelve un mensaje de error legible, o None si el espacio es válido.
+    No se valida con un CHECK de Postgres porque `tipo='espacio'` requiere
+    una subquery (Postgres no las admite en CHECK) y un trigger daría un
+    error genérico que rompería el mapeo de `_MENSAJES_INTEGRIDAD`, que
+    espera poder distinguir cada violación por el nombre de la constraint.
+    """
+    if espacio_id is None:
+        return None
+
+    espacio = Recurso.query.get(espacio_id)
+    if espacio is None:
+        return "El espacio indicado no existe."
+    if espacio.tipo != "espacio":
+        return "El destino debe ser un activo de tipo 'espacio'."
+    if recurso_id is not None and espacio.id == recurso_id:
+        return "Un activo no puede estar dentro de sí mismo."
+
+    # Los espacios pueden anidarse (edificio > piso > sala), así que hay que
+    # chequear ciclos igual que se hace con padre_id: si recurso_id aparece
+    # subiendo por la cadena de espacios del espacio elegido, ese espacio es
+    # en realidad un "contenido" de recurso, y asignarlo lo convertiría en
+    # un ciclo.
+    if recurso_id is not None:
+        actual = espacio
+        while actual is not None:
+            if actual.id == recurso_id:
+                return "Esa relación crearía un ciclo entre espacios."
+            actual = actual.espacio
+
+    return None
+
+
+def _propagar_espacio_a_hijos(recurso: Recurso, espacio_anterior, nuevo_espacio) -> list[Recurso]:
+    """Mueve al nuevo lugar a los descendientes (por padre_id) que estaban
+    sincronizados con `recurso`, es decir cuyo espacio_id era igual al valor
+    *anterior* del padre (incluido el caso NULL == NULL).
+
+    Los hijos que el usuario ya había puesto a mano en otro lugar no se
+    tocan -- esa excepción manual es "pegajosa": una vez que alguien saca un
+    hijo del lugar del padre, futuros cambios del padre ya no lo arrastran.
+    Recorre recursivamente con un set de visitados como guarda contra ciclos
+    (no deberían existir por padre_id, pero por si acaso).
+    """
+    actualizados = []
+    visitados: set[int] = set()
+    pendientes = list(recurso.hijos)
+    while pendientes:
+        hijo = pendientes.pop()
+        if hijo.id in visitados:
+            continue
+        visitados.add(hijo.id)
+        if hijo.espacio_id == espacio_anterior:
+            hijo.espacio_id = nuevo_espacio
+            actualizados.append(hijo)
+        pendientes.extend(hijo.hijos)
+    return actualizados
 
 
 @bp.route("/api/activos")
@@ -621,10 +687,25 @@ def api_crear_activo():
         return jsonify({"error": _MENSAJES_INTEGRIDAD["recursos_estado_valido"]}), 400
 
     padre_id = datos.get("padre_id")
-    if padre_id is not None and Recurso.query.get(padre_id) is None:
+    padre = Recurso.query.get(padre_id) if padre_id is not None else None
+    if padre_id is not None and padre is None:
         # No hace falta chequear ciclos aquí: un recurso recién creado no
         # tiene descendientes todavía, así que no puede formar uno.
         return jsonify({"error": "El padre indicado no existe."}), 400
+
+    if "espacio_id" in datos:
+        espacio_id = datos.get("espacio_id")
+    elif padre is not None:
+        # Herencia: si no se especifica lugar pero sí padre, el hijo nuevo
+        # nace en el mismo lugar que su padre (el padre no tiene por qué
+        # tener lugar -- en ese caso hereda NULL, que es lo correcto).
+        espacio_id = padre.espacio_id
+    else:
+        espacio_id = None
+
+    error = _validar_espacio(None, espacio_id)
+    if error:
+        return jsonify({"error": error}), 400
 
     recurso = Recurso(
         tipo=datos.get("tipo"),
@@ -633,12 +714,14 @@ def api_crear_activo():
         ubicacion=datos.get("ubicacion"),
         placa=datos.get("placa"),
         categoria=datos.get("categoria"),
+        subcategoria=datos.get("subcategoria"),
         marca=datos.get("marca"),
         modelo=datos.get("modelo"),
         identificador=datos.get("identificador"),
         requiere_seguro=bool(datos.get("requiere_seguro", False)),
         estado=estado,
         padre_id=padre_id,
+        espacio_id=espacio_id,
     )
     db.session.add(recurso)
 
@@ -656,12 +739,36 @@ def api_actualizar_activo(recurso_id):
     recurso = Recurso.query.get_or_404(recurso_id)
     datos = request.get_json(silent=True) or {}
 
+    # No es un campo de la tabla, es una opción de la petición: se saca del
+    # dict ANTES del chequeo de campos_desconocidos (si no, lo rechazaría) y
+    # antes del setattr genérico de más abajo.
+    propagar_espacio = datos.pop("propagar_espacio", True)
+
     campos_desconocidos = set(datos) - _CAMPOS_EDITABLES_ACTIVO
     if campos_desconocidos:
         return jsonify({"error": f"Campos no editables: {', '.join(sorted(campos_desconocidos))}"}), 400
 
     if "estado" in datos and datos["estado"] not in _ESTADOS_VALIDOS:
         return jsonify({"error": _MENSAJES_INTEGRIDAD["recursos_estado_valido"]}), 400
+
+    if "tipo" in datos and datos["tipo"] != "espacio":
+        # Si deja de ser 'espacio' pero todavía hay activos ubicados ahí
+        # (espacio_id = este recurso), esos activos quedarían apuntando a un
+        # equipo -- no tiene sentido y rompería la regla que valida
+        # _validar_espacio. Hay que resolver eso primero (mover o desvincular
+        # esos activos) antes de cambiar el tipo.
+        cantidad_contenidos = Recurso.query.filter_by(espacio_id=recurso.id).count()
+        if cantidad_contenidos:
+            return jsonify({
+                "error": f"No puedes cambiar el tipo: hay {cantidad_contenidos} activos ubicados en este espacio."
+            }), 400
+
+    espacio_anterior = recurso.espacio_id
+    espacio_cambia = "espacio_id" in datos and datos["espacio_id"] != espacio_anterior
+    if espacio_cambia:
+        error = _validar_espacio(recurso.id, datos["espacio_id"])
+        if error:
+            return jsonify({"error": error}), 400
 
     if "padre_id" in datos:
         nuevo_padre_id = datos["padre_id"]
@@ -683,10 +790,24 @@ def api_actualizar_activo(recurso_id):
     for campo, valor in datos.items():
         setattr(recurso, campo, valor)
 
+    # La propagación se calcula DESPUÉS de aplicar el cambio a `recurso`
+    # (para que sus hijos por padre_id queden accesibles vía la relación
+    # `hijos`), pero usando `espacio_anterior` -- el valor de ANTES del
+    # setattr de arriba -- como referencia de qué hijos estaban
+    # sincronizados con el padre.
+    hijos_actualizados = []
+    if espacio_cambia and propagar_espacio:
+        hijos_actualizados = _propagar_espacio_a_hijos(recurso, espacio_anterior, datos["espacio_id"])
+
     try:
         db.session.commit()
     except IntegrityError as exc:
         db.session.rollback()
         return jsonify({"error": _mensaje_integridad(exc)}), 400
 
-    return jsonify(_serializar_recurso(recurso))
+    respuesta = _serializar_recurso(recurso)
+    if hijos_actualizados:
+        # El frontend hace reload() de todos modos; esto es solo para que
+        # el toast de confirmación pueda decir cuántos hijos se movieron.
+        respuesta["hijos_actualizados"] = len(hijos_actualizados)
+    return jsonify(respuesta)

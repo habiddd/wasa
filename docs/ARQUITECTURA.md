@@ -131,9 +131,12 @@ Cada fila de `recursos` con `tipo='equipo'` representa una unidad física
 concreta: tiene `placa` (número de inventario, único; 7-8 caracteres
 alfanuméricos -- el padre usa 8 dígitos terminados en 0 por convención,
 ej. `12345670`, un hijo puede tener la misma placa con el último dígito
-distinto de 0 o un código propio como `LEN0022`), `categoria` (ej.
-"cámara", "dron" -- para agrupar tipos de equipo, independiente de `tipo`
-que solo distingue `equipo`/`espacio`), `marca`, `modelo` e `identificador`
+distinto de 0 o un código propio como `LEN0022`), dos niveles de
+clasificación -- `categoria` (agrupación gruesa, por ahora un solo valor,
+"grabación audiovisual") y `subcategoria` (ej. "cámara", "dron" -- el tipo
+concreto de equipo, independiente de `tipo` que solo distingue
+`equipo`/`espacio`; es el nivel sobre el que trabaja el asistente de
+reserva del bot, ver más abajo) --, `marca`, `modelo` e `identificador`
 opcional (serie/IMEI). `marca`/`modelo` se repiten libremente entre filas
 -- lo único con restricción de unicidad es `placa`. Un `espacio` deja esos
 campos en `NULL` (no aplican).
@@ -145,6 +148,27 @@ equipo principal cuando la fila es un accesorio/hijo; `NULL` si no lo es.
 marca si ese hijo se agrega solo a la reserva del padre o si hay que
 pedirlo aparte -- ver "Carrito de reserva" más abajo. Un hijo sigue siendo
 un `recurso` normal: se puede reservar solo, sin su padre.
+
+**Ubicación física (`espacio_id`):** además de `padre_id` (accesorios en
+bundle), `recursos.espacio_id` es una SEGUNDA jerarquía auto-referencial,
+completamente independiente de la primera -- dice en qué lugar está
+físicamente un activo (ej. la Sala 4 tiene 3 iMac y 2 MacBook), no de qué
+otro equipo depende. Un activo puede tener padre y no tener lugar, tener
+lugar y no tener padre, ambos o ninguno; nada las ata entre sí a nivel de
+esquema. El destino de `espacio_id` debe ser una fila con `tipo='espacio'`,
+pero eso se valida en el dashboard (`flask-app/app/routes/dashboard.py`,
+`_validar_espacio`), no con un `CHECK` de Postgres -- un `CHECK` no admite
+subqueries, y un trigger daría un error genérico en vez de uno que el
+dashboard pueda traducir a un mensaje legible. Como un espacio puede estar
+dentro de otro (edificio > piso > sala), la misma columna también anida
+espacios entre sí, y por eso hay que chequear ciclos igual que con
+`padre_id`. Regla de propagación: si a un activo con hijos (por `padre_id`)
+se le cambia el lugar, sus hijos que estaban en el mismo lugar que él se
+mueven con él por defecto (`propagar_espacio`, default `true` en el PATCH);
+los hijos que alguien ya había puesto a mano en otro lugar no se tocan, y
+esa excepción manual queda pegajosa ante cambios futuros del padre. No se
+tocó `recursos_service.py` (el bot): por ahora `espacio_id` es solo de
+inventario/dashboard, queda pendiente si el bot llega a necesitarlo.
 
 Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
 `placa`), se tratan como intercambiables:
@@ -162,11 +186,11 @@ Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
   grupo y devuelve la primera sin choque de horario -- el usuario nunca
   elige la placa exacta, solo el modelo; el bot reparte automáticamente
   cualquier unidad libre.
-- `_categorias_activas()`, `_grupos_por_categoria()`,
-  `_detectar_categoria_en_texto()`: resuelven preguntas por categoría (ej.
-  "qué cámaras tenemos") comparando contra `categoria` aunque el texto no
-  mencione ningún modelo, y permiten sugerir otras marcas/modelos dentro
-  de la misma categoría.
+- `_subcategorias_activas()`, `_grupos_por_subcategoria()`,
+  `_detectar_subcategoria_en_texto()`: resuelven preguntas por subcategoría
+  (ej. "qué cámaras tenemos") comparando contra `subcategoria` aunque el
+  texto no mencione ningún modelo, y permiten sugerir otras marcas/modelos
+  dentro de la misma subcategoría.
 - `evaluar_consulta_disponibilidad` (intent `consultar_disponibilidad`)
   lista el **estado agregado de cada modelo** (`_estado_grupo`: cuántas
   unidades libres de cuántas totales) -- el usuario quiere saber qué hay y
@@ -204,13 +228,13 @@ elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
 resuelto trae hijos marcados como incluidos por defecto (ver "Carrito de
 reserva" más abajo). `_avanzar_wizard` además salta solo cualquier paso
 que tenga una única opción posible (ej. una sola marca dentro de una
-categoría), avisando al usuario ("solo tenemos una marca de dron, sigo con
-esa") en vez de preguntar algo que no tiene sentido elegir. Si el primer
-mensaje ya deja claro el activo (vía `llm_client.extraer_datos_reserva`,
+subcategoría), avisando al usuario ("solo tenemos una marca de dron, sigo
+con esa") en vez de preguntar algo que no tiene sentido elegir. Si el
+primer mensaje ya deja claro el activo (vía `llm_client.extraer_datos_reserva`,
 ver arriba), esos pasos se saltan también; si dos activos empatan (ej.
 "cámara canon" con dos modelos Canon en catálogo), se pre-llenan
-`categoria` y `marca` si todos los candidatos las comparten, y el wizard
-arranca directo en el primer paso que sí hace falta preguntar (ver
+`subcategoria` y `marca` si todos los candidatos las comparten, y el
+wizard arranca directo en el primer paso que sí hace falta preguntar (ver
 "Por qué separar el LLM..." más arriba).
 
 La reserva no se limita a un solo activo: `wizard["carrito"]` es la lista

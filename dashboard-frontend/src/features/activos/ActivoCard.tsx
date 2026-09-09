@@ -10,7 +10,7 @@ import type { EstadoRecurso, Recurso } from "@/lib/api"
 import { ActivoEditForm } from "./ActivoEditForm"
 import { ActivoEstadoSelect } from "./ActivoEstadoSelect"
 import { useActivosContext } from "./activos-context"
-import { hijosDe } from "./tree-utils"
+import { hijosDe, nombreEspacio } from "./tree-utils"
 
 export function ActivoCard({
   recurso,
@@ -21,13 +21,18 @@ export function ActivoCard({
   lista: Recurso[]
   nivel: number
 }) {
-  const { expandidos, toggleExpandido, actualizar } = useActivosContext()
+  const { activos, expandidos, toggleExpandido, actualizar } = useActivosContext()
   const [editando, setEditando] = useState(false)
   const [cambiandoEstado, setCambiandoEstado] = useState(false)
 
   const hijos = hijosDe(recurso.id, lista)
   const tieneHijos = hijos.length > 0
   const expandido = expandidos.has(recurso.id)
+  // El lugar se resuelve contra TODOS los activos (contexto), no contra
+  // `lista`: `lista` puede venir filtrada (ej. solo equipos de una
+  // categoría, o solo los contenidos de un lugar) y no siempre incluye el
+  // espacio referenciado.
+  const lugarNombre = nombreEspacio(recurso.espacio_id, activos)
 
   async function handleEstadoChange(nuevo: EstadoRecurso) {
     setCambiandoEstado(true)
@@ -74,6 +79,8 @@ export function ActivoCard({
             <strong className="text-sm">{recurso.nombre}</strong>
             <Badge variant="secondary">{recurso.tipo === "equipo" ? "Equipo" : "Espacio"}</Badge>
             {recurso.categoria && <Badge variant="secondary">{recurso.categoria}</Badge>}
+            {recurso.subcategoria && <Badge variant="outline">{recurso.subcategoria}</Badge>}
+            {lugarNombre && <Badge variant="outline">Lugar: {lugarNombre}</Badge>}
             <ActivoEstadoSelect
               estado={recurso.estado}
               disabled={cambiandoEstado}
@@ -97,7 +104,15 @@ export function ActivoCard({
               lista={lista}
               onCancel={() => setEditando(false)}
               onSave={async (cambios) => {
-                await actualizar(recurso.id, cambios)
+                const actualizado = await actualizar(recurso.id, cambios)
+                // Solo informativo -- reload() ya trajo los datos nuevos;
+                // esto es para que el usuario sepa que también se movieron
+                // hijos, no solo el activo que editó.
+                if (actualizado.hijos_actualizados) {
+                  toast.success(
+                    `Se movió también ${actualizado.hijos_actualizados} hijo(s) al nuevo lugar.`
+                  )
+                }
                 setEditando(false)
               }}
             />

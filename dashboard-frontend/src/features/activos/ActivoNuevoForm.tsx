@@ -15,21 +15,28 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import type { CambiosActivo, EstadoRecurso, Recurso, TipoRecurso } from "@/lib/api"
 
-import { ESTADOS_ACTIVO } from "./tree-utils"
+import { CampoCategoria } from "./CampoCategoria"
+import { ESTADOS_ACTIVO, valoresCategoria, valoresSubcategoria } from "./tree-utils"
 
 export function ActivoNuevoForm({
   tipo,
   equipos,
+  espacios,
   onCancel,
   onCreate,
 }: {
   tipo: TipoRecurso
   equipos: Recurso[]
+  // Opciones del selector "Lugar / espacio": un equipo va en una sala, pero
+  // una sala también puede ir dentro de otra (edificio > piso > sala), así
+  // que este selector aplica a los dos tipos.
+  espacios: Recurso[]
   onCancel: () => void
   onCreate: (cambios: CambiosActivo) => Promise<void>
 }) {
   const [nombre, setNombre] = useState("")
   const [categoria, setCategoria] = useState("")
+  const [subcategoria, setSubcategoria] = useState("")
   const [placa, setPlaca] = useState("")
   const [marca, setMarca] = useState("")
   const [modelo, setModelo] = useState("")
@@ -37,14 +44,48 @@ export function ActivoNuevoForm({
   const [ubicacion, setUbicacion] = useState("")
   const [descripcion, setDescripcion] = useState("")
   const [padreId, setPadreId] = useState<string>("")
+  const [espacioId, setEspacioId] = useState<string>("")
+  // Mientras el usuario no haya tocado el selector de Lugar a mano, elegir
+  // un padre pre-rellena el lugar con el del padre (el hijo "va con el
+  // padre por defecto"). Una vez que el usuario elige un lugar explícito,
+  // ya no se lo pisa al cambiar de padre.
+  const [lugarTocado, setLugarTocado] = useState(false)
   const [requiereSeguro, setRequiereSeguro] = useState(false)
   const [estado, setEstado] = useState<EstadoRecurso>("disponible")
   const [error, setError] = useState<string | null>(null)
   const [guardando, setGuardando] = useState(false)
 
+  // `equipos` acá ya viene sin filtrar por categoría/subcategoría (ver
+  // ActivosPanel), así que sirve tal cual para alimentar el Select con
+  // todo lo que ya se usa en el catálogo.
+  const categoriasConocidas = valoresCategoria(equipos)
+  const subcategoriasConocidas = valoresSubcategoria(equipos)
+
+  function handlePadreChange(valor: string) {
+    const nuevoPadreId = valor === "__ninguno__" ? "" : valor
+    setPadreId(nuevoPadreId)
+    if (!lugarTocado) {
+      const padre = equipos.find((r) => String(r.id) === nuevoPadreId)
+      setEspacioId(padre?.espacio_id != null ? String(padre.espacio_id) : "")
+    }
+  }
+
+  function handleEspacioChange(valor: string) {
+    setLugarTocado(true)
+    setEspacioId(valor === "__ninguno__" ? "" : valor)
+  }
+
   async function handleSubmit(ev: FormEvent) {
     ev.preventDefault()
     setError(null)
+    // La Categoría es obligatoria para equipos. Como el Select puede
+    // quedar sin nada elegido (no hay opción vacía, a propósito), la
+    // validación del "required" que antes traía el Input hay que hacerla
+    // a mano acá.
+    if (tipo === "equipo" && !categoria.trim()) {
+      setError("La categoría es obligatoria")
+      return
+    }
     setGuardando(true)
     try {
       const cambios: CambiosActivo = {
@@ -53,9 +94,11 @@ export function ActivoNuevoForm({
         ubicacion: ubicacion || null,
         descripcion: descripcion || null,
         estado,
+        espacio_id: espacioId ? Number(espacioId) : null,
       }
       if (tipo === "equipo") {
         cambios.categoria = categoria || null
+        cambios.subcategoria = subcategoria || null
         cambios.placa = placa ? placa.toUpperCase() : null
         cambios.marca = marca || null
         cambios.modelo = modelo || null
@@ -91,7 +134,27 @@ export function ActivoNuevoForm({
             <>
               <div className="flex flex-col gap-1">
                 <Label>Categoría</Label>
-                <Input value={categoria} onChange={(e) => setCategoria(e.target.value)} required />
+                <CampoCategoria
+                  id="nuevo-categoria"
+                  valor={categoria}
+                  opciones={categoriasConocidas}
+                  onChange={setCategoria}
+                  placeholder="Agrupación gruesa, ej. grabación audiovisual"
+                  textoNueva="+ Nueva categoría…"
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label>Subcategoría</Label>
+                <CampoCategoria
+                  id="nuevo-subcategoria"
+                  valor={subcategoria}
+                  opciones={subcategoriasConocidas}
+                  onChange={setSubcategoria}
+                  placeholder="Tipo de equipo, ej. cámara"
+                  textoNueva="+ Nueva subcategoría…"
+                  textoSinValor="— Sin subcategoría —"
+                />
               </div>
               <div className="flex flex-col gap-1">
                 <Label>Placa</Label>
@@ -122,6 +185,23 @@ export function ActivoNuevoForm({
             <Input value={ubicacion} onChange={(e) => setUbicacion(e.target.value)} />
           </div>
 
+          <div className="flex flex-col gap-1">
+            <Label>Lugar / espacio</Label>
+            <Select value={espacioId || "__ninguno__"} onValueChange={handleEspacioChange}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__ninguno__">— Sin lugar —</SelectItem>
+                {espacios.map((r) => (
+                  <SelectItem key={r.id} value={String(r.id)}>
+                    {r.nombre}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="col-span-full flex flex-col gap-1">
             <Label>Descripción</Label>
             <Textarea rows={2} value={descripcion} onChange={(e) => setDescripcion(e.target.value)} />
@@ -130,7 +210,7 @@ export function ActivoNuevoForm({
           {tipo === "equipo" && (
             <div className="col-span-full flex flex-col gap-1">
               <Label>¿Es hijo de otro activo?</Label>
-              <Select value={padreId || "__ninguno__"} onValueChange={(v) => setPadreId(v === "__ninguno__" ? "" : v)}>
+              <Select value={padreId || "__ninguno__"} onValueChange={handlePadreChange}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>

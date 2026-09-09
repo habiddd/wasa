@@ -1,4 +1,11 @@
 import { cn } from "@/lib/utils"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import type { EstadoRecurso } from "@/lib/api"
 
 import { ESTADOS_ACTIVO } from "./tree-utils"
@@ -21,21 +28,31 @@ export function ActivoEstadoSelect({
   const variantClass = VARIANT_CLASSES[ESTADOS_ACTIVO[estado].variant]
 
   return (
-    <select
-      className={cn(
-        "h-5 rounded-full border-none px-2 text-xs font-medium outline-none",
-        variantClass,
-        disabled && "opacity-60"
-      )}
+    <Select
       value={estado}
       disabled={disabled}
-      onChange={(e) => onChange(e.target.value as EstadoRecurso)}
+      onValueChange={(v) => onChange(v as EstadoRecurso)}
     >
-      {(Object.keys(ESTADOS_ACTIVO) as EstadoRecurso[]).map((valor) => (
-        <option key={valor} value={valor}>
-          {ESTADOS_ACTIVO[valor].texto}
-        </option>
-      ))}
-    </select>
+      {/* El trigger sigue siendo la píldora de color de siempre -- se
+          neutraliza el tamaño/borde/padding por defecto de SelectTrigger
+          para que el Select del theme no rompa el aspecto de la píldora. */}
+      <SelectTrigger
+        size="sm"
+        className={cn(
+          "h-5 w-fit gap-1 rounded-full border-none bg-transparent px-2 py-0 text-xs font-medium data-[size=sm]:h-5 data-[size=sm]:rounded-full [&_svg]:size-3",
+          variantClass,
+          disabled && "opacity-60"
+        )}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="end">
+        {(Object.keys(ESTADOS_ACTIVO) as EstadoRecurso[]).map((valor) => (
+          <SelectItem key={valor} value={valor}>
+            {ESTADOS_ACTIVO[valor].texto}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }

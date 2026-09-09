@@ -139,40 +139,40 @@ def listar_nombres_disponibles() -> list[str]:
     return [nombre for nombre, _ in _grupos_activos()]
 
 
-def _categorias_activas() -> list[str]:
-    """Categorías distintas entre los equipos activos (ej. 'camara',
+def _subcategorias_activas() -> list[str]:
+    """Subcategorías distintas entre los equipos activos (ej. 'camara',
     'celular', 'dron'), en el orden en que aparecen al agrupar por modelo.
     Permite resolver "qué cámaras tenemos" aunque "cámaras" no coincida
-    con ningún nombre de modelo -- ver `_detectar_categoria_en_texto`."""
+    con ningún nombre de modelo -- ver `_detectar_subcategoria_en_texto`."""
     vistas: list[str] = []
     for _, representante in _grupos_activos():
-        cat = representante.categoria
+        cat = representante.subcategoria
         if cat and cat not in vistas:
             vistas.append(cat)
     return vistas
 
 
-def _grupos_por_categoria(categoria: str) -> list[tuple[str, Recurso]]:
+def _grupos_por_subcategoria(subcategoria: str) -> list[tuple[str, Recurso]]:
     """(nombre, representante) de cada modelo distinto dentro de una
-    categoría (comparación normalizada, sin tildes/mayúsculas)."""
-    cat_norm = _normalizar(categoria)
+    subcategoría (comparación normalizada, sin tildes/mayúsculas)."""
+    cat_norm = _normalizar(subcategoria)
     return [
         (nombre, representante)
         for nombre, representante in _grupos_activos()
-        if representante.categoria and _normalizar(representante.categoria) == cat_norm
+        if representante.subcategoria and _normalizar(representante.subcategoria) == cat_norm
     ]
 
 
-def _detectar_categoria_en_texto(texto: str) -> str | None:
-    """Busca si el texto del usuario menciona una categoría conocida (ej.
+def _detectar_subcategoria_en_texto(texto: str) -> str | None:
+    """Busca si el texto del usuario menciona una subcategoría conocida (ej.
     "cámaras", "celulares") aunque no mencione ningún modelo o marca
     específicos. La comparación por substring cubre el plural regular en
     español ("camara" está contenido en "camaras") sin necesitar una
     lista de sinónimos aparte."""
     texto_norm = _normalizar(texto)
-    for categoria in _categorias_activas():
-        if _normalizar(categoria) in texto_norm:
-            return categoria
+    for subcategoria in _subcategorias_activas():
+        if _normalizar(subcategoria) in texto_norm:
+            return subcategoria
     return None
 
 
@@ -251,15 +251,15 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     candidatos, es_match_debil = buscar_recursos_en_texto(texto_usuario)
 
     if not candidatos:
-        categoria = _detectar_categoria_en_texto(texto_usuario)
-        if categoria:
-            grupos_categoria = _grupos_por_categoria(categoria)
-            if grupos_categoria:
+        subcategoria = _detectar_subcategoria_en_texto(texto_usuario)
+        if subcategoria:
+            grupos_subcategoria = _grupos_por_subcategoria(subcategoria)
+            if grupos_subcategoria:
                 lineas = "\n".join(
                     f"- {_describir_modelo(nombre, rep)}: {_estado_grupo(nombre, ahora)}"
-                    for nombre, rep in grupos_categoria
+                    for nombre, rep in grupos_subcategoria
                 )
-                return f"Esto es lo que tenemos en '{categoria}':\n{lineas}"
+                return f"Esto es lo que tenemos en '{subcategoria}':\n{lineas}"
 
         grupos = _grupos_activos()
         if not grupos:
@@ -685,12 +685,12 @@ def _interpretar_hora_individual_relajada(texto: str) -> tuple[int, int] | None:
 
 
 def _menu_paso_activo() -> list[tuple[str, str]]:
-    """Opciones del primer paso: una por cada categoría de equipo (ej.
+    """Opciones del primer paso: una por cada subcategoría de equipo (ej.
     'camara') y una por cada espacio individual (un espacio no tiene
-    categoría/marca/modelo, así que se resuelve directo en este paso)."""
+    subcategoría/marca/modelo, así que se resuelve directo en este paso)."""
     opciones = []
-    for categoria in _categorias_activas():
-        opciones.append((f"categoria:{categoria}", categoria.capitalize()))
+    for subcategoria in _subcategorias_activas():
+        opciones.append((f"subcategoria:{subcategoria}", subcategoria.capitalize()))
     for nombre, representante in _grupos_activos():
         if representante.tipo == "espacio":
             opciones.append((f"nombre:{nombre}", nombre))
@@ -698,7 +698,7 @@ def _menu_paso_activo() -> list[tuple[str, str]]:
 
 
 def _formatear_menu_activo(opciones: list[tuple[str, str]]) -> str:
-    equipos = [(i, etiqueta) for i, (valor, etiqueta) in enumerate(opciones, start=1) if valor.startswith("categoria:")]
+    equipos = [(i, etiqueta) for i, (valor, etiqueta) in enumerate(opciones, start=1) if valor.startswith("subcategoria:")]
     espacios = [(i, etiqueta) for i, (valor, etiqueta) in enumerate(opciones, start=1) if valor.startswith("nombre:")]
     partes = ["¿Qué necesitas reservar?"]
     if equipos:
@@ -711,18 +711,18 @@ def _formatear_menu_activo(opciones: list[tuple[str, str]]) -> str:
     return "\n".join(partes)
 
 
-def _marcas_de_categoria(categoria: str) -> list[str]:
+def _marcas_de_subcategoria(subcategoria: str) -> list[str]:
     vistas: list[str] = []
-    for _, representante in _grupos_por_categoria(categoria):
+    for _, representante in _grupos_por_subcategoria(subcategoria):
         if representante.marca and representante.marca not in vistas:
             vistas.append(representante.marca)
     return vistas
 
 
-def _modelos_de_marca(categoria: str, marca: str) -> list[tuple[str, Recurso]]:
+def _modelos_de_marca(subcategoria: str, marca: str) -> list[tuple[str, Recurso]]:
     return [
         (nombre, representante)
-        for nombre, representante in _grupos_por_categoria(categoria)
+        for nombre, representante in _grupos_por_subcategoria(subcategoria)
         if representante.marca == marca
     ]
 
@@ -764,8 +764,8 @@ def _aplicar_respuesta_menu(wizard: dict, texto_usuario: str) -> str | None:
     tipo_valor, _, resto = valor.partition(":")
     paso = wizard["paso"]
     if paso == "elegir_activo":
-        if tipo_valor == "categoria":
-            wizard["categoria"] = resto
+        if tipo_valor == "subcategoria":
+            wizard["subcategoria"] = resto
         else:  # "nombre" -- un espacio, ya queda resuelto directo
             wizard["nombre_recurso"] = resto
     elif paso == "elegir_marca":
@@ -786,7 +786,7 @@ def _mover_item_resuelto_al_carrito(wizard: dict) -> str:
     carrito: list[dict] = wizard.setdefault("carrito", [])
     if not any(item["nombre_recurso"] == nombre for item in carrito):
         carrito.append({"nombre_recurso": nombre, "auto": False, "por": None})
-    wizard["categoria"] = None
+    wizard["subcategoria"] = None
     wizard["marca"] = None
     wizard["resolviendo_item"] = False
     return nombre
@@ -889,7 +889,7 @@ OPCIONES_CONFIRMAR_HORA = [
 def _siguiente_paso_wizard(wizard: dict) -> str:
     if wizard.get("resolviendo_item"):
         if not wizard.get("nombre_recurso"):
-            if not wizard.get("categoria"):
+            if not wizard.get("subcategoria"):
                 return "elegir_activo"
             if not wizard.get("marca"):
                 return "elegir_marca"
@@ -915,7 +915,7 @@ def _siguiente_paso_wizard(wizard: dict) -> str:
 def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
     """Avanza el wizard todo lo que se pueda sin pedirle nada al usuario
     (si un paso solo tiene una opción posible, ej. una sola marca en una
-    categoría, se salta solo y sigue; y si un ítem recién se resolvió, se
+    subcategoría, se salta solo y sigue; y si un ítem recién se resolvió, se
     encaja en el carrito junto con sus accesorios por defecto) y se detiene
     en el primer paso que sí necesita una respuesta, o cuando el usuario ya
     confirmó todo (`listo=True`, momento en el que el llamador crea la
@@ -960,25 +960,25 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             return _con_avisos(avisos, mensaje), wizard, False
 
         if paso == "elegir_marca":
-            marcas = _marcas_de_categoria(wizard["categoria"])
+            marcas = _marcas_de_subcategoria(wizard["subcategoria"])
             if len(marcas) == 1:
                 wizard["marca"] = marcas[0]
-                avisos.append(f"Como solo tenemos una marca de {wizard['categoria']} ({marcas[0]}), sigo con esa.")
+                avisos.append(f"Como solo tenemos una marca de {wizard['subcategoria']} ({marcas[0]}), sigo con esa.")
                 continue
             opciones = [(m, m) for m in marcas]
             wizard["opciones_actuales"] = opciones
             wizard["paso"] = "elegir_marca"
-            mensaje = _formatear_menu(f"¿Qué marca de {wizard['categoria']} necesitas?", opciones)
+            mensaje = _formatear_menu(f"¿Qué marca de {wizard['subcategoria']} necesitas?", opciones)
             wizard["_mensaje_menu_actual"] = mensaje
             return _con_avisos(avisos, mensaje), wizard, False
 
         if paso == "elegir_modelo":
-            grupos = _modelos_de_marca(wizard["categoria"], wizard["marca"])
+            grupos = _modelos_de_marca(wizard["subcategoria"], wizard["marca"])
             if len(grupos) == 1:
                 nombre, representante = grupos[0]
                 wizard["nombre_recurso"] = nombre
                 etiqueta = representante.modelo or nombre
-                avisos.append(f"Solo tenemos un modelo de {wizard['marca']} en {wizard['categoria']} ({etiqueta}), sigo con ese.")
+                avisos.append(f"Solo tenemos un modelo de {wizard['marca']} en {wizard['subcategoria']} ({etiqueta}), sigo con ese.")
                 continue
             opciones = [(nombre, representante.modelo or nombre) for nombre, representante in grupos]
             wizard["opciones_actuales"] = opciones
@@ -1285,7 +1285,7 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
     recurso, candidatos, _ = _resolver_recurso_para_reserva(texto_usuario, extraido)
 
     wizard: dict = {
-        "categoria": None,
+        "subcategoria": None,
         "marca": None,
         "nombre_recurso": None,
         "carrito": [],
@@ -1308,9 +1308,9 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         # claros en el texto (tipo, y marca si todos los candidatos
         # comparten una) y arrancamos directo en el primero que sí hace
         # falta preguntar.
-        categorias_candidatos = {c.categoria for c in candidatos if c.categoria}
-        if len(categorias_candidatos) == 1:
-            wizard["categoria"] = next(iter(categorias_candidatos))
+        subcategorias_candidatos = {c.subcategoria for c in candidatos if c.subcategoria}
+        if len(subcategorias_candidatos) == 1:
+            wizard["subcategoria"] = next(iter(subcategorias_candidatos))
             marcas_candidatos = {c.marca for c in candidatos if c.marca}
             if len(marcas_candidatos) == 1:
                 wizard["marca"] = next(iter(marcas_candidatos))
@@ -1614,7 +1614,7 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
 
         if valor == "agregar_item":
-            wizard.update(categoria=None, marca=None, nombre_recurso=None, resolviendo_item=True)
+            wizard.update(subcategoria=None, marca=None, nombre_recurso=None, resolviendo_item=True)
         elif valor == "quitar_item":
             return _iniciar_quitar_item(wizard, sesion)
         elif valor == "cambiar_fecha":

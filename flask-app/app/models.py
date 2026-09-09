@@ -36,7 +36,16 @@ class Recurso(db.Model):
     # viene en bundle con otro equipo (ej. los lentes de una cámara). NULL
     # si el equipo no es hijo de otro.
     padre_id = db.Column(db.Integer, db.ForeignKey("recursos.id"))
-    categoria = db.Column(db.String(50))                  # 'camara' | 'celular' | 'dron' | ... (texto libre)
+    # FK al espacio donde vive físicamente este activo (ej. la Sala 4). Es
+    # una jerarquía DISTINTA e INDEPENDIENTE de `padre_id`: esa agrupa
+    # accesorios en bundle, esta dice en qué lugar está el activo. Debe
+    # apuntar a un recurso con tipo='espacio' -- se valida en
+    # routes/dashboard.py (_validar_espacio), no acá, porque Postgres no
+    # admite subqueries en un CHECK. Un espacio puede estar dentro de otro
+    # espacio (edificio > piso > sala), así que también sirve para anidarlos.
+    espacio_id = db.Column(db.Integer, db.ForeignKey("recursos.id"))
+    categoria = db.Column(db.String(50))                  # agrupación gruesa, ej. 'grabación audiovisual' (texto libre)
+    subcategoria = db.Column(db.String(50))               # 'camara' | 'celular' | 'dron' | ... -- nivel fino sobre el que trabaja el asistente del bot (texto libre)
     marca = db.Column(db.String(100))
     modelo = db.Column(db.String(100))
     identificador = db.Column(db.String(100))             # número de serie o IMEI, si lo tiene
@@ -49,7 +58,17 @@ class Recurso(db.Model):
     estado = db.Column(db.String(20), nullable=False, default="disponible")
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
-    padre = db.relationship("Recurso", remote_side=[id], backref="hijos")
+    # foreign_keys explícito en AMBAS relaciones: con dos FKs
+    # auto-referenciales en la misma tabla (padre_id y espacio_id),
+    # SQLAlchemy no puede adivinar sola cuál usa cada relationship y arranca
+    # con AmbiguousForeignKeysError si se lo dejamos implícito.
+    padre = db.relationship(
+        "Recurso", remote_side=[id], foreign_keys=[padre_id], backref="hijos"
+    )
+    espacio = db.relationship(
+        "Recurso", remote_side=[id], foreign_keys=[espacio_id],
+        backref="contenidos",
+    )
 
 
 class ReservaGrupo(db.Model):

@@ -18,25 +18,25 @@ from app.models import Recurso, Reserva, ReservaGrupo, Usuario
 
 RECURSOS_DUMMY = [
     dict(tipo="equipo", nombre="Cámara Sony A7III", descripcion="Mirrorless full frame",
-         placa="10000010", categoria="cámara", marca="Sony", modelo="A7III", identificador="SN-A7III-001",
+         placa="10000010", categoria="grabación audiovisual", subcategoria="cámara", marca="Sony", modelo="A7III", identificador="SN-A7III-001",
          requiere_seguro=True),
     dict(tipo="equipo", nombre="Cámara Canon EOS R", descripcion="Mirrorless full frame",
-         placa="10000020", categoria="cámara", marca="Canon", modelo="EOS R", identificador="SN-EOSR-002",
+         placa="10000020", categoria="grabación audiovisual", subcategoria="cámara", marca="Canon", modelo="EOS R", identificador="SN-EOSR-002",
          requiere_seguro=True),
     dict(tipo="equipo", nombre="Cámara Canon EOS R6", descripcion="Mirrorless full frame",
-         placa="10000070", categoria="cámara", marca="Canon", modelo="EOS R6", identificador="SN-EOSR6-007",
+         placa="10000070", categoria="grabación audiovisual", subcategoria="cámara", marca="Canon", modelo="EOS R6", identificador="SN-EOSR6-007",
          requiere_seguro=True),
     dict(tipo="equipo", nombre="Trípode Manfrotto", descripcion="Trípode de video con cabezal fluido",
-         placa="10000030", categoria="trípode", marca="Manfrotto", modelo="MT055XPRO3", identificador=None,
+         placa="10000030", categoria="grabación audiovisual", subcategoria="trípode", marca="Manfrotto", modelo="MT055XPRO3", identificador=None,
          requiere_seguro=False),
     dict(tipo="equipo", nombre="Micrófono Rode NTG3", descripcion="Micrófono shotgun",
-         placa="10000040", categoria="micrófono", marca="Rode", modelo="NTG3", identificador=None,
+         placa="10000040", categoria="grabación audiovisual", subcategoria="micrófono", marca="Rode", modelo="NTG3", identificador=None,
          requiere_seguro=False),
     dict(tipo="equipo", nombre="Kit de luces LED", descripcion="Kit de 2 paneles LED con soportes",
-         placa="10000050", categoria="luces", marca="Neewer", modelo="660 PRO", identificador=None,
+         placa="10000050", categoria="grabación audiovisual", subcategoria="luces", marca="Neewer", modelo="660 PRO", identificador=None,
          requiere_seguro=True),
     dict(tipo="equipo", nombre="Dron DJI Mavic", descripcion="Dron con cámara 4K",
-         placa="10000060", categoria="dron", marca="DJI", modelo="Mavic 3", identificador="IMEI-864012345678901",
+         placa="10000060", categoria="grabación audiovisual", subcategoria="dron", marca="DJI", modelo="Mavic 3", identificador="IMEI-864012345678901",
          requiere_seguro=True),
     dict(tipo="espacio", nombre="Estudio de grabación A", descripcion="Estudio con croma",
          ubicacion="Edificio CPA, piso 2"),
@@ -64,12 +64,12 @@ def seed_recursos_cmd():
     lentes_sony = [
         Recurso(
             tipo="equipo", nombre="Lente Sony 24-70mm f/2.8", descripcion="Zoom estándar",
-            placa="LEN0022", categoria="lente", marca="Sony", modelo="FE 24-70mm f/2.8 GM",
+            placa="LEN0022", categoria="grabación audiovisual", subcategoria="lente", marca="Sony", modelo="FE 24-70mm f/2.8 GM",
             padre_id=camara_sony.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Sony 70-200mm f/2.8", descripcion="Zoom telefoto",
-            placa="LEN0023", categoria="lente", marca="Sony", modelo="FE 70-200mm f/2.8 GM",
+            placa="LEN0023", categoria="grabación audiovisual", subcategoria="lente", marca="Sony", modelo="FE 70-200mm f/2.8 GM",
             padre_id=camara_sony.id,
         ),
     ]
@@ -85,27 +85,27 @@ def seed_recursos_cmd():
     lentes_canon = [
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 24-105mm f/4L", descripcion="Zoom estándar",
-            placa="LEN0024", categoria="lente", marca="Canon", modelo="RF 24-105mm f/4L",
+            placa="LEN0024", categoria="grabación audiovisual", subcategoria="lente", marca="Canon", modelo="RF 24-105mm f/4L",
             padre_id=camara_canon_r.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 50mm f/1.2L", descripcion="Fijo retrato",
-            placa="LEN0025", categoria="lente", marca="Canon", modelo="RF 50mm f/1.2L",
+            placa="LEN0025", categoria="grabación audiovisual", subcategoria="lente", marca="Canon", modelo="RF 50mm f/1.2L",
             padre_id=camara_canon_r.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 16-35mm f/2.8L", descripcion="Gran angular",
-            placa="LEN0026", categoria="lente", marca="Canon", modelo="RF 16-35mm f/2.8L",
+            placa="LEN0026", categoria="grabación audiovisual", subcategoria="lente", marca="Canon", modelo="RF 16-35mm f/2.8L",
             padre_id=camara_canon_r6.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 70-200mm f/2.8L", descripcion="Zoom telefoto",
-            placa="LEN0027", categoria="lente", marca="Canon", modelo="RF 70-200mm f/2.8L",
+            placa="LEN0027", categoria="grabación audiovisual", subcategoria="lente", marca="Canon", modelo="RF 70-200mm f/2.8L",
             padre_id=camara_canon_r6.id,
         ),
         Recurso(
             tipo="equipo", nombre="Lente Canon RF 100-500mm f/4.5-7.1L", descripcion="Supertelefoto",
-            placa="LEN0028", categoria="lente", marca="Canon", modelo="RF 100-500mm f/4.5-7.1L",
+            placa="LEN0028", categoria="grabación audiovisual", subcategoria="lente", marca="Canon", modelo="RF 100-500mm f/4.5-7.1L",
             padre_id=camara_canon_r6.id,
         ),
     ]

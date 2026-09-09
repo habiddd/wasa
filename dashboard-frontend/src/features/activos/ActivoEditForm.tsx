@@ -14,7 +14,17 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import type { CambiosActivo, EstadoRecurso, Recurso, TipoRecurso } from "@/lib/api"
 
-import { descendientesDe, ESTADOS_ACTIVO } from "./tree-utils"
+import { useActivosContext } from "./activos-context"
+import { CampoCategoria } from "./CampoCategoria"
+import {
+  descendientesDe,
+  descendientesEspacioDe,
+  espaciosDisponibles,
+  ESTADOS_ACTIVO,
+  hijosSincronizados,
+  valoresCategoria,
+  valoresSubcategoria,
+} from "./tree-utils"
 
 export function ActivoEditForm({
   recurso,
@@ -25,11 +35,19 @@ export function ActivoEditForm({
   recurso: Recurso
   lista: Recurso[]
   onCancel: () => void
-  onSave: (cambios: CambiosActivo) => Promise<void>
+  onSave: (cambios: CambiosActivo & { propagar_espacio?: boolean }) => Promise<void>
 }) {
+  // El selector de Padre usa `lista` (viene filtrada por el panel que llama
+  // a este form -- ej. solo equipos de una categoría). El de Lugar/espacio
+  // en cambio necesita TODOS los activos (useActivosContext().activos, no
+  // `lista`): en ActivosPanel `lista` solo trae equipos, así que un
+  // selector de espacios basado en `lista` quedaría siempre vacío.
+  const { activos } = useActivosContext()
+
   const [nombre, setNombre] = useState(recurso.nombre)
   const [tipo, setTipo] = useState<TipoRecurso>(recurso.tipo)
   const [categoria, setCategoria] = useState(recurso.categoria ?? "")
+  const [subcategoria, setSubcategoria] = useState(recurso.subcategoria ?? "")
   const [placa, setPlaca] = useState(recurso.placa ?? "")
   const [marca, setMarca] = useState(recurso.marca ?? "")
   const [modelo, setModelo] = useState(recurso.modelo ?? "")
@@ -39,6 +57,14 @@ export function ActivoEditForm({
   const [padreId, setPadreId] = useState<string>(
     recurso.padre_id != null ? String(recurso.padre_id) : ""
   )
+  const [espacioId, setEspacioId] = useState<string>(
+    recurso.espacio_id != null ? String(recurso.espacio_id) : ""
+  )
+  // Mientras el usuario no toque el selector de Lugar a mano, cambiar el
+  // Padre pre-rellena el Lugar con el del nuevo padre (el "va con el padre
+  // por defecto" también aplica al elegir el padre desde este form).
+  const [lugarTocado, setLugarTocado] = useState(false)
+  const [propagarEspacio, setPropagarEspacio] = useState(true)
   const [requiereSeguro, setRequiereSeguro] = useState(recurso.requiere_seguro)
   const [estado, setEstado] = useState<EstadoRecurso>(recurso.estado)
   const [error, setError] = useState<string | null>(null)
@@ -50,6 +76,42 @@ export function ActivoEditForm({
   ])
   const opcionesPadre = lista.filter((r) => !excluidos.has(r.id))
 
+  // Un espacio no puede terminar dentro de sí mismo ni de uno de sus
+  // propios contenidos (eso crearía un ciclo) -- se excluyen contra TODOS
+  // los activos, no solo `lista`, por el mismo motivo de arriba.
+  const excluidosEspacio = new Set([
+    recurso.id,
+    ...descendientesEspacioDe(recurso.id, activos).map((r) => r.id),
+  ])
+  const opcionesEspacio = espaciosDisponibles(activos).filter(
+    (r) => !excluidosEspacio.has(r.id)
+  )
+
+  // Valores de Categoría/Subcategoría ya usados -- contra TODOS los
+  // activos (contexto), no contra `lista` (que viene filtrada), para que
+  // el Select ofrezca lo que ya existe en el catálogo completo y no solo
+  // dentro del filtro actual.
+  const categoriasConocidas = valoresCategoria(activos)
+  const subcategoriasConocidas = valoresSubcategoria(activos)
+
+  const espacioIdNumerico = espacioId ? Number(espacioId) : null
+  const hijosAMover = hijosSincronizados(recurso, activos)
+  const mostrarPropagacion = hijosAMover.length > 0 && espacioIdNumerico !== recurso.espacio_id
+
+  function handlePadreChange(valor: string) {
+    const nuevoPadreId = valor === "__ninguno__" ? "" : valor
+    setPadreId(nuevoPadreId)
+    if (!lugarTocado) {
+      const padre = activos.find((r) => String(r.id) === nuevoPadreId)
+      setEspacioId(padre?.espacio_id != null ? String(padre.espacio_id) : "")
+    }
+  }
+
+  function handleEspacioChange(valor: string) {
+    setLugarTocado(true)
+    setEspacioId(valor === "__ninguno__" ? "" : valor)
+  }
+
   async function handleSubmit(ev: FormEvent) {
     ev.preventDefault()
     setError(null)
@@ -59,6 +121,7 @@ export function ActivoEditForm({
         nombre,
         tipo,
         categoria: categoria || null,
+        subcategoria: subcategoria || null,
         placa: placa ? placa.toUpperCase() : null,
         marca: marca || null,
         modelo: modelo || null,
@@ -66,8 +129,10 @@ export function ActivoEditForm({
         ubicacion: ubicacion || null,
         descripcion: descripcion || null,
         padre_id: padreId ? Number(padreId) : null,
+        espacio_id: espacioIdNumerico,
         requiere_seguro: requiereSeguro,
         estado,
+        ...(mostrarPropagacion ? { propagar_espacio: propagarEspacio } : {}),
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -98,7 +163,26 @@ export function ActivoEditForm({
       </div>
       <div className="flex flex-col gap-1">
         <Label>Categoría</Label>
-        <Input value={categoria} onChange={(e) => setCategoria(e.target.value)} />
+        <CampoCategoria
+          id={`categoria-${recurso.id}`}
+          valor={categoria}
+          opciones={categoriasConocidas}
+          onChange={setCategoria}
+          placeholder="Agrupación gruesa, ej. grabación audiovisual"
+          textoNueva="+ Nueva categoría…"
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label>Subcategoría</Label>
+        <CampoCategoria
+          id={`subcategoria-${recurso.id}`}
+          valor={subcategoria}
+          opciones={subcategoriasConocidas}
+          onChange={setSubcategoria}
+          placeholder="Tipo de equipo, ej. cámara"
+          textoNueva="+ Nueva subcategoría…"
+          textoSinValor="— Sin subcategoría —"
+        />
       </div>
       <div className="flex flex-col gap-1">
         <Label>Placa</Label>
@@ -130,7 +214,7 @@ export function ActivoEditForm({
       </div>
       <div className="flex flex-col gap-1">
         <Label>Padre (activo del que depende)</Label>
-        <Select value={padreId || "__ninguno__"} onValueChange={(v) => setPadreId(v === "__ninguno__" ? "" : v)}>
+        <Select value={padreId || "__ninguno__"} onValueChange={handlePadreChange}>
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
@@ -145,6 +229,35 @@ export function ActivoEditForm({
           </SelectContent>
         </Select>
       </div>
+      <div className="flex flex-col gap-1">
+        <Label>Lugar / espacio</Label>
+        <Select value={espacioId || "__ninguno__"} onValueChange={handleEspacioChange}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__ninguno__">— Sin lugar —</SelectItem>
+            {opcionesEspacio.map((r) => (
+              <SelectItem key={r.id} value={String(r.id)}>
+                {r.nombre}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {mostrarPropagacion && (
+        <div className="col-span-full flex items-center gap-2">
+          <Checkbox
+            id={`propagar-espacio-${recurso.id}`}
+            checked={propagarEspacio}
+            onCheckedChange={(v) => setPropagarEspacio(v === true)}
+          />
+          <Label htmlFor={`propagar-espacio-${recurso.id}`}>
+            Mover también los {hijosAMover.length} hijo{hijosAMover.length === 1 ? "" : "s"} que
+            está{hijosAMover.length === 1 ? "" : "n"} en el mismo lugar
+          </Label>
+        </div>
+      )}
       <div className="flex items-center gap-2 self-end pb-2">
         <Checkbox
           id={`seguro-${recurso.id}`}

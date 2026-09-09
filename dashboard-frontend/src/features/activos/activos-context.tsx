@@ -15,6 +15,7 @@ import {
 } from "@/lib/api"
 
 const SUBTAB_STORAGE_KEY = "dashboard-cpa-activos-subtab"
+const SUBSUBTAB_STORAGE_KEY = "dashboard-cpa-activos-subcategoria"
 
 type ActivosContextValue = {
   activos: Recurso[]
@@ -22,12 +23,17 @@ type ActivosContextValue = {
   error: string | null
   reload: () => Promise<void>
   crear: (cambios: CambiosActivo) => Promise<Recurso>
-  actualizar: (id: number, cambios: CambiosActivo) => Promise<Recurso>
+  actualizar: (
+    id: number,
+    cambios: CambiosActivo & { propagar_espacio?: boolean }
+  ) => Promise<Recurso & { hijos_actualizados?: number }>
   expandidos: Set<number>
   toggleExpandido: (id: number) => void
   expandir: (id: number) => void
   subtabActiva: string
   setSubtabActiva: (clave: string) => void
+  subsubtabActiva: string
+  setSubsubtabActiva: (clave: string) => void
 }
 
 const ActivosContext = createContext<ActivosContextValue | null>(null)
@@ -40,6 +46,13 @@ export function ActivosProvider({ children }: { children: ReactNode }) {
   const [subtabActiva, setSubtabActivaState] = useState(() => {
     try {
       return localStorage.getItem(SUBTAB_STORAGE_KEY) || "__todos__"
+    } catch {
+      return "__todos__"
+    }
+  })
+  const [subsubtabActiva, setSubsubtabActivaState] = useState(() => {
+    try {
+      return localStorage.getItem(SUBSUBTAB_STORAGE_KEY) || "__todos__"
     } catch {
       return "__todos__"
     }
@@ -68,7 +81,7 @@ export function ActivosProvider({ children }: { children: ReactNode }) {
   )
 
   const actualizar = useCallback(
-    async (id: number, cambios: CambiosActivo) => {
+    async (id: number, cambios: CambiosActivo & { propagar_espacio?: boolean }) => {
       const actualizado = await actualizarActivo(id, cambios)
       await reload()
       return actualizado
@@ -98,6 +111,15 @@ export function ActivosProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const setSubsubtabActiva = useCallback((clave: string) => {
+    setSubsubtabActivaState(clave)
+    try {
+      localStorage.setItem(SUBSUBTAB_STORAGE_KEY, clave)
+    } catch {
+      // localStorage no disponible
+    }
+  }, [])
+
   return (
     <ActivosContext.Provider
       value={{
@@ -112,6 +134,8 @@ export function ActivosProvider({ children }: { children: ReactNode }) {
         expandir,
         subtabActiva,
         setSubtabActiva,
+        subsubtabActiva,
+        setSubsubtabActiva,
       }}
     >
       {children}

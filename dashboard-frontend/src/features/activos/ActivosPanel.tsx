@@ -13,11 +13,21 @@ import {
   GRUPO_TODOS,
   grupoDe,
   gruposDisponibles,
+  subgrupoDe,
+  subgruposDisponibles,
 } from "./tree-utils"
 
 export function ActivosPanel() {
-  const { activos, error, reload, crear, subtabActiva, setSubtabActiva } =
-    useActivosContext()
+  const {
+    activos,
+    error,
+    reload,
+    crear,
+    subtabActiva,
+    setSubtabActiva,
+    subsubtabActiva,
+    setSubsubtabActiva,
+  } = useActivosContext()
   const [mostrarNuevo, setMostrarNuevo] = useState(false)
 
   useEffect(() => {
@@ -26,15 +36,34 @@ export function ActivosPanel() {
   }, [])
 
   const equipos = activos.filter((r) => r.tipo === "equipo")
+  // El selector "Lugar / espacio" del alta necesita TODOS los espacios, no
+  // solo `equipos` (que aquí ya viene filtrado por tipo='equipo').
+  const espacios = activos.filter((r) => r.tipo === "espacio")
   const grupos = gruposDisponibles(equipos)
   const claves = [GRUPO_TODOS, ...grupos]
   const subtabEfectiva = subtabActiva !== GRUPO_TODOS && !grupos.includes(subtabActiva) ? GRUPO_TODOS : subtabActiva
 
+  // Fila 2 (subcategorías): solo entre los equipos de la categoría ya
+  // seleccionada -- si la categoría está en "Todos", entre todos los
+  // equipos. Si la subcategoría activa no existe dentro de ese subconjunto
+  // (p. ej. porque se acaba de cambiar de categoría), cae a "Todos" -- mismo
+  // criterio que `subtabEfectiva` arriba.
+  const equiposDeCategoria =
+    subtabEfectiva === GRUPO_TODOS ? equipos : equipos.filter((r) => grupoDe(r) === subtabEfectiva)
+  const subgrupos = subgruposDisponibles(equiposDeCategoria)
+  const subclaves = [GRUPO_TODOS, ...subgrupos]
+  const subsubtabEfectiva =
+    subsubtabActiva !== GRUPO_TODOS && !subgrupos.includes(subsubtabActiva) ? GRUPO_TODOS : subsubtabActiva
+
+  const matchFiltro = (r: (typeof equipos)[number]) =>
+    (subtabEfectiva === GRUPO_TODOS || grupoDe(r) === subtabEfectiva) &&
+    (subsubtabEfectiva === GRUPO_TODOS || subgrupoDe(r) === subsubtabEfectiva)
+
   let raiz = equipos.filter((r) => r.padre_id === null)
   let listaParaHijos = equipos
 
-  if (subtabEfectiva !== GRUPO_TODOS) {
-    const directos = equipos.filter((r) => grupoDe(r) === subtabEfectiva)
+  if (subtabEfectiva !== GRUPO_TODOS || subsubtabEfectiva !== GRUPO_TODOS) {
+    const directos = equipos.filter(matchFiltro)
     const idsDirectos = new Set(directos.map((r) => r.id))
     const visiblesMap = new Map(directos.map((r) => [r.id, r]))
     directos.forEach((r) => {
@@ -68,6 +97,7 @@ export function ActivosPanel() {
         <ActivoNuevoForm
           tipo="equipo"
           equipos={equipos}
+          espacios={espacios}
           onCancel={() => setMostrarNuevo(false)}
           onCreate={async (cambios) => {
             try {
@@ -106,13 +136,42 @@ export function ActivosPanel() {
         })}
       </div>
 
+      {subclaves.length > 1 && (
+        <div className="ml-4 flex flex-wrap gap-1 border-l pl-3">
+          {subclaves.map((clave) => {
+            const total =
+              clave === GRUPO_TODOS
+                ? equiposDeCategoria.length
+                : equiposDeCategoria.filter((r) => subgrupoDe(r) === clave).length
+            const etiqueta = clave === GRUPO_TODOS ? "Todas" : etiquetaGrupo(clave)
+            return (
+              <button
+                key={clave}
+                type="button"
+                onClick={() => setSubsubtabActiva(clave)}
+                className={cn(
+                  "rounded-md border px-2 py-0.5 text-[11px]",
+                  clave === subsubtabEfectiva
+                    ? "border-primary/70 bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:border-primary/70"
+                )}
+              >
+                {etiqueta} <span className="opacity-70">{total}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {error && !activos.length && (
         <p className="text-sm text-destructive">No se pudieron cargar los activos.</p>
       )}
       {!error && equipos.length === 0 && <p className="text-sm text-muted-foreground">No hay equipos registrados.</p>}
-      {equipos.length > 0 && raiz.length === 0 && subtabEfectiva !== GRUPO_TODOS && (
-        <p className="text-sm text-muted-foreground">No hay activos en esta categoría.</p>
-      )}
+      {equipos.length > 0 &&
+        raiz.length === 0 &&
+        (subtabEfectiva !== GRUPO_TODOS || subsubtabEfectiva !== GRUPO_TODOS) && (
+          <p className="text-sm text-muted-foreground">No hay activos en esta categoría.</p>
+        )}
 
       <div>
         {raiz.map((r) => (

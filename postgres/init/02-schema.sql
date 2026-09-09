@@ -51,14 +51,31 @@ CREATE TABLE IF NOT EXISTS recursos (
     -- responda "qué accesorios tiene la cámara X" (recursos con padre_id =
     -- id de la cámara) o "de qué equipo es hijo el lente Y" (seguir padre_id).
     padre_id        INTEGER REFERENCES recursos(id),
-    -- Categoría del equipo (ej. 'camara', 'celular', 'dron', 'microfono',
-    -- 'tripode', 'luces') -- distinta de la columna `tipo` de arriba
-    -- (equipo/espacio). Permite que el bot responda "qué cámaras tenemos"
-    -- o sugiera otras marcas/modelos de la misma categoría cuando el
-    -- modelo pedido no existe. Texto libre a propósito (no un ENUM fijo)
-    -- para no tener que migrar el esquema cada vez que se agregue una
-    -- categoría nueva de activo.
+    -- FK a recursos(id) del espacio donde vive físicamente este activo (ej.
+    -- la Sala 4 para un iMac que está ahí). Es una jerarquía DISTINTA e
+    -- INDEPENDIENTE de `padre_id`: `padre_id` agrupa accesorios en bundle
+    -- (la cámara y sus lentes), `espacio_id` dice en qué lugar está el
+    -- activo. Un activo puede tener padre y no tener lugar, tener lugar y no
+    -- tener padre, ambos, o ninguno. La fila referenciada debe tener
+    -- tipo='espacio' -- eso se valida en la app (ver
+    -- flask-app/app/routes/dashboard.py, _validar_espacio) y no con un CHECK
+    -- porque Postgres no admite subqueries en un CHECK. Como un espacio
+    -- puede estar dentro de otro (edificio > piso > sala), esta misma
+    -- columna también se usa para anidar espacios.
+    espacio_id      INTEGER REFERENCES recursos(id),
+    -- Dos niveles de clasificación del equipo -- distintos de la columna
+    -- `tipo` de arriba (equipo/espacio):
+    -- `categoria` es la agrupación gruesa (ej. 'grabación audiovisual'; por
+    -- ahora hay una sola, pero el campo existe para cuando se sumen más).
+    -- `subcategoria` es el tipo concreto de equipo (ej. 'cámara', 'trípode',
+    -- 'dron') -- el nivel sobre el que trabaja el asistente de reserva del
+    -- bot (ver recursos_service._subcategorias_activas): "qué cámaras
+    -- tenemos", sugerir otras marcas/modelos de la misma subcategoría cuando
+    -- el modelo pedido no existe, etc. Ambos son texto libre a propósito (no
+    -- un ENUM fijo) para no tener que migrar el esquema cada vez que se
+    -- agregue una categoría o subcategoría nueva de activo.
     categoria       VARCHAR(50),
+    subcategoria    VARCHAR(50),
     marca           VARCHAR(100),
     modelo          VARCHAR(100),
     identificador   VARCHAR(100),                     -- número de serie o IMEI (alfanumérico), si lo tiene
@@ -81,6 +98,7 @@ CREATE TABLE IF NOT EXISTS recursos (
     CONSTRAINT recursos_placa_requerida_equipo CHECK (tipo <> 'equipo' OR placa IS NOT NULL),
     CONSTRAINT recursos_categoria_requerida_equipo CHECK (tipo <> 'equipo' OR categoria IS NOT NULL),
     CONSTRAINT recursos_padre_no_self CHECK (padre_id IS NULL OR padre_id <> id),
+    CONSTRAINT recursos_espacio_no_self CHECK (espacio_id IS NULL OR espacio_id <> id),
     CONSTRAINT recursos_estado_valido CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible'))
 );
 
@@ -181,6 +199,28 @@ ALTER TABLE recursos ADD COLUMN IF NOT EXISTS modelo VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS identificador VARCHAR(100);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS categoria VARCHAR(50);
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS padre_id INTEGER REFERENCES recursos(id);
+-- `categoria` cambió de significado: antes tenía el tipo concreto de equipo
+-- ('cámara', 'trípode', 'dron'), ahora tiene una agrupación más gruesa y esos
+-- valores finos viven en `subcategoria`. El backfill va dentro del IF (y no
+-- como un UPDATE suelto) porque este script se re-ejecuta con psql contra la
+-- base viva: un UPDATE incondicional pisaría las categorías nuevas que se
+-- hayan creado después de esta migración.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'recursos' AND column_name = 'subcategoria'
+    ) THEN
+        ALTER TABLE recursos ADD COLUMN subcategoria VARCHAR(50);
+        UPDATE recursos SET subcategoria = categoria WHERE categoria IS NOT NULL;
+        UPDATE recursos SET categoria = 'grabación audiovisual' WHERE tipo = 'equipo';
+    END IF;
+END $$;
+-- ADD COLUMN IF NOT EXISTS con REFERENCES es válido en PG16 y es idempotente
+-- para la columna; si la columna ya existe simplemente no vuelve a crear la
+-- FK (que ya estaría creada desde el CREATE TABLE o desde una corrida
+-- anterior de esta misma línea), lo cual está bien.
+ALTER TABLE recursos ADD COLUMN IF NOT EXISTS espacio_id INTEGER REFERENCES recursos(id);
 -- Reemplazada por la regla fija "todo hijo va incluido por defecto con su
 -- padre, el usuario lo quita de la selección si no lo quiere" (ver
 -- recursos_service._accesorios_por_defecto) -- ya no es configurable por
@@ -189,6 +229,11 @@ ALTER TABLE recursos DROP COLUMN IF EXISTS incluido_por_defecto;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recursos_placa_unica ON recursos (placa);
 CREATE INDEX IF NOT EXISTS idx_recursos_padre_id ON recursos (padre_id);
+-- idx_recursos_espacio_id va después del ALTER que agrega `espacio_id` por
+-- el mismo motivo que idx_recursos_padre_id: en una base ya existente esa
+-- columna no existe todavía en el CREATE TABLE de arriba (se saltó por
+-- "already exists"), así que el índice solo puede crearse aquí.
+CREATE INDEX IF NOT EXISTS idx_recursos_espacio_id ON recursos (espacio_id);
 
 -- reserva_grupos ya está creada más arriba (CREATE TABLE IF NOT EXISTS,
 -- antes de "reservas") incluso para una base inicializada antes de que
@@ -229,6 +274,12 @@ BEGIN
     ) THEN
         ALTER TABLE recursos ADD CONSTRAINT recursos_padre_no_self
             CHECK (padre_id IS NULL OR padre_id <> id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'recursos_espacio_no_self'
+    ) THEN
+        ALTER TABLE recursos ADD CONSTRAINT recursos_espacio_no_self
+            CHECK (espacio_id IS NULL OR espacio_id <> id);
     END IF;
 END $$;
 
