@@ -114,6 +114,10 @@ export type Sesion = {
   usuario_rol: Rol
   recurso_id: number
   recurso_nombre: string | null
+  recurso_tipo: TipoRecurso | null
+  // Reservas creadas juntas en el mismo carrito comparten grupo (ej. una
+  // cámara y sus lentes). NULL en las anteriores al carrito.
+  grupo_id: number | null
   inicio: string | null
   fin: string | null
   estado: EstadoReserva
@@ -123,6 +127,46 @@ export type Sesion = {
 
 export function fetchSesiones() {
   return request<Sesion[]>("/reservas")
+}
+
+// El calendario pide por rango en vez de las últimas 500 por fecha de
+// creación: así un mes que se navega hacia atrás llega completo. El backend
+// devuelve las reservas que *solapan* el rango, incluidas las de varios días
+// que empezaron antes.
+// Lo que el calendario puede editar de una reserva. El usuario y el grupo no
+// se tocan: reasignarlos sería crear otra reserva, no editar esta.
+export type CambiosReserva = {
+  inicio?: string
+  fin?: string
+  estado?: EstadoReserva
+  recurso_id?: number
+}
+
+export function actualizarReserva(id: number, cambios: CambiosReserva) {
+  return request<Sesion>(`/reservas/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(cambios),
+  })
+}
+
+// Una reserva hecha para varios activos se edita como un bloque: el backend
+// aplica el cambio a todas sus líneas en una sola transacción o a ninguna.
+export function actualizarReservasBloque(
+  ids: number[],
+  cambios: Omit<CambiosReserva, "recurso_id">
+) {
+  return request<Sesion[]>("/reservas/bloque", {
+    method: "PATCH",
+    body: JSON.stringify({ ids, ...cambios }),
+  })
+}
+
+export function fetchReservasRango(desde: Date, hasta: Date) {
+  const params = new URLSearchParams({
+    desde: desde.toISOString(),
+    hasta: hasta.toISOString(),
+  })
+  return request<Sesion[]>(`/reservas?${params}`)
 }
 
 // --- Activos -----------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   BarChart3,
   Boxes,
   CalendarClock,
+  CalendarDays,
   ChevronRight,
   ListChecks,
   MapPin,
@@ -40,6 +41,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { ActivosPanel } from "@/features/activos/ActivosPanel"
 import { ActivosProvider } from "@/features/activos/activos-context"
 import { LugaresPanel } from "@/features/activos/LugaresPanel"
+import { CalendarioPanel } from "@/features/calendario/CalendarioPanel"
 import { MetricasPanel } from "@/features/metricas/MetricasPanel"
 import { EstadoServiciosPanel, QrWhatsappPanel } from "@/features/servicios/ServiciosPanel"
 import { SesionesTab } from "@/features/usuarios/SesionesTab"
@@ -72,6 +74,7 @@ const MENU: (ItemMenu | GrupoMenu)[] = [
     ],
   },
   { value: "metricas", label: "Métricas", icon: BarChart3, Panel: MetricasPanel },
+  { value: "calendario", label: "Calendario", icon: CalendarDays, Panel: CalendarioPanel },
   {
     value: "usuarios",
     label: "Usuarios",

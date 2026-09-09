@@ -111,9 +111,9 @@ CREATE TABLE IF NOT EXISTS reservas (
     fin             TIMESTAMPTZ NOT NULL,
     estado          VARCHAR(20) NOT NULL DEFAULT 'confirmada', -- confirmada | cancelada | completada | no_show
     canal_origen    VARCHAR(20) NOT NULL DEFAULT 'whatsapp',
-    -- NULL en reservas creadas antes de que existiera el carrito. Toda
-    -- reserva nueva creada por el wizard de recursos_service.py sí lo trae,
-    -- compartido por todos los activos confirmados juntos en esa sesión.
+    -- Número de reserva: lo comparten todos los activos confirmados juntos
+    -- en la misma sesión. Obligatorio (ver el bloque de migración al final,
+    -- que rellena las filas anteriores al carrito y pone el NOT NULL).
     grupo_id        INTEGER REFERENCES reserva_grupos(id),
     creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT rango_valido CHECK (fin > inicio)
@@ -258,6 +258,51 @@ BEGIN
     ) THEN
         ALTER TABLE recursos ADD CONSTRAINT recursos_estado_valido
             CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible'));
+    END IF;
+END $$;
+
+-- El id de `reserva_grupos` es el NÚMERO DE RESERVA: identifica de forma
+-- única cada reserva hecha, que puede cubrir varios activos (una cámara y
+-- sus lentes confirmados juntos comparten número). Las filas anteriores al
+-- carrito quedaron con grupo_id NULL; se les crea un grupo por cada
+-- combinación de usuario + horario, que es lo que en la práctica fue "una
+-- reserva". Idempotente: si no quedan NULLs, el bucle no hace nada.
+DO $$
+DECLARE
+    huerfana    RECORD;
+    grupo_nuevo INTEGER;
+BEGIN
+    FOR huerfana IN
+        SELECT usuario_id, inicio, fin, MIN(creado_en) AS creado_en
+        FROM reservas
+        WHERE grupo_id IS NULL
+        GROUP BY usuario_id, inicio, fin
+    LOOP
+        INSERT INTO reserva_grupos (usuario_id, creado_en)
+        VALUES (huerfana.usuario_id, huerfana.creado_en)
+        RETURNING id INTO grupo_nuevo;
+
+        UPDATE reservas
+        SET grupo_id = grupo_nuevo
+        WHERE grupo_id IS NULL
+          AND usuario_id = huerfana.usuario_id
+          AND inicio = huerfana.inicio
+          AND fin = huerfana.fin;
+    END LOOP;
+END $$;
+
+-- Ya sin NULLs, el número de reserva pasa a ser obligatorio: ninguna reserva
+-- nueva puede quedarse sin él (ver recursos_service.crear_reservas_en_bloque
+-- y seed.py, que crean el grupo antes que las reservas).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'reservas'
+          AND column_name = 'grupo_id'
+          AND is_nullable = 'YES'
+    ) THEN
+        ALTER TABLE reservas ALTER COLUMN grupo_id SET NOT NULL;
     END IF;
 END $$;
 

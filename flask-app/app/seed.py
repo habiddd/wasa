@@ -14,7 +14,7 @@ import click
 from flask import current_app
 
 from app.extensions import db
-from app.models import Recurso, Reserva, Usuario
+from app.models import Recurso, Reserva, ReservaGrupo, Usuario
 
 RECURSOS_DUMMY = [
     dict(tipo="equipo", nombre="Cámara Sony A7III", descripcion="Mirrorless full frame",
@@ -125,12 +125,20 @@ def seed_recursos_cmd():
     ahora = datetime.now(timezone.utc)
     por_nombre = {r.nombre: r for r in recursos}
 
+    # Cada reserva de prueba es su propio número de reserva: son dos
+    # horarios distintos, no un carrito confirmado de una sola vez.
+    grupo_en_curso = ReservaGrupo(usuario_id=usuario_prueba.id)
+    grupo_futura = ReservaGrupo(usuario_id=usuario_prueba.id)
+    db.session.add_all([grupo_en_curso, grupo_futura])
+    db.session.flush()
+
     reserva_en_curso = Reserva(
         usuario_id=usuario_prueba.id,
         recurso_id=por_nombre["Cámara Sony A7III"].id,
         inicio=ahora - timedelta(minutes=30),
         fin=ahora + timedelta(minutes=30),
         estado="confirmada",
+        grupo_id=grupo_en_curso.id,
     )
     reserva_futura = Reserva(
         usuario_id=usuario_prueba.id,
@@ -138,6 +146,7 @@ def seed_recursos_cmd():
         inicio=ahora + timedelta(hours=2),
         fin=ahora + timedelta(hours=4),
         estado="confirmada",
+        grupo_id=grupo_futura.id,
     )
     db.session.add_all([reserva_en_curso, reserva_futura])
     db.session.commit()

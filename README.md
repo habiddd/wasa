@@ -66,7 +66,7 @@ curl http://localhost:5000/webhook/qr
 
 ## 5. Dashboard interno de monitoreo
 
-En `http://localhost:8080/dashboard` tienes un panel con cinco secciones en
+En `http://localhost:8080/dashboard` tienes un panel con seis secciones en
 un sidebar colapsable (cada una con su propio ícono; en modo colapsado el
 sidebar muestra solo los íconos, con el label como tooltip al pasar el
 mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
@@ -79,6 +79,22 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   esté (se refresca sola cada 5s).
 - **Métricas**: reservas y mensajes bloqueados por guardrails en los
   últimos 30 días, y las últimas interacciones registradas en `auditoria_bot`.
+- **Calendario**: las reservas de activos y lugares en vistas de **mes,
+  semana y día**, vía `GET /dashboard/api/reservas?desde&hasta`. Las
+  reservas del mismo usuario y horario se muestran como **un solo evento**
+  (una sola reserva puede cubrir varios activos: una cámara y sus lentes),
+  etiquetado como "Cámara Canon EOS R +2". El color indica el estado
+  (confirmada / completada / cancelada / no_show) y el ícono si es un activo
+  o un lugar. Se puede filtrar por tipo, por recurso concreto y por estado
+  (por defecto oculta las canceladas), y al hacer clic en un evento se abre
+  un modal con su **número de reserva**, el usuario, el horario y la lista
+  de activos, desde donde se puede **editar** la reserva (horario, estado y,
+  si es de un solo activo, el recurso) vía
+  `PATCH /dashboard/api/reservas/<id>` o
+  `PATCH /dashboard/api/reservas/bloque`, que mueve todas las líneas de la
+  reserva en una sola transacción. Todos los horarios se muestran en hora
+  local de la CPA (`America/Bogota`), sin importar la zona del equipo desde
+  el que se abra el dashboard. Se refresca solo cada 60s.
 - **Usuarios**: submenú desplegable de dos entradas, mismo patrón que
   "Servicios". "Usuarios" lista los usuarios que completaron el registro
   por WhatsApp (`registro_completo=True` -- deja afuera contactos a medio

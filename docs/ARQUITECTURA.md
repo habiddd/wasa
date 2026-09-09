@@ -349,6 +349,13 @@ unidad **en una sola transacción**. Si la restricción `EXCLUDE` de
 Postgres rechaza alguna justo al confirmar (condición de carrera), se
 revierte el carrito completo en vez de dejar una reserva parcial.
 
+El id de ese `ReservaGrupo` es el **número de reserva**: lo que identifica
+de forma única una reserva *hecha*, que puede cubrir varios activos (una
+cámara y sus lentes comparten número). `reservas.grupo_id` es `NOT NULL`
+desde la migración de `docs/SESION_2026-09-09.md` (sección 7), que además
+le asignó grupo a las filas anteriores al carrito; así ninguna reserva
+puede quedar sin número, ni las que crea el bot ni las de `seed.py`.
+
 ### Cancelar una reserva ya confirmada
 
 Distinto de "cortar el wizard" de arriba (que aborta una reserva que
@@ -493,6 +500,40 @@ build (Node) junto al backend Python:
   Vite (`npm run dev`, puerto 5173) con un proxy configurado hacia
   `http://localhost:5000` para `/dashboard/api/*` -- así los cambios de UI
   recargan al instante sin tener que reconstruir ninguna imagen Docker.
+
+## Calendario del dashboard: un evento por reserva, no por activo
+
+El panel "Calendario" (`dashboard-frontend/src/features/calendario/`, ver
+`docs/SESION_2026-09-09.md` secciones 5-7) muestra las reservas de activos
+y lugares en vistas de mes, semana y día. Cuatro decisiones que conviene
+tener presentes antes de tocarlo:
+
+- **Se pide por rango, no todo.** `GET /dashboard/api/reservas` acepta
+  `?desde/?hasta` y devuelve las reservas que **solapan** ese rango (no las
+  que empiezan dentro), porque una reserva de varios días tiene que
+  aparecer aunque haya empezado antes del periodo visible. Sin parámetros
+  el endpoint sigue devolviendo las últimas 500 por `creado_en`, que es lo
+  que consume el panel "Sesiones".
+- **Los días se calculan en `America/Bogota`, nunca en la zona del
+  navegador.** Las reservas se guardan en UTC pero el negocio opera en hora
+  local de la CPA (`recursos_service.ZONA_HORARIA_CPA`); si el calendario
+  agrupara por día con la zona del equipo, el mismo dashboard mostraría
+  cosas distintas según quién lo abre. Todo pasa por `Intl.DateTimeFormat`
+  con `timeZone` fijo en `calendario-utils.ts`, incluidos los
+  `<input type="datetime-local">` del formulario de edición.
+- **Un evento agrupa las reservas del mismo usuario y horario**, no las del
+  mismo `grupo_id`. Una reserva hecha para cinco activos llenaba el día de
+  cajas idénticas. Se agrupa por `(usuario_id, inicio, fin)` a propósito:
+  cubre también el caso de dos confirmaciones distintas del mismo usuario a
+  la misma hora (se ven como un evento con dos números de reserva), y hace
+  que una línea movida a otro horario salga como evento aparte. El filtrado
+  (tipo, recurso, estado) ocurre **antes** de agrupar.
+- **Editar un evento de varios activos es atómico.** El modal usa
+  `PATCH /dashboard/api/reservas/bloque` con los ids de todas sus líneas:
+  el horario y el estado se aplican a todas o a ninguna, en una sola
+  transacción. El solapamiento no se re-valida en Python -- lo garantiza el
+  `EXCLUDE` de Postgres descrito más arriba, y el backend solo traduce esa
+  violación a un mensaje legible.
 
 ## Analítica en tiempo real
 

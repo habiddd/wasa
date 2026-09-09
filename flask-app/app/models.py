@@ -70,11 +70,11 @@ class Reserva(db.Model):
     fin = db.Column(db.DateTime(timezone=True), nullable=False)
     estado = db.Column(db.String(20), nullable=False, default="confirmada")
     canal_origen = db.Column(db.String(20), nullable=False, default="whatsapp")
-    # NULL en reservas creadas antes de que existiera el carrito (ver
-    # ReservaGrupo). Toda reserva nueva creada por el wizard de
-    # recursos_service.py comparte grupo_id con las demás confirmadas junto
-    # con ella en la misma sesión (ej. una cámara + sus lentes).
-    grupo_id = db.Column(db.Integer, db.ForeignKey("reserva_grupos.id"))
+    # Número de reserva (ver ReservaGrupo): lo comparten todas las reservas
+    # confirmadas juntas en la misma sesión (ej. una cámara + sus lentes).
+    # Obligatorio -- las filas anteriores al carrito se rellenaron en la
+    # migración de postgres/init/02-schema.sql.
+    grupo_id = db.Column(db.Integer, db.ForeignKey("reserva_grupos.id"), nullable=False)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
     usuario = db.relationship("Usuario")

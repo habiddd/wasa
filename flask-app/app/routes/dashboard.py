@@ -13,7 +13,7 @@ de /dashboard/api/ hacia acá -- este blueprint ya no sirve HTML ni assets.
 import base64
 import io
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import qrcode
 import requests
@@ -265,6 +265,8 @@ def _serializar_reserva(r: Reserva) -> dict:
         "usuario_rol": r.usuario.rol if r.usuario else None,
         "recurso_id": r.recurso_id,
         "recurso_nombre": r.recurso.nombre if r.recurso else None,
+        "recurso_tipo": r.recurso.tipo if r.recurso else None,
+        "grupo_id": r.grupo_id,
         "inicio": r.inicio.isoformat() if r.inicio else None,
         "fin": r.fin.isoformat() if r.fin else None,
         "estado": r.estado,
@@ -273,17 +275,176 @@ def _serializar_reserva(r: Reserva) -> dict:
     }
 
 
+def _fecha_iso(crudo) -> datetime:
+    """Convierte un texto ISO-8601 en datetime con tz (UTC si no la trae).
+
+    Acepta el sufijo "Z" que produce Date.toISOString() en el navegador, que
+    fromisoformat() no entiende en Python < 3.11. Lanza TypeError si no es
+    texto y ValueError si no se puede parsear.
+    """
+    if not isinstance(crudo, str):
+        raise TypeError("se esperaba una fecha en texto")
+    valor = datetime.fromisoformat(crudo.replace("Z", "+00:00"))
+    return valor if valor.tzinfo else valor.replace(tzinfo=timezone.utc)
+
+
+def _fecha_query(nombre: str) -> datetime | None:
+    """Lee un parámetro ISO-8601 (?desde=/?hasta=). None si no viene."""
+    crudo = request.args.get(nombre)
+    return _fecha_iso(crudo) if crudo else None
+
+
 @bp.route("/api/reservas")
 def api_reservas():
-    # Sesiones de uso (reservas) de cada usuario, para el sub-panel de
-    # "Sesiones" dentro de Usuarios en el dashboard. Trae usuario/recurso
-    # con joinedload para no hacer una query por fila.
-    reservas = (
-        Reserva.query.options(joinedload(Reserva.usuario), joinedload(Reserva.recurso))
-        .order_by(Reserva.creado_en.desc())
-        .limit(500)
-        .all()
+    # Sesiones de uso (reservas) de cada usuario. Sin parámetros devuelve las
+    # últimas 500 por fecha de creación (sub-panel "Sesiones" dentro de
+    # Usuarios). Con ?desde/?hasta devuelve las que *solapan* ese rango,
+    # ordenadas por inicio: es lo que necesita el calendario, porque una
+    # reserva de varios días debe aparecer aunque empiece antes del periodo
+    # visible. Trae usuario/recurso con joinedload para no hacer una query
+    # por fila.
+    try:
+        desde, hasta = _fecha_query("desde"), _fecha_query("hasta")
+    except ValueError:
+        return jsonify({"error": "Los parámetros 'desde' y 'hasta' deben ser fechas ISO-8601."}), 400
+
+    consulta = Reserva.query.options(joinedload(Reserva.usuario), joinedload(Reserva.recurso))
+
+    if desde or hasta:
+        if hasta:
+            consulta = consulta.filter(Reserva.inicio < hasta)
+        if desde:
+            consulta = consulta.filter(Reserva.fin > desde)
+        reservas = consulta.order_by(Reserva.inicio.asc()).limit(2000).all()
+    else:
+        reservas = consulta.order_by(Reserva.creado_en.desc()).limit(500).all()
+
+    return jsonify([_serializar_reserva(r) for r in reservas])
+
+
+# Campos que el calendario puede modificar de una reserva. No incluye
+# `usuario_id` ni `grupo_id`: reasignar una reserva a otra persona o moverla
+# de carrito no es una edición del calendario, es otra reserva.
+_CAMPOS_EDITABLES_RESERVA = {"inicio", "fin", "estado", "recurso_id"}
+
+# Ver el comentario de la columna `estado` en postgres/init/02-schema.sql.
+_ESTADOS_RESERVA = {"confirmada", "cancelada", "completada", "no_show"}
+
+# Constraints de reservas (postgres/init/02-schema.sql) traducidas a mensajes
+# legibles. El solapamiento lo impide Postgres con un EXCLUDE gist que solo
+# aplica a las confirmadas, igual que para las reservas que crea el bot.
+_MENSAJES_INTEGRIDAD_RESERVA = {
+    "reservas_no_solapamiento": "Ese recurso ya tiene otra reserva confirmada que se cruza con ese horario.",
+    "rango_valido": "La hora de fin debe ser posterior a la de inicio.",
+}
+
+
+def _preparar_cambios_reserva(datos: dict, campos_permitidos: set) -> tuple[dict | None, str | None]:
+    """Valida el cuerpo de un PATCH de reserva y convierte las fechas.
+
+    Devuelve (cambios, None) o (None, mensaje de error).
+    """
+    campos_desconocidos = set(datos) - campos_permitidos
+    if campos_desconocidos:
+        return None, f"Campos no editables: {', '.join(sorted(campos_desconocidos))}"
+
+    if "estado" in datos and datos["estado"] not in _ESTADOS_RESERVA:
+        return None, f"El estado debe ser uno de: {', '.join(sorted(_ESTADOS_RESERVA))}."
+
+    cambios = dict(datos)
+    for campo in ("inicio", "fin"):
+        if campo in cambios:
+            try:
+                cambios[campo] = _fecha_iso(cambios[campo])
+            except (TypeError, ValueError):
+                return None, f"El campo '{campo}' debe ser una fecha ISO-8601."
+
+    if "recurso_id" in cambios and Recurso.query.get(cambios["recurso_id"]) is None:
+        return None, "El recurso indicado no existe."
+
+    return cambios, None
+
+
+def _aplicar_cambios_reserva(reserva: Reserva, cambios: dict) -> str | None:
+    """Escribe los cambios en la reserva (sin commit). Devuelve error o None."""
+    inicio = cambios.get("inicio", reserva.inicio)
+    fin = cambios.get("fin", reserva.fin)
+    if fin <= inicio:
+        return _MENSAJES_INTEGRIDAD_RESERVA["rango_valido"]
+
+    for campo, valor in cambios.items():
+        setattr(reserva, campo, valor)
+    return None
+
+
+def _error_integridad_reserva(exc: IntegrityError) -> str:
+    detalle = str(exc.orig)
+    for clave, texto in _MENSAJES_INTEGRIDAD_RESERVA.items():
+        if clave in detalle:
+            return texto
+    return "No se pudo guardar la reserva: revisa los datos ingresados."
+
+
+@bp.route("/api/reservas/<int:reserva_id>", methods=["PATCH"])
+def api_actualizar_reserva(reserva_id):
+    reserva = Reserva.query.get_or_404(reserva_id)
+
+    cambios, error = _preparar_cambios_reserva(
+        request.get_json(silent=True) or {}, _CAMPOS_EDITABLES_RESERVA
     )
+    if error:
+        return jsonify({"error": error}), 400
+
+    error = _aplicar_cambios_reserva(reserva, cambios)
+    if error:
+        return jsonify({"error": error}), 400
+
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        return jsonify({"error": _error_integridad_reserva(exc)}), 400
+
+    return jsonify(_serializar_reserva(reserva))
+
+
+@bp.route("/api/reservas/bloque", methods=["PATCH"])
+def api_actualizar_reservas_bloque():
+    """Aplica el mismo cambio a varias reservas en una sola transacción.
+
+    El calendario muestra como un solo evento las reservas del mismo usuario
+    y horario (una reserva hecha para varios activos), así que mover ese
+    evento debe mover todas sus líneas o ninguna. No incluye `recurso_id`:
+    eso solo tiene sentido reserva por reserva.
+    """
+    datos = request.get_json(silent=True) or {}
+    ids = datos.get("ids")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
+        return jsonify({"error": "Debes indicar los ids de las reservas a editar."}), 400
+
+    cambios, error = _preparar_cambios_reserva(
+        {campo: valor for campo, valor in datos.items() if campo != "ids"},
+        _CAMPOS_EDITABLES_RESERVA - {"recurso_id"},
+    )
+    if error:
+        return jsonify({"error": error}), 400
+
+    reservas = Reserva.query.filter(Reserva.id.in_(ids)).all()
+    if len(reservas) != len(set(ids)):
+        return jsonify({"error": "Alguna de las reservas ya no existe."}), 404
+
+    for reserva in reservas:
+        error = _aplicar_cambios_reserva(reserva, cambios)
+        if error:
+            db.session.rollback()
+            return jsonify({"error": error}), 400
+
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        return jsonify({"error": _error_integridad_reserva(exc)}), 400
+
     return jsonify([_serializar_reserva(r) for r in reservas])
 
 
