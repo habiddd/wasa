@@ -451,11 +451,16 @@ migración a [shadcn/ui](https://ui.shadcn.com/) (ver
   tal cual sobre una plantilla Jinja.
 
 Se optó por la segunda porque era lo que se pidió explícitamente (no una
-imitación visual). El costo es que `flask-app/` -- hasta ese momento un
-proyecto 100% Python, sin Node en ninguna parte -- ahora tiene un
-subproyecto de frontend con su propio ciclo de build:
+imitación visual). El costo es un segundo proyecto con su propio ciclo de
+build (Node) junto al backend Python:
 
-- **`flask-app/dashboard-frontend/`** es una SPA de React (Vite + TS +
+- **`dashboard-frontend/`** vive en la raíz del repo, al mismo nivel que
+  `flask-app/` y `baileys-bot/`, no anidado dentro del backend: nada del
+  frontend se importa desde Python ni al revés, así que colgarlo de
+  `flask-app/` solo hacía que un proyecto "100% Python" pareciera tener un
+  subproyecto Node adentro. Como hermano, cada contexto de build de
+  Compose coincide con un directorio de primer nivel.
+- **`dashboard-frontend/`** es una SPA de React (Vite + TS +
   Tailwind v4 + shadcn/ui) independiente del resto de la app Flask. No
   usa server-side rendering ni comparte código Python -- habla con el
   backend solo por los mismos endpoints JSON de siempre

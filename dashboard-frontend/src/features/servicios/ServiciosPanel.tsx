@@ -3,7 +3,6 @@ import { AlertTriangle } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { usePolling } from "@/hooks/use-polling"
 import { fetchQr, fetchStatus, type EstadoServicio } from "@/lib/api"
 
@@ -46,7 +45,7 @@ function ServicioCard({ clave, servicio }: { clave: string; servicio: EstadoServ
   )
 }
 
-function EstadoServiciosTab() {
+export function EstadoServiciosPanel() {
   const { data, error, loading } = usePolling(fetchStatus, 10000)
 
   return (
@@ -75,7 +74,7 @@ function EstadoServiciosTab() {
   )
 }
 
-function QrWhatsappTab() {
+export function QrWhatsappPanel() {
   const { data, error } = usePolling(fetchQr, 5000)
 
   let texto = "Cargando…"
@@ -102,22 +101,5 @@ function QrWhatsappTab() {
         />
       )}
     </div>
-  )
-}
-
-export function ServiciosPanel() {
-  return (
-    <Tabs defaultValue="estado" className="gap-4">
-      <TabsList>
-        <TabsTrigger value="estado">Estado</TabsTrigger>
-        <TabsTrigger value="qr">QR / WhatsApp</TabsTrigger>
-      </TabsList>
-      <TabsContent value="estado">
-        <EstadoServiciosTab />
-      </TabsContent>
-      <TabsContent value="qr">
-        <QrWhatsappTab />
-      </TabsContent>
-    </Tabs>
   )
 }

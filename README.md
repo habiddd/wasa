@@ -66,21 +66,25 @@ curl http://localhost:5000/webhook/qr
 
 ## 5. Dashboard interno de monitoreo
 
-En `http://localhost:8080/dashboard` tienes un panel con cinco pestañas
-(la pestaña activa se recuerda entre recargas, vía `localStorage`):
+En `http://localhost:8080/dashboard` tienes un panel con cinco secciones en
+un sidebar colapsable (cada una con su propio ícono; en modo colapsado el
+sidebar muestra solo los íconos, con el label como tooltip al pasar el
+mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
 
-- **Servicios**: dos sub-pestañas. "Estado" muestra el estado en vivo de
+- **Servicios**: submenú desplegable de dos entradas (clic en "Servicios"
+  para contraerlo/expandirlo). "Estado" muestra el estado en vivo de
   Postgres, Redis, Baileys/WhatsApp, el LLM local y el propio Flask (se
   refresca solo cada 10s); "QR / WhatsApp" muestra el código QR de
   vinculación mientras no esté conectado, o el número vinculado una vez lo
   esté (se refresca sola cada 5s).
 - **Métricas**: reservas y mensajes bloqueados por guardrails en los
   últimos 30 días, y las últimas interacciones registradas en `auditoria_bot`.
-- **Usuarios**: dos sub-pestañas. "Usuarios" lista los usuarios que
-  completaron el registro por WhatsApp (`registro_completo=True` -- deja
-  afuera contactos a medio registrar y el usuario dummy de `seed.py`), con
-  botón "Editar" por fila para cambiar nombre, teléfono, código Uninorte,
-  cédula, rol (estudiante/staff/admin) y si está activo, vía
+- **Usuarios**: submenú desplegable de dos entradas, mismo patrón que
+  "Servicios". "Usuarios" lista los usuarios que completaron el registro
+  por WhatsApp (`registro_completo=True` -- deja afuera contactos a medio
+  registrar y el usuario dummy de `seed.py`), con botón "Editar" por fila
+  para cambiar nombre, teléfono, código Uninorte, cédula, rol
+  (estudiante/staff/admin) y si está activo, vía
   `GET/PATCH /dashboard/api/usuarios[/<id>]` (se refresca sola cada 30s, más
   el botón "Refrescar" manual). "Sesiones" lista las reservas de cada
   usuario vía `GET /dashboard/api/reservas`, ordenables por "Más reciente" o
@@ -116,7 +120,7 @@ placeholder). Nginx pide ese login para servir el shell estático, y
 llamadas responden `503` en vez de quedar abiertas).
 
 La UI es una app React + [shadcn/ui](https://ui.shadcn.com/) (Tailwind v4,
-selector de tema claro/oscuro/sistema) en `flask-app/dashboard-frontend/`,
+selector de tema claro/oscuro/sistema) en `dashboard-frontend/`,
 con su propio contenedor (`dashboard-frontend` en `docker-compose.yml`):
 un build multi-stage compila la SPA con Node y la sirve un Nginx que hace
 proxy de `/dashboard/api/*` hacia `flask-app:5000`. El backend ya no sirve
@@ -124,7 +128,7 @@ ni compila HTML/JS -- solo expone esa API. Para desarrollar la UI en
 caliente:
 
 ```bash
-cd flask-app/dashboard-frontend
+cd dashboard-frontend
 npm install
 npm run dev   # sirve en http://localhost:5173/dashboard/, con proxy hacia Flask :5000
 ```
@@ -186,7 +190,7 @@ cpa-reservas-bot/
 ├── baileys-bot/
 │   ├── index.js              # canal de WhatsApp (QR, mensajes, /status, /send)
 │   └── Dockerfile
-├── flask-app/
+├── flask-app/               # backend: 100% Python, solo expone la API
 │   ├── app/
 │   │   ├── config.py
 │   │   ├── extensions.py     # db, limiter, cliente de Redis
@@ -199,10 +203,11 @@ cpa-reservas-bot/
 │   │       ├── webhook.py       # recibe mensajes de WhatsApp
 │   │       ├── analytics.py     # endpoints de analítica
 │   │       └── dashboard.py     # API del panel de monitoreo (/dashboard/api/*)
-│   ├── dashboard-frontend/   # UI del dashboard: React + shadcn/ui, contenedor propio
-│   │   ├── Dockerfile          # build Node -> estáticos servidos por Nginx
-│   │   └── nginx.conf          # sirve el shell y hace proxy de /dashboard/api/ a flask-app
 │   └── wsgi.py
+├── dashboard-frontend/     # UI del dashboard: React + shadcn/ui, contenedor propio
+│   ├── Dockerfile            # build Node -> estáticos servidos por Nginx
+│   ├── nginx.conf            # sirve el shell y hace proxy de /dashboard/api/ a flask-app
+│   └── src/                  # SPA (Vite + React 19 + TS + Tailwind v4)
 └── docs/
     ├── ARQUITECTURA.md
     └── SEGURIDAD.md

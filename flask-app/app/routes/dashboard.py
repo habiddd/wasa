@@ -5,9 +5,9 @@ vinculación y métricas básicas de uso. Protegido con autenticación básica
 (DASHBOARD_USER / DASHBOARD_PASSWORD) porque expone el QR de vinculación
 de WhatsApp, que no debería poder escanear cualquiera con acceso a la red.
 
-El frontend (React/shadcn, ver dashboard-frontend/) corre en su propio
-contenedor Nginx, que sirve los estáticos y hace proxy de /dashboard/api/
-hacia acá -- este blueprint ya no sirve HTML ni assets.
+El frontend (React/shadcn, ver dashboard-frontend/ en la raíz del repo)
+corre en su propio contenedor Nginx, que sirve los estáticos y hace proxy
+de /dashboard/api/ hacia acá -- este blueprint ya no sirve HTML ni assets.
 """
 
 import base64

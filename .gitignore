@@ -8,8 +8,8 @@ instance/
 .DS_Store
 .claude/
 
-# Dashboard frontend (React + shadcn/ui) — ver flask-app/dashboard-frontend
-flask-app/dashboard-frontend/node_modules/
-flask-app/dashboard-frontend/dist/
+# Dashboard frontend (React + shadcn/ui) — ver dashboard-frontend/
+dashboard-frontend/node_modules/
+dashboard-frontend/dist/
 flask-app/app/dashboard_dist/
 

@@ -131,7 +131,7 @@ services:
   # ---------------------------------------------------------------
   dashboard-frontend:
     build:
-      context: ./flask-app/dashboard-frontend
+      context: ./dashboard-frontend
     container_name: cpa_dashboard_frontend
     restart: unless-stopped
     depends_on:

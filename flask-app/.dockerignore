@@ -5,6 +5,7 @@ venv/
 *.log
 instance/
 
-# El frontend del dashboard vive en su propio contenedor (ver
-# dashboard-frontend/Dockerfile) -- la imagen de flask-app no lo necesita.
-dashboard-frontend/
+# Restos del build de Vite de cuando Flask servía la SPA: el frontend vive
+# ahora en dashboard-frontend/ (fuera de este contexto) con su propio
+# contenedor Nginx, así que la imagen de flask-app no necesita estáticos.
+app/dashboard_dist/
