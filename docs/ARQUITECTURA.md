@@ -357,6 +357,8 @@ para un ítem (`_siguiente_paso_wizard`):
 elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
   → [confirmar_contenidos_espacio] → fecha → hora_inicio → hora_fin
   → confirmar → listo
+
+hora_fin/confirmar → [resolver_disponibilidad → resumen | elegir_alternativa]
 ```
 
 `confirmar_accesorios` es condicional: solo aparece si el activo recién
@@ -498,6 +500,13 @@ no como una reserva de un solo activo:
 - Elegir "Cambiar fecha" (por ejemplo) borra `fecha`/`fecha_fin`/`inicio`/
   `fin` del wizard y hace que `_avanzar_wizard` vuelva a preguntar justo
   eso, conservando el carrito ya armado.
+- **"Ver alternativas a X"** es condicional: una opción por cada activo
+  raíz que se quitó del carrito en la última pausa de disponibilidad
+  (`wizard["alternativas_para"]`, ver "Alternativas a un activo no
+  disponible" más abajo). `_opciones_confirmar` las inserta justo después
+  de "Agregar otro activo o espacio" -- no aparece si no se quitó nada, o
+  ya se resolvió (se confirmó, se agregó otro activo aparte, se cambió
+  fecha/hora, o se eligió/descartó una alternativa para ese activo).
 
 ### Contenidos de un espacio (`espacio_id`)
 
@@ -521,8 +530,8 @@ sala 4 con sus iMac" son las 3 iMac que están en esa sala -- se muestran
 como "iMac 24 M3 ×3" y se reservan las 3, no una iMac cualquiera del
 inventario. `_resolver_disponibilidad_carrito` exige que todas esas
 unidades estén libres; si solo algunas lo están, lo dice ("1 de 3
-unidades") y "Quitar esos activos y continuar" deja al ítem con las
-libres en vez de descartar el modelo entero.
+unidades") y "Quitar esos activos y volver al resumen" deja al ítem con
+las libres en vez de descartar el modelo entero.
 
 El paso `confirmar_contenidos_espacio`
 (`_mensaje_confirmar_contenidos_espacio`) numera TODAS las líneas, padres
@@ -549,11 +558,77 @@ estuviera, "no" cancelaría toda la reserva en vez de seguir a pedir fecha.
 ítem elegido a mano -- cualquiera sin unidad libre en el horario elegido
 se reporta, y el wizard se detiene en el paso `resolver_disponibilidad`
 (mensaje tipo factura con la lista de lo no disponible) ofreciendo
-"Quitar esos activos y continuar con el resto" o "Cancelar esta reserva y
-elegir otro activo". Se usa tanto al fijar la hora de fin por primera vez
-como en la verificación final antes de confirmar (por si algo cambió justo
-mientras el usuario decidía). Quitar arrastra los accesorios automáticos
-del activo quitado, igual que el menú "Quitar un activo de la reserva".
+"Quitar esos activos y volver al resumen" (o "...y elegir otro" si quitarlos
+deja el carrito vacío -- no hay resumen al que volver, ver
+`OPCIONES_NO_DISPONIBLE_CARRITO_VACIO`) o "Cancelar toda la reserva". Se usa
+tanto al fijar la hora de fin por primera vez como en la verificación final
+antes de confirmar (por si algo cambió justo mientras el usuario decidía).
+Quitar arrastra los accesorios automáticos del activo quitado, igual que el
+menú "Quitar un activo de la reserva".
+
+**Un "Confirmar" nunca se ejecuta solo: cualquier pausa por disponibilidad
+lo invalida.** `_pausar_por_no_disponibles` pone `wizard["confirmado"] =
+False` como primera línea, antes de decidir nada más -- si no lo hiciera,
+el bug original de esta sección se repite: el usuario confirma, algo del
+carrito ya no está disponible, elige "quitar", y como `confirmado` seguía
+en `True` el wizard saltaba directo a crear la reserva sin volver a
+mostrar el resumen (`_siguiente_paso_wizard` ve `confirmado=True` y
+devuelve `"listo"`). Con `confirmado` en `False`, el paso "quitar" del
+resumen vuelve a pasar por `confirmar`, así que el usuario siempre ve el
+carrito real (ya sin lo que se quitó) antes de que se escriba nada en
+`reservas`. Lo mismo pasa si el carrito queda vacío al quitar: el wizard
+vuelve a `elegir_activo` en vez de "terminar" con nada reservado.
+
+### Alternativas a un activo no disponible
+
+Cuando el paso `resolver_disponibilidad` quita del carrito un activo que
+el usuario pidió directamente (una raíz, `item.get("por") is None` -- no
+un accesorio ni el contenido de un lugar), el bot le ofrece reemplazos de
+la misma clase que sí están libres en ese horario, en vez de dejarlo
+buscar otro desde el menú general.
+
+- **"Misma clase" es `tipo` + `categoria` + `subcategoria`, no solo
+  `subcategoria`.** Un Micrófono Rode NTG3 (subcategoria "microfono",
+  categoria "grabación audiovisual") y un Shure SM7B (subcategoria
+  "microfono", categoria "producción de audio") comparten subcategoría
+  pero no son alternativas entre sí -- uno es para cámara, el otro para
+  cabina. Incluir `tipo` en la clase le da a un ESPACIO (`categoria`/
+  `subcategoria` en NULL) otros espacios como alternativa, sin necesitar
+  un caso aparte para `tipo='espacio'`.
+- **Solo raíces, nunca accesorios ni contenidos de un lugar.** Un lente
+  Sony no le sirve a un cuerpo Canon, y ofrecer un reemplazo de un
+  accesorio suelto no tendría con qué encajar -- si el reemplazo de la
+  raíz trae sus propios accesorios por defecto, esos se resuelven igual
+  que con cualquier activo nuevo (`confirmar_accesorios`).
+- **Solo se revisa el activo principal, no sus accesorios, al armar la
+  lista de alternativas** (`_alternativas_disponibles`): si el reemplazo
+  elegido trae accesorios distintos que resultan ocupados, eso lo atrapa
+  la próxima pausa de disponibilidad (al confirmar) -- la garantía real
+  contra choques sigue siendo el `EXCLUDE` de Postgres, esto solo evita
+  ofrecer algo obviamente ocupado.
+- **Ciclo de vida de `wizard["alternativas_para"]`** (lista de nombres de
+  raíces pendientes de alternativa): la pone "quitar" con las raíces que
+  acaba de sacar del carrito; se le quita una cuando el usuario elige una
+  alternativa para ella o no se encontró ninguna; se vacía por completo al
+  Confirmar, Agregar otro activo, Cambiar fecha, Cambiar hora, "Elegir
+  otro tipo de activo" y al cancelar el wizard; se conserva al usar
+  "Quitar un activo de la reserva" y al volver al resumen sin elegir
+  ninguna alternativa. Toda lectura usa `wizard.get("alternativas_para")
+  or []` porque una sesión de Redis de antes de este campo no lo trae.
+- **Carrito vacío tras quitar:** sin resumen al que volver, se ofrece la
+  alternativa directamente (`_ofrecer_alternativas`) en vez de mostrar el
+  menú de confirmar; si tampoco hay alternativa para esa raíz, se prueba
+  con la siguiente raíz pendiente antes de rendirse y volver a
+  `elegir_activo`.
+- **Por qué el paso `elegir_alternativa` NO está en la lista de pasos
+  donde "no" no cancela** (`gestionar_reserva`, mismo mecanismo que
+  `confirmar_accesorios`/`confirmar_contenidos_espacio`): sus opciones son
+  nombres de activos, "Volver al resumen" o "Elegir otro tipo de activo",
+  ninguna empieza por "no". Si se agregara, un "no" del usuario dejaría de
+  cancelar y caería en el `_interpretar_opcion` de ese paso, que matchea
+  por substring de la etiqueta normalizada -- y "no" es substring de
+  "canon" ("Cámara Canon EOS R6"), así que terminaría "eligiendo" esa
+  cámara en vez de cancelar.
 
 Solo cuando el usuario elige "Confirmar" (y el carrito pasa esa revisión
 de disponibilidad sin nada pendiente) se llama a

@@ -680,6 +680,50 @@ def _resolver_disponibilidad_carrito(
     return disponibles, unidades, no_disponibles
 
 
+def _alternativas_disponibles(
+    nombre_quitado: str, carrito: list[dict], inicio: datetime, fin: datetime
+) -> list[str]:
+    """Modelos de la MISMA clase que `nombre_quitado` (activo que quedó
+    fuera del carrito por no estar disponible) que sí tienen una unidad
+    libre en ese horario -- para ofrecérselos como reemplazo (ver
+    `_ofrecer_alternativas`).
+
+    "Misma clase" es categoria + subcategoria, no solo subcategoria: un Rode
+    NTG3 (subcategoria 'microfono', categoria 'grabación audiovisual') y un
+    Shure SM7B (subcategoria 'microfono', categoria 'producción de audio')
+    son equipos distintos aunque compartan subcategoría -- uno es para
+    cámara, el otro para cabina. Incluir `tipo` en la clase de paso le da a
+    un ESPACIO (categoria/subcategoria en NULL) otros espacios como
+    alternativa, sin necesitar un caso aparte.
+
+    Solo se revisa el activo principal acá, no sus accesorios: si el
+    reemplazo trae accesorios distintos (ej. otro cuerpo de cámara con otros
+    lentes), esos se ofrecen y resuelven igual que cualquier activo nuevo
+    (fold-in de `_avanzar_wizard`, paso "confirmar_accesorios") y su
+    disponibilidad se revisa de nuevo en la pausa de "Confirmar" -- la
+    garantía real contra choques sigue siendo el EXCLUDE de Postgres en
+    `crear_reservas_grupo`, esto es solo para no ofrecer algo obviamente
+    ocupado.
+
+    El orden de salida es el de `_grupos_activos` (por tipo y nombre), no
+    alfabético ni por disponibilidad."""
+    # Sin filtrar por estado: si lo pasaron a mantenimiento, igual sirve
+    # para saber su clase (categoria/subcategoria/tipo).
+    referencia = Recurso.query.filter_by(nombre=nombre_quitado).order_by(Recurso.id).first()
+    if referencia is None:
+        return []
+    clase = (referencia.tipo, _normalizar(referencia.categoria or ""), _normalizar(referencia.subcategoria or ""))
+    en_carrito = {item["nombre_recurso"] for item in carrito}
+    return [
+        nombre
+        for nombre, rep in _grupos_activos()
+        if nombre != nombre_quitado
+        and nombre not in en_carrito
+        and (rep.tipo, _normalizar(rep.categoria or ""), _normalizar(rep.subcategoria or "")) == clase
+        and _unidad_libre_en_rango(nombre, inicio, fin) is not None
+    ]
+
+
 def _quitar_del_carrito(carrito: list[dict], nombres: set[str]) -> list[dict]:
     """Quita del carrito los ítems nombrados y, en cascada, todo lo que
     colgaba de ellos por `por`: los accesorios de un equipo, los contenidos
@@ -1303,6 +1347,20 @@ OPCIONES_CONFIRMAR_HORA = [
 ]
 
 
+def _opciones_confirmar(wizard: dict) -> list[tuple[str, str]]:
+    """OPCIONES_CONFIRMAR + una opción "Ver alternativas a X" por cada
+    activo raíz que quedó fuera del carrito al resolver disponibilidad (ver
+    `wizard["alternativas_para"]` y `_ofrecer_alternativas`). Se insertan
+    justo después de "Agregar otro activo o espacio" -- son otra forma de
+    agregar un activo, no de cambiar lo que ya está en el carrito. Sin `*`
+    en la etiqueta: `_interpretar_opcion` matchea el texto literal, y un
+    `*` de énfasis ahí rompería esa comparación."""
+    opciones = list(OPCIONES_CONFIRMAR)
+    extra = [(f"alternativas:{n}", f"Ver alternativas a {n}") for n in (wizard.get("alternativas_para") or [])]
+    i = next(i for i, (v, _) in enumerate(opciones) if v == "agregar_item") + 1
+    return opciones[:i] + extra + opciones[i:]
+
+
 def _siguiente_paso_wizard(wizard: dict) -> str:
     if wizard.get("resolviendo_item"):
         if not wizard.get("nombre_recurso"):
@@ -1472,9 +1530,10 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             return _con_avisos(avisos, mensaje), wizard, False
 
         if paso == "confirmar":
-            wizard["opciones_actuales"] = OPCIONES_CONFIRMAR
+            opciones = _opciones_confirmar(wizard)
+            wizard["opciones_actuales"] = opciones
             wizard["paso"] = "confirmar"
-            mensaje = _mensaje_resumen(wizard, usuario)
+            mensaje = _mensaje_resumen(wizard, usuario, opciones)
             wizard["_mensaje_menu_actual"] = mensaje
             return _con_avisos(avisos, mensaje), wizard, False
 
@@ -1531,7 +1590,7 @@ def _lineas_carrito(carrito: list[dict]) -> str:
     )
 
 
-def _mensaje_resumen(wizard: dict, usuario: Usuario) -> str:
+def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, str]]) -> str:
     inicio_utc = datetime.fromisoformat(wizard["inicio"])
     fin_utc = datetime.fromisoformat(wizard["fin"])
     inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
@@ -1547,7 +1606,7 @@ def _mensaje_resumen(wizard: dict, usuario: Usuario) -> str:
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
     )
-    return resumen + "\n\n" + _formatear_menu("¿Qué quieres hacer?", OPCIONES_CONFIRMAR)
+    return resumen + "\n\n" + _formatear_menu("¿Qué quieres hacer?", opciones)
 
 
 def _con_avisos(avisos: list[str], mensaje: str) -> str:
@@ -1557,12 +1616,17 @@ def _con_avisos(avisos: list[str], mensaje: str) -> str:
 
 
 OPCIONES_NO_DISPONIBLE = [
-    ("quitar", "Quitar esos activos y continuar con el resto de la reserva"),
-    ("cancelar_reserva", "Cancelar esta reserva y elegir otro activo"),
+    ("quitar", "Quitar esos activos y volver al resumen"),
+    ("cancelar_reserva", "Cancelar toda la reserva"),
+]
+# Misma acción, pero cuando quitar deja el carrito vacío: no hay resumen al que volver.
+OPCIONES_NO_DISPONIBLE_CARRITO_VACIO = [
+    ("quitar", "Quitar esos activos y elegir otro"),
+    ("cancelar_reserva", "Cancelar toda la reserva"),
 ]
 
 
-def _mensaje_no_disponibles(no_disponibles: list[dict]) -> str:
+def _mensaje_no_disponibles(no_disponibles: list[dict], opciones: list[tuple[str, str]]) -> str:
     """Le dice al usuario exactamente cuáles activos (padre o hijo, da
     igual) ya no están disponibles en el horario elegido, y le pregunta qué
     hacer -- en vez de decidir en silencio (ver `_resolver_disponibilidad_carrito`
@@ -1581,16 +1645,90 @@ def _mensaje_no_disponibles(no_disponibles: list[dict]) -> str:
         f"{lineas}\n"
         f"{_DIVISOR_FACTURA}"
     )
-    return mensaje + "\n\n" + _formatear_menu("¿Qué quieres hacer?", OPCIONES_NO_DISPONIBLE)
+    return mensaje + "\n\n" + _formatear_menu("¿Qué quieres hacer?", opciones)
 
 
 def _pausar_por_no_disponibles(wizard: dict, sesion: dict, no_disponibles: list[dict]) -> tuple[str, dict]:
+    # Cualquier pausa por disponibilidad invalida un "Confirmar" anterior: el
+    # carrito confirmado ya no se puede reservar tal cual, así que el usuario
+    # tiene que volver a ver el resumen (y confirmar de nuevo) antes de que se
+    # cree la reserva -- ver el bug original en docs/SESION_2026-09-10.md.
+    wizard["confirmado"] = False
+
+    # Se simula el retiro (sin mutar el carrito todavía, ver `_quitar_del_carrito`)
+    # solo para decidir qué lista de opciones mostrar: si quitar lo no
+    # disponible deja el carrito vacío, no tiene sentido ofrecer "volver al
+    # resumen" -- no hay resumen al que volver.
+    sin_libres = {nd["nombre"] for nd in no_disponibles if not nd["libres"]}
+    opciones = (
+        OPCIONES_NO_DISPONIBLE
+        if _quitar_del_carrito(wizard["carrito"], sin_libres)
+        else OPCIONES_NO_DISPONIBLE_CARRITO_VACIO
+    )
+
     wizard["no_disponibles"] = no_disponibles
-    wizard["opciones_actuales"] = OPCIONES_NO_DISPONIBLE
+    wizard["opciones_actuales"] = opciones
     wizard["paso"] = "resolver_disponibilidad"
-    mensaje = _mensaje_no_disponibles(no_disponibles)
+    mensaje = _mensaje_no_disponibles(no_disponibles, opciones)
     wizard["_mensaje_menu_actual"] = mensaje
     return mensaje, {**sesion, "reserva_wizard": wizard}
+
+
+def _mensaje_alternativas(nombre_quitado: str, wizard: dict, opciones: list[tuple[str, str]]) -> str:
+    inicio_local = datetime.fromisoformat(wizard["inicio"]).astimezone(ZONA_HORARIA_CPA)
+    fin_local = datetime.fromisoformat(wizard["fin"]).astimezone(ZONA_HORARIA_CPA)
+    mensaje = (
+        "*ALTERNATIVAS DISPONIBLES*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"En vez de: *{nombre_quitado}*\n"
+        f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
+        f"Fin: {_formatear_fecha_hora(fin_local)}\n"
+        f"{_DIVISOR_FACTURA}"
+    )
+    return mensaje + "\n\n" + _formatear_menu("Estos están libres en ese horario. ¿Cuál quieres agregar a la reserva?", opciones)
+
+
+def _ofrecer_alternativas(
+    wizard: dict, usuario: Usuario, sesion: dict, nombre_quitado: str, avisos: list[str]
+) -> tuple[str, dict]:
+    """Busca reemplazos para `nombre_quitado` (ver `_alternativas_disponibles`)
+    y arma el paso "elegir_alternativa", o si no hay ninguno, sigue el wizard
+    normalmente (con el carrito como quedó) -- avisando en cualquier caso.
+
+    Si no hay alternativas Y el carrito quedó vacío, se prueba con la
+    siguiente raíz pendiente (`alternativas_para`) en vez de cortar de una:
+    puede que quitar el trípode no tenga reemplazo pero sí la cámara. Si ya
+    no queda ninguna raíz pendiente, se vuelve a pedir un activo desde cero
+    (`resolviendo_item = True`), igual que cuando el carrito queda vacío en
+    cualquier otro punto del wizard."""
+    alternativas = _alternativas_disponibles(
+        nombre_quitado, wizard["carrito"], datetime.fromisoformat(wizard["inicio"]), datetime.fromisoformat(wizard["fin"])
+    )
+    if not alternativas:
+        pendientes = [n for n in (wizard.get("alternativas_para") or []) if n != nombre_quitado]
+        wizard["alternativas_para"] = pendientes
+        avisos.append(f"No encontré otro activo del mismo tipo que {nombre_quitado} libre en ese horario.")
+        if not wizard["carrito"]:
+            if pendientes:  # carrito vacío con varias raíces quitadas: probar la siguiente
+                return _ofrecer_alternativas(wizard, usuario, sesion, pendientes[0], avisos)
+            wizard.update(subcategoria=None, marca=None, nombre_recurso=None, resolviendo_item=True)
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return _con_avisos(avisos, mensaje), {**sesion, "reserva_wizard": wizard}
+
+    # Con carrito vacío no hay "resumen" al que volver -- se ofrece elegir
+    # otro tipo de activo en su lugar (mismo criterio que
+    # OPCIONES_NO_DISPONIBLE_CARRITO_VACIO).
+    salida = ("volver", "Volver al resumen") if wizard["carrito"] else ("otro_tipo", "Elegir otro tipo de activo")
+    opciones = [(n, n) for n in alternativas] + [salida]
+    wizard["alternativa_de"] = nombre_quitado
+    wizard["opciones_actuales"] = opciones
+    wizard["paso"] = "elegir_alternativa"
+    mensaje = _mensaje_alternativas(nombre_quitado, wizard, opciones)
+    wizard["_mensaje_menu_actual"] = mensaje  # sin avisos, para re-mostrar ante opción inválida
+    return _con_avisos(avisos, mensaje), {**sesion, "reserva_wizard": wizard}
 
 
 def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) -> tuple[str, dict]:
@@ -1778,6 +1916,11 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         "confirmado": False,
         "opciones_actuales": None,
         "paso": None,
+        # Raíces quitadas por no estar disponibles a las que todavía se les
+        # puede ofrecer alternativa (ver `_ofrecer_alternativas`). Toda
+        # lectura usa `wizard.get("alternativas_para") or []`, porque una
+        # sesión vieja en Redis (de antes de este campo) no lo trae.
+        "alternativas_para": [],
     }
 
     if recurso is not None:
@@ -2097,17 +2240,26 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             ), {**sesion, "reserva_wizard": None}
 
         if valor == "confirmar":
+            wizard["alternativas_para"] = []  # vio la oferta y eligió confirmar sin usarla
             wizard["confirmado"] = True
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
 
+        if valor.startswith("alternativas:"):
+            return _ofrecer_alternativas(wizard, usuario, sesion, valor.partition(":")[2], [])
+
         if valor == "agregar_item":
-            wizard.update(subcategoria=None, marca=None, nombre_recurso=None, resolviendo_item=True)
+            # Nuevo activo desde cero: las alternativas ofrecidas eran para
+            # lo que se quitó, no para esto que el usuario está agregando
+            # aparte.
+            wizard.update(subcategoria=None, marca=None, nombre_recurso=None, resolviendo_item=True, alternativas_para=[])
         elif valor == "quitar_item":
-            return _iniciar_quitar_item(wizard, sesion)
+            return _iniciar_quitar_item(wizard, sesion)  # conserva alternativas_para
         elif valor == "cambiar_fecha":
-            wizard.update(fecha=None, fecha_fin=None, inicio=None, fin=None)
+            # Cambia el horario: las alternativas se calcularon para el
+            # horario anterior, ya no valen.
+            wizard.update(fecha=None, fecha_fin=None, inicio=None, fin=None, alternativas_para=[])
         elif valor == "cambiar_hora":
-            wizard.update(inicio=None, fin=None)
+            wizard.update(inicio=None, fin=None, alternativas_para=[])
 
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
         if listo:
@@ -2187,6 +2339,11 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
                 "Reserva cancelada, no se guardó nada. Si quieres reservar otra cosa, dime qué necesitas."
             ), {**sesion, "reserva_wizard": None}
 
+        # Defensa extra: una sesión pausada en Redis desde antes de este
+        # cambio puede seguir con confirmado=True (ver `_pausar_por_no_disponibles`,
+        # que ya lo pone en False para las nuevas).
+        wizard["confirmado"] = False
+
         # "quitar" -- se quitan los activos no disponibles y, en cascada, lo
         # que colgaba de ellos (mismo criterio de arrastre que "Quitar un
         # activo de la reserva", ver paso "quitar_item_menu"). Un ítem con
@@ -2201,11 +2358,47 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
                 item["unidades"] = nd["libres"]
             else:
                 a_quitar.add(item["nombre_recurso"])
+        # Solo las RAÍCES (lo que el usuario eligió directamente, `por` es
+        # None) reciben oferta de alternativa -- un lente Sony no le sirve a
+        # un cuerpo Canon, y un reemplazo de un accesorio/contenido trae sus
+        # propios accesorios/contenidos igual que cualquier activo nuevo, así
+        # que no tiene sentido ofrecerlo suelto. Se ASIGNA la lista (no se
+        # combina con la anterior): son las raíces quitadas en ESTA pausa.
+        quitados_raiz = [it["nombre_recurso"] for it in wizard["carrito"] if it["nombre_recurso"] in a_quitar and not it.get("por")]
         wizard["carrito"] = _quitar_del_carrito(wizard["carrito"], a_quitar)
-        if not wizard["carrito"]:
-            wizard["resolviendo_item"] = True
+        wizard["alternativas_para"] = quitados_raiz
+        avisos = ["Listo, quité de la reserva lo que no estaba disponible en ese horario."]
 
         wizard["opciones_actuales"] = None
+        if not wizard["carrito"]:
+            # Los ítems con unidades fijas (parciales) que se quedaron con
+            # `unidades` libres no cuentan como carrito vacío -- ya se
+            # filtraron arriba, esto solo se cumple si todo se quitó.
+            if quitados_raiz:
+                return _ofrecer_alternativas(wizard, usuario, sesion, quitados_raiz[0], avisos)
+            wizard["resolviendo_item"] = True
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return _con_avisos(avisos, mensaje), {**sesion, "reserva_wizard": wizard}
+
+    if paso == "elegir_alternativa":
+        valor = _interpretar_opcion(texto_usuario, wizard.get("opciones_actuales") or [])
+        if valor is None:
+            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                **sesion,
+                "reserva_wizard": wizard,
+            }
+        nombre_quitado = wizard.pop("alternativa_de", None)
+        wizard["opciones_actuales"] = None
+        if valor == "otro_tipo":
+            wizard.update(subcategoria=None, marca=None, nombre_recurso=None, resolviendo_item=True, alternativas_para=[])
+        elif valor != "volver":
+            # Mismo camino que "agregar_item" con un activo ya resuelto: el
+            # fold-in de `_avanzar_wizard` lo mete al carrito con sus
+            # accesorios / contenidos por defecto.
+            wizard["alternativas_para"] = [n for n in (wizard.get("alternativas_para") or []) if n != nombre_quitado]
+            wizard.update(subcategoria=None, marca=None, nombre_recurso=valor, resolviendo_item=True)
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
         if listo:
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
@@ -2276,6 +2469,15 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
         "confirmar_hora_fin_interpretada",
         "confirmar_accesorios",
         "confirmar_contenidos_espacio",
+        # A propósito NO se agrega "elegir_alternativa" acá: ese paso no
+        # tiene ninguna opción que empiece por "no" (sus opciones son
+        # nombres de activos, "Volver al resumen" o "Elegir otro tipo de
+        # activo"), así que "no" sigue significando cancelar, como en
+        # cualquier otro paso. Si se agregara, un "no" del usuario dejaría
+        # de cancelar y caería en el `_interpretar_opcion` de ese paso,
+        # donde el match es por substring de la etiqueta normalizada: "no"
+        # es substring de "canon" ("Cámara Canon EOS R6"), así que
+        # "no" terminaría "eligiendo" esa cámara en vez de cancelar.
     ):
         palabras_cancelar = {"cancelar", "cancela", "cerrar"}
 
