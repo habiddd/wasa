@@ -22,9 +22,16 @@
      exacto en que quedó ese wizard (`recursos_service.gestionar_reserva`),
      también antes de clasificar intent. Lo mismo aplica a un **wizard de
      cancelación en curso** (`sesion["cancelacion_wizard"]`, ver
-     "Cancelar una reserva ya confirmada" más abajo).
+     "Cancelar una reserva ya confirmada" más abajo), y a un **menú de
+     fallback en curso** (`sesion["menu_fallback"]`, ver "Menú de fallback"
+     más abajo).
    - Clasifica el **intent** (`llm_client.clasificar_intent`) y lo valida
-     contra la whitelist (`guardrails.intent_permitido`).
+     contra la whitelist (`guardrails.intent_permitido`). Si el intent no
+     está permitido (en la práctica, `"otro"`), en vez de bloquear con un
+     mensaje fijo se le ofrece al usuario el menú de fallback (ver más
+     abajo) -- `guardrails.registrar_interaccion` sigue auditando
+     `motivo_bloqueo="intent_no_permitido"` solo si el usuario agota los
+     reintentos del menú sin elegir nada reconocible.
    - Ejecuta la lógica de negocio correspondiente:
      - `consultar_disponibilidad`, `reservar` y `cancelar` van a
        `recursos_service.py`, que consulta/escribe `recursos`/`reservas` de
@@ -124,6 +131,44 @@ encontrados probando el bot (no solo en teoría):
   distingue cuál), el LLM no se consulta para desempatar: manda la
   ambigüedad real y se le pregunta al usuario. El LLM solo se consulta
   cuando el matcheo por palabra clave no encontró absolutamente nada.
+
+### El intent tampoco se acepta a ciegas (`_corroborar_o_heuristico`)
+
+Mismo criterio que el punto anterior, un nivel más arriba: la categoría
+que devuelve `clasificar_intent` también tiene que tener respaldo en lo
+que el usuario escribió. El modelo local en uso (`liquid/lfm2.5-1.2b`)
+responde una sola palabra limpia -- no es un problema de parseo -- pero
+tiene un sesgo medido hacia `reservar`, y en menor medida `cancelar`,
+ante mensajes ambiguos o sin relación: "buenos días", "asdfgh" y "cual
+es la capital de mongolia" se clasificaban como `reservar`/`cancelar`
+incluso con `temperature=0`, arrancando wizards que el usuario nunca
+pidió. Ajustar `PROMPT_CLASIFICACION` con ejemplos few-shot no lo
+resuelve de forma estable en un modelo de este tamaño: cada ejemplo que
+se agrega desplaza el sesgo a otro caso en vez de eliminarlo (probado a
+mano contra el LLM real antes de descartarlo -- ver
+`docs/SESION_2026-09-09.md`, sección 14).
+
+Por eso, cuando el LLM responde `reservar`, `cancelar` o
+`consultar_disponibilidad`, `_corroborar_o_heuristico` exige que el
+mensaje del usuario contenga al menos una de las palabras clave de esa
+categoría (`PALABRAS_RESERVAR`, `PALABRAS_CANCELAR`,
+`PALABRAS_DISPONIBILIDAD` -- las mismas constantes que usa el heurístico
+de respaldo, para que no puedan quedar desalineadas). Sin ese respaldo se
+descarta la respuesta del LLM y se usa `_clasificar_intent_heuristico`,
+que en esos casos cae en `otro` -- y de ahí al menú de fallback, que le
+pregunta al usuario en vez de asumir.
+
+`ayuda` y `otro` quedan fuera del guard a propósito: equivocarse ahí como
+mucho repite el texto de ayuda o abre el menú de fallback, nunca arranca
+un wizard ni le afirma al usuario una disponibilidad falsa. Exigirles
+corroboración solo empeoraría la detección de `ayuda` sin ganar
+seguridad.
+
+Limitación conocida que este guard no cubre: un mensaje que pide ayuda
+sin usar la palabra ("qué puedes hacer") se clasifica como `otro`, porque
+ni el LLM ni el heurístico lo reconocen. La consecuencia es benigna (el
+usuario ve el menú de fallback) y la salida real no es agregar más
+palabras clave, sino un modelo más grande en `LLM_MODEL`.
 
 ## Inventario: varias unidades del mismo modelo (`recursos_service.py`)
 
@@ -429,6 +474,64 @@ un paso `confirmar_cancelacion` explícito de por medio. `PALABRAS_CANCELAR`
 ("cancelar", "cancela", "cerrar") aborta el wizard de cancelación en
 cualquier paso sin tocar la base, igual que en `gestionar_reserva`.
 
+### Menú de fallback (`menu_service.py`)
+
+Cuando `clasificar_intent` no ubica el mensaje en ningún intent permitido
+(en la práctica, siempre cae en `"otro"`), en vez de cortar la
+conversación con un mensaje fijo se le ofrece al usuario un menú de dos
+opciones -- "Reservas" / "Preguntas" -- para no perder el mensaje sin
+intentar ayudar. Vive en `menu_service.py`, un módulo puro (sin DB, sin
+LLM, sin importar `recursos_service.py`) para no añadir superficie al
+archivo de negocio más grande y crítico del bot; `webhook.py` es quien
+decide a qué servicio despachar según la acción que devuelve.
+
+Estado en sesión bajo `sesion["menu_fallback"]`:
+`{"paso": "elegir_opcion" | "esperando_consulta", "intentos": int}`. Igual
+que `reserva_wizard`/`cancelacion_wizard`, mientras esté activo la
+respuesta del usuario se interpreta contra el paso del menú, no contra
+clasificación de intent.
+
+- **`elegir_opcion`**: `"1"`/palabras de reservar arrancan
+  `recursos_service.gestionar_reserva` con el texto tal cual lo escribió
+  el usuario (si ya menciona el activo, p. ej. "quiero reservar la sala de
+  edición", el wizard salta esos pasos solo, igual que hace hoy con el
+  intent `reservar` normal). `"2"`/palabras de preguntas piden qué activo
+  consultar y pasan al paso `esperando_consulta`. Una opción no reconocida
+  reintenta el menú hasta `MAX_REINTENTOS` (2) veces; agotados los
+  reintentos, se rinde con el mismo mensaje estático que antes bloqueaba
+  directo, auditado igual que antes
+  (`motivo_bloqueo="intent_no_permitido"`).
+- **`esperando_consulta`**: cualquier texto (salvo una palabra de salida)
+  se pasa tal cual a `recursos_service.evaluar_consulta_disponibilidad`
+  -- función pura ya usada por el intent `consultar_disponibilidad`
+  normal, así que no hay lógica de disponibilidad nueva, solo un enrutamiento
+  distinto hacia ella. Es de un solo turno: siempre limpia el estado al
+  responder, no puede quedar en bucle.
+- Palabras de salida (`"salir"`, `"cerrar"`, `"cancelar"`, `"cancela"`)
+  cortan el menú en cualquier paso, igual que `PALABRAS_CANCELAR` corta los
+  otros wizards -- el mensaje de salida sugiere explícitamente escribir
+  "cancelar mi reserva" si eso era lo que el usuario quería, porque
+  mientras el menú está activo ese texto no llega al intent `cancelar`.
+
+**Invariante importante:** `menu_service.procesar_respuesta` siempre
+devuelve la sesión con `menu_fallback` en `None` antes de que `webhook.py`
+se la pase a `gestionar_reserva` -- si no, como ese wizard hace
+`{**sesion, "reserva_wizard": wizard}` en cada paso, `menu_fallback`
+quedaría propagándose y el bloque de `webhook.py` que lo lee interceptaría
+cada mensaje futuro del wizard de reservas. No agregar `"otro"` a
+`ALLOWED_INTENTS` como atajo alternativo a este menú: eso enrutaría
+cualquier mensaje fuera de alcance a `llm_client.generar_respuesta`,
+eliminando el guardrail principal del bot.
+
+**Auditoría:** mostrar el menú, un reintento, o salir del menú se registran
+con `permitido=True` (ya no es un bloqueo, es ayuda ofrecida) e
+`intent_detectado="menu_fallback"`; elegir una opción audita el intent real
+elegido (`"reservar"` / `"consultar_disponibilidad"`). Solo la rendición
+final tras agotar reintentos conserva `permitido=False` y
+`motivo_bloqueo="intent_no_permitido"`. Efecto esperado en el dashboard:
+`total_bloqueadas_30d` (`dashboard.py`) baja, porque ya no se cuenta cada
+mensaje inclasificable como bloqueado.
+
 ## Identidad y registro (`registro_service.py`, `usuarios_service.py`)
 
 El primer mensaje de un número nuevo crea su fila de `Usuario` vacía
@@ -462,9 +565,10 @@ Es un punto de extensión genérico: cualquier flujo futuro que necesite
 recordar contexto entre mensajes puede guardar su propio estado ahí bajo
 su propia clave, igual que `registro_campo_pendiente`, `reserva_wizard`
 (dict completo con el progreso del wizard de reserva paso a paso -- ver
-"Reserva paso a paso" más arriba) y `cancelacion_wizard` (mismo patrón
+"Reserva paso a paso" más arriba), `cancelacion_wizard` (mismo patrón
 para cancelar una reserva ya confirmada -- ver "Cancelar una reserva ya
-confirmada" más arriba).
+confirmada" más arriba) y `menu_fallback` (menú de "Reservas"/"Preguntas"
+cuando no se reconoce el intent -- ver "Menú de fallback" más arriba).
 
 ## Dashboard interno: por qué React + shadcn/ui con un build separado
 

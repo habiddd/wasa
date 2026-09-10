@@ -9,6 +9,7 @@ from app import (
     usuarios_service,
     registro_service,
     sesiones,
+    menu_service,
 )
 
 bp = Blueprint("webhook", __name__)
@@ -166,21 +167,54 @@ def recibir_webhook():
         )
         return jsonify({"status": "ok" if enviado else "error_envio"}), 200
 
-    # --- Clasificación de intent + whitelist ---
-    intent = llm_client.clasificar_intent(texto)
-    if not guardrails.intent_permitido(intent):
-        respuesta = (
-            "Solo puedo ayudarte a reservar equipos/espacios, consultar "
-            "disponibilidad o cancelar una reserva. Escribe 'ayuda' para más info."
-        )
+    # --- Menú de fallback en curso: el mensaje anterior no se pudo
+    # clasificar y se le ofreció al usuario elegir entre Reservas y
+    # Preguntas (ver bloque de "intent no permitido" más abajo); esta
+    # respuesta ("1", "2", "reservas"...) se interpreta contra ese menú,
+    # no como un mensaje nuevo suelto -- mismo motivo que los dos bloques
+    # de wizard de arriba. `menu_service.procesar_respuesta` ya deja
+    # `menu_fallback` en None en la sesión que devuelve antes de que se
+    # la pasemos a `gestionar_reserva`, para no propagar este estado
+    # dentro del wizard de reservas. ---
+    if sesion.get(menu_service.CLAVE_SESION):
+        accion, payload, sesion, auditoria = menu_service.procesar_respuesta(texto, sesion)
+
+        if accion == "reservar":
+            respuesta, sesion = recursos_service.gestionar_reserva(payload, usuario, sesion)
+        elif accion == "consultar":
+            respuesta = recursos_service.evaluar_consulta_disponibilidad(payload)
+        else:  # "responder": menú, reintento, salida o rendición
+            respuesta = payload
+
+        sesiones.guardar_sesion(numero, sesion)
         enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
         guardrails.registrar_interaccion(
-            numero, texto, intent, respuesta, permitido=False,
-            motivo_bloqueo="intent_no_permitido",
+            numero, texto, auditoria["intent"], respuesta,
+            permitido=auditoria["permitido"],
+            motivo_bloqueo=auditoria["motivo_bloqueo"],
             mensaje_id=mensaje_id,
             estado_envio="pendiente" if enviado else "error_http",
         )
-        return jsonify({"status": "intent_bloqueado"}), 200
+        return jsonify({"status": "ok" if enviado else "error_envio"}), 200
+
+    # --- Clasificación de intent + whitelist ---
+    intent = llm_client.clasificar_intent(texto)
+    if not guardrails.intent_permitido(intent):
+        # Antes esto bloqueaba con un mensaje estático fijo. Ahora se le
+        # ofrece al usuario un menú (Reservas / Preguntas) en vez de
+        # cortar la conversación -- ver menu_service.py. NO agregar "otro"
+        # a ALLOWED_INTENTS como atajo: eso enrutaría cualquier mensaje
+        # fuera de alcance a llm_client.generar_respuesta (línea de abajo),
+        # eliminando este guardrail.
+        respuesta, sesion = menu_service.activar_menu(sesion)
+        sesiones.guardar_sesion(numero, sesion)
+        enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
+        guardrails.registrar_interaccion(
+            numero, texto, menu_service.INTENT_AUDITORIA, respuesta, permitido=True,
+            mensaje_id=mensaje_id,
+            estado_envio="pendiente" if enviado else "error_http",
+        )
+        return jsonify({"status": "menu_fallback"}), 200
 
     # Para reservar/consultar disponibilidad/cancelar, la respuesta sale de
     # datos reales de recursos/reservas (ver recursos_service) -- nunca del

@@ -75,30 +75,78 @@ def clasificar_intent(texto_usuario: str) -> str:
 
     for intent in INTENTS_VALIDOS:
         if intent in contenido:
-            return intent
+            return _corroborar_o_heuristico(intent, texto_usuario)
 
     current_app.logger.warning("El LLM devolvió un intent no reconocido: %r", contenido)
     return _clasificar_intent_heuristico(texto_usuario)
 
 
+# Palabras clave por intent, compartidas entre el heurístico de respaldo y
+# el guard de corroboración de `_corroborar_o_heuristico` (ver ahí por qué
+# hace falta un guard además del heurístico).
+PALABRAS_CANCELAR = ("cancel",)
+PALABRAS_RESERVAR = ("reserv", "aparta", "necesito")
+PALABRAS_DISPONIBILIDAD = ("disponib", "libre", "horario")
+PALABRAS_AYUDA = ("ayuda", "help")
+
+# Solo estas tres categorías tienen consecuencias reales si se clasifican
+# mal (arrancan un wizard de reserva/cancelación, o le afirman al usuario
+# el estado de un activo) -- "ayuda" y "otro" son inofensivas de sobra: lo
+# peor que hacen es repetir el texto de ayuda o abrir el menú de fallback
+# (ver `menu_service.py`). Por eso solo estas exigen corroboración.
+_PALABRAS_CORROBORACION = {
+    "cancelar": PALABRAS_CANCELAR,
+    "reservar": PALABRAS_RESERVAR,
+    "consultar_disponibilidad": PALABRAS_DISPONIBILIDAD,
+}
+
+
+def _corroborar_o_heuristico(intent: str, texto_usuario: str) -> str:
+    """El modelo local en uso (`liquid/lfm2.5-1.2b`, muy pequeño) responde
+    una sola palabra limpia -- no es un problema de parseo -- pero, medido
+    en la práctica, tiene un sesgo real hacia "reservar" (y en menor medida
+    "cancelar") ante mensajes ambiguos o sin relación: saludos sueltos
+    ("buenos dias"), texto sin sentido ("asdfgh"), o preguntas fuera de
+    tema ("cual es la capital de mongolia") se clasificaron como
+    "reservar"/"cancelar" incluso con temperature=0. Ajustar el prompt con
+    ejemplos no alcanza a arreglarlo de forma estable: corrige un caso y
+    desplaza el sesgo a otro (probado a mano).
+
+    En vez de confiar ciegamente, se exige que el propio texto del usuario
+    contenga al menos una de las palabras clave del heurístico de respaldo
+    para esa categoría -- si no hay ningún indicio real en lo que el
+    usuario escribió, se descarta la respuesta del LLM y se usa el
+    heurístico completo, que en estos casos ambiguos cae correctamente en
+    "otro" (y de ahí al menú de fallback, en vez de arrancar un wizard que
+    el usuario nunca pidió)."""
+    palabras_clave = _PALABRAS_CORROBORACION.get(intent)
+    if palabras_clave is None:
+        return intent
+    texto_norm = normalizar(texto_usuario)
+    if any(p in texto_norm for p in palabras_clave):
+        return intent
+    return _clasificar_intent_heuristico(texto_usuario)
+
+
 def _clasificar_intent_heuristico(texto_usuario: str) -> str:
-    """Heurística de respaldo por palabras clave -- solo se usa si el LLM
-    no está disponible o responde algo irreconocible (ver `clasificar_intent`).
-    Antes era la única lógica de clasificación; se queda como red de
-    seguridad porque es instantánea y no depende de ningún servicio externo.
+    """Heurística de respaldo por palabras clave -- se usa si el LLM no
+    está disponible, responde algo irreconocible, o su respuesta no pasa
+    la corroboración de `_corroborar_o_heuristico`. Antes era la única
+    lógica de clasificación; se queda como red de seguridad porque es
+    instantánea y no depende de ningún servicio externo.
 
     "cancel" se revisa antes que "reserv" a propósito: "cancelar mi
     reserva" contiene la subcadena "reserv" (de "reserva"), así que si el
     orden fuera al revés, cancelar algo caería mal clasificado como
     "reservar"."""
     texto = normalizar(texto_usuario)
-    if "cancel" in texto:
+    if any(p in texto for p in PALABRAS_CANCELAR):
         return "cancelar"
-    if any(p in texto for p in ("reserv", "aparta", "necesito")):
+    if any(p in texto for p in PALABRAS_RESERVAR):
         return "reservar"
-    if any(p in texto for p in ("disponib", "libre", "horario")):
+    if any(p in texto for p in PALABRAS_DISPONIBILIDAD):
         return "consultar_disponibilidad"
-    if "ayuda" in texto or "help" in texto:
+    if any(p in texto for p in PALABRAS_AYUDA):
         return "ayuda"
     return "otro"
 
