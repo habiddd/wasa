@@ -114,6 +114,11 @@ services:
       LLM_MODEL: ${LLM_MODEL:-llama3.1}
       LLM_API_KEY: ${LLM_API_KEY:-}
 
+      # Página con el catálogo completo de equipos y espacios. Vacía = el bot
+      # sigue listando todo el inventario cuando no identifica el activo (ver
+      # recursos_service.evaluar_consulta_disponibilidad).
+      CATALOGO_URL: ${CATALOGO_URL:-}
+
       # Guardrails
       MAX_MESSAGES_PER_MINUTE: ${MAX_MESSAGES_PER_MINUTE:-8}
       # "saludo" = conversación social (ver llm_client.responder_charla); no

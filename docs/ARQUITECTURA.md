@@ -167,7 +167,9 @@ diseño: la meta no es solo acertar, es llamar al modelo lo menos posible.
    le exige que el mensaje tenga **señal de dominio**: un verbo de
    reserva, un equipo, un espacio, una fecha/hora, o un nombre real del
    catálogo (`recursos_service.listar_terminos_catalogo()`, que
-   `webhook.py` le pasa al clasificador). Si no hay nada de eso, el
+   `webhook.py` le pasa al clasificador -- desde plurales/descripción
+   también incluye las palabras clave de las descripciones, de 4 letras o
+   más). Si no hay nada de eso, el
    mensaje no puede haber sido una petición por más que el LLM lo diga, y
    se enruta a `saludo` (si era conversación) o a `otro`.
 
@@ -295,7 +297,21 @@ Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
   "sony") que solo aparece en uno. Cuando el único match viene de una
   palabra genérica sin nombre completo ni segunda palabra distintiva, se
   marca `es_match_debil` y la respuesta incluye una salvedad ("si no te
-  refieres a X, dime el nombre completo").
+  refieres a X, dime el nombre completo"). Cada palabra del nombre tolera
+  plural regular (`_regex_palabra`: "imacs" → iMac, "lentes" → Lente…) sin
+  relajar el `\b`, así "eos r" no empata con "eos r6". Suma
+  `BONO_MODELO_COMPLETO` si el texto trae el `modelo` completo ("eos r6"),
+  porque lo que distingue un modelo de otro suele tener menos de 4 letras.
+- **Búsqueda por niveles:** nombre (+modelo) → subcategoría → descripción
+  (`buscar_recursos_por_descripcion`). Cada nivel solo se mira si el
+  anterior no encontró nada, así que la descripción nunca altera un
+  resultado por nombre ni `es_match_debil`. En la descripción cuentan
+  palabras de 3 letras o más ("mac", "usb"), sin
+  `PALABRAS_VACIAS_DESCRIPCION`. Si empatan más de
+  `MAX_MODELOS_POR_DESCRIPCION` modelos, el nivel se descarta.
+  Consecuencia: la `descripcion` de un activo ahora es vocabulario de
+  búsqueda del bot, y conviene escribirla desde el dashboard con las
+  palabras con que lo pediría un estudiante (sinónimos, usos).
 - `_unidad_libre_en_rango(nombre, inicio, fin)`: recorre las unidades del
   grupo y devuelve la primera sin choque de horario -- el usuario nunca
   elige la placa exacta, solo el modelo; el bot reparte automáticamente
@@ -308,7 +324,11 @@ Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
 - `evaluar_consulta_disponibilidad` (intent `consultar_disponibilidad`)
   lista el **estado agregado de cada modelo** (`_estado_grupo`: cuántas
   unidades libres de cuántas totales) -- el usuario quiere saber qué hay y
-  qué no, así que nunca pregunta "¿cuál de estos?".
+  qué no, así que nunca pregunta "¿cuál de estos?". Si ningún nivel
+  identifica nada, se envía el enlace de `CATALOGO_URL` (variable de
+  `.env`, cableada en `docker-compose.yml` y `config.py`), que invita a ver
+  el catálogo y a escribir el nombre del equipo o espacio. Si está vacía,
+  se conserva el listado del estado de todo el inventario.
 - Toda hora se interpreta en `America/Bogota` (zona horaria fija de la
   CPA) y se guarda en UTC (columnas `TIMESTAMPTZ`).
 - **La garantía real contra choques de horario es de Postgres, no de la
@@ -348,12 +368,17 @@ ahí. `_avanzar_wizard` además salta solo cualquier paso
 que tenga una única opción posible (ej. una sola marca dentro de una
 subcategoría), avisando al usuario ("solo tenemos una marca de dron, sigo
 con esa") en vez de preguntar algo que no tiene sentido elegir. Si el
-primer mensaje ya deja claro el activo (vía `llm_client.extraer_datos_reserva`,
-ver arriba), esos pasos se saltan también; si dos activos empatan (ej.
-"cámara canon" con dos modelos Canon en catálogo), se pre-llenan
-`subcategoria` y `marca` si todos los candidatos las comparten, y el
-wizard arranca directo en el primer paso que sí hace falta preguntar (ver
-"Por qué separar el LLM..." más arriba).
+primer mensaje ya deja claro el activo (por palabra clave,
+`buscar_recursos_en_texto`), esos pasos se saltan también; si dos activos
+empatan (ej. "cámara canon" con dos modelos Canon en catálogo), se
+pre-llenan `subcategoria` y `marca` si todos los candidatos las comparten,
+y el wizard arranca directo en el primer paso que sí hace falta preguntar
+(ver "Por qué separar el LLM..." más arriba). Si el activo solo se
+reconoce por la descripción ("quiero reservar un mac"), nunca se resuelve
+directo: esos candidatos solo prellenan `subcategoria` y `marca`, y
+únicamente si todos son equipos de una misma subcategoría. Un espacio no
+tiene subcategoría: antes "reservar audio" prellenaba "interfaz" y
+descartaba la Cabina de audio 2 sin avisar.
 
 La reserva no se limita a un solo activo: `wizard["carrito"]` es la lista
 de ítems ya resueltos (ver "Carrito de reserva" más abajo). En cuanto un

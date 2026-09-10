@@ -10,6 +10,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from flask import current_app
 from sqlalchemy.exc import IntegrityError
 
 from app import llm_client
@@ -18,6 +19,43 @@ from app.models import Recurso, Reserva, ReservaGrupo, Usuario
 from app.textutils import normalizar as _normalizar
 
 LONGITUD_MINIMA_PALABRA_CLAVE = 4
+# Bono cuando el texto trae el `modelo` completo tal cual (ej. "eos r6"), ver
+# `_puntaje_recurso_en_texto`. Menor que el +10 del nombre completo: ese
+# sigue siendo la señal más fuerte.
+BONO_MODELO_COMPLETO = 5
+# En la descripción sí cuentan palabras de 3 letras ("mac", "usb", "led",
+# "voz"): ahí suelen estar justo los sinónimos cortos con que un estudiante
+# pide un equipo. El ruido que eso trae (artículos, preposiciones) lo filtra
+# PALABRAS_VACIAS_DESCRIPCION. En el nombre se mantiene el mínimo de 4 para no
+# alterar los puntajes de siempre ("kit", "pro", "eos").
+LONGITUD_MINIMA_PALABRA_DESCRIPCION = 3
+# Si la búsqueda por descripción empata más modelos que esto, las palabras que
+# coincidieron eran genéricas: listarlos todos sería volver al volcado del
+# catálogo que se quiso evitar, así que se trata como "no identifiqué nada".
+MAX_MODELOS_POR_DESCRIPCION = 6
+# Ya normalizadas (sin tildes). Se descartan de la DESCRIPCIÓN antes de
+# buscarlas en el texto: sin esto, "para" o "con" de una descripción
+# coincidirían con casi cualquier mensaje ("tienen un mac para editar?").
+PALABRAS_VACIAS_DESCRIPCION = frozenset({
+    # artículos, preposiciones, conjunciones, pronombres
+    "el", "la", "lo", "los", "las", "un", "una", "uno", "unos", "unas",
+    "al", "del", "de", "en", "con", "sin", "por", "para", "que", "como",
+    "entre", "sobre", "bajo", "desde", "hasta", "hacia", "segun", "tras",
+    "y", "o", "u", "e", "ni", "pero", "mas", "muy", "tan", "ya",
+    "se", "su", "sus", "mi", "mis", "tu", "tus", "le", "les", "nos",
+    "este", "esta", "esto", "estos", "estas", "ese", "esa", "eso", "esos", "esas",
+    "otro", "otra", "otros", "otras", "todo", "toda", "todos", "todas",
+    "cada", "cual", "cuales", "donde", "cuando",
+    # relleno típico de una pregunta o de una ficha de inventario
+    "es", "son", "hay", "tiene", "tienen", "tengo", "tenemos", "incluye",
+    "trae", "sirve", "sirven", "usar", "uso", "ideal", "tipo",
+    "algo", "algun", "alguno", "alguna", "algunos", "algunas",
+    "necesito", "quiero", "quisiera", "busco", "puedo",
+    "reservar", "reserva", "prestar", "prestamo",
+    "disponible", "disponibles", "libre", "libres",
+    "equipo", "equipos", "activo", "activos", "cosa", "cosas",
+    "gran", "buen", "buena", "bueno",
+})
 ZONA_HORARIA_CPA = ZoneInfo("America/Bogota")
 # Único estado de `recursos.estado` que se puede reservar -- 'en_mantenimiento'
 # y 'no_disponible' quedan fuera del catálogo que ve el bot, igual que antes
@@ -51,12 +89,16 @@ def buscar_recursos_en_texto(texto: str) -> tuple[list[Recurso], bool]:
 
     Si en el futuro hace falta más precisión, este es el punto de
     extensión para pasarle la lista de nombres al LLM y que elija.
+
+    Solo mira nombre y modelo. La descripción es un nivel aparte y de menor
+    prioridad (`buscar_recursos_por_descripcion`), así que no altera ni los
+    candidatos ni `es_match_debil` de esta función.
     """
     texto_norm = _normalizar(texto)
     puntuados: list[tuple[int, Recurso]] = []
 
     for _, representante in _grupos_activos():
-        score = _puntaje_nombre_en_texto(representante.nombre, texto_norm)
+        score = _puntaje_recurso_en_texto(representante, texto_norm)
         if score > 0:
             puntuados.append((score, representante))
 
@@ -66,6 +108,16 @@ def buscar_recursos_en_texto(texto: str) -> tuple[list[Recurso], bool]:
     mejor_score = max(score for score, _ in puntuados)
     candidatos = [recurso for score, recurso in puntuados if score == mejor_score]
     return candidatos, mejor_score == 1
+
+
+def _regex_palabra(palabra: str) -> str:
+    """Patrón para buscar `palabra` (ya normalizada) como palabra completa,
+    tolerando el plural regular: "imac" coincide con "imacs", "camara" con
+    "camaras", "dron" con "drones". El `\\b` a ambos lados se conserva a
+    propósito (ver `_puntaje_nombre_en_texto`): lo único que se relaja es una
+    "s"/"es" final opcional, así que "r" sigue sin coincidir con "r6". No
+    cubre plurales irregulares (luz -> luces, interfaz -> interfaces)."""
+    return rf"\b{re.escape(palabra)}(?:s|es)?\b"
 
 
 def _puntaje_nombre_en_texto(nombre: str, texto_norm: str) -> int:
@@ -79,12 +131,36 @@ def _puntaje_nombre_en_texto(nombre: str, texto_norm: str) -> int:
     Los matches son por palabra completa (`\\b`), no substring suelto: sin
     eso, "Cámara Canon EOS R" -- que es un prefijo literal de "Cámara Canon
     EOS R6" -- puntuaría igual de alto contra un mensaje que en realidad
-    dice "...eos r6", empatando dos modelos que el texto sí distingue."""
+    dice "...eos r6", empatando dos modelos que el texto sí distingue.
+
+    Cada palabra tolera plural (`_regex_palabra`): antes "Tienen imacs?" no
+    coincidía con "iMac 24 M3" y la consulta terminaba volcando todo el
+    catálogo. El nombre completo se sigue exigiendo tal cual."""
     nombre_norm = _normalizar(nombre)
     palabras = [p for p in nombre_norm.split() if len(p) >= LONGITUD_MINIMA_PALABRA_CLAVE]
-    score = sum(1 for p in palabras if re.search(rf"\b{re.escape(p)}\b", texto_norm))
+    score = sum(1 for p in palabras if re.search(_regex_palabra(p), texto_norm))
     if re.search(rf"\b{re.escape(nombre_norm)}\b", texto_norm):
         score += 10
+    return score
+
+
+def _puntaje_recurso_en_texto(recurso: Recurso, texto_norm: str) -> int:
+    """`_puntaje_nombre_en_texto` + BONO_MODELO_COMPLETO si el texto trae el
+    `modelo` completo (ej. "eos r6"). Hace falta porque lo que distingue un
+    modelo de otro suele ser corto ("eos", "r6" no llegan a
+    LONGITUD_MINIMA_PALABRA_CLAVE): sin esto "tienen la canon eos r6?"
+    empataba las dos cámaras Canon y sus 5 lentes solo por "canon". El match
+    es estricto (`\\b`, sin plural) para que "eos r" no coincida con "eos r6",
+    mismo motivo que el nombre completo. Se exigen 4+ caracteres para que un
+    modelo genérico ("Pro") no sume por una palabra suelta. Aparte de
+    `_puntaje_nombre_en_texto` porque esa también valida nombres sueltos del
+    LLM (`_resolver_recurso_para_reserva`), sin un Recurso a mano."""
+    score = _puntaje_nombre_en_texto(recurso.nombre, texto_norm)
+    modelo_norm = _normalizar(recurso.modelo or "").strip()
+    if len(modelo_norm) >= LONGITUD_MINIMA_PALABRA_CLAVE and re.search(
+        rf"\b{re.escape(modelo_norm)}\b", texto_norm
+    ):
+        score += BONO_MODELO_COMPLETO
     return score
 
 
@@ -101,6 +177,79 @@ def _grupos_activos() -> list[tuple[str, Recurso]]:
             vistos[r.nombre] = r
             orden.append(r.nombre)
     return [(nombre, vistos[nombre]) for nombre in orden]
+
+
+def _palabras_clave_descripcion(descripcion: str | None) -> list[str]:
+    """Palabras de una descripción que sirven para buscar: normalizadas, de
+    LONGITUD_MINIMA_PALABRA_DESCRIPCION+ letras y sin palabras vacías. Se
+    parte por todo lo que no sea letra o dígito (no por espacios, como el
+    nombre) porque las descripciones traen puntuación ("Apple (Mac, laptop)")
+    que dejaría "(mac," pegado. Sin repetidos, para no puntuar doble."""
+    if not descripcion:
+        return []
+    palabras: list[str] = []
+    for p in re.findall(r"[a-z0-9]+", _normalizar(descripcion)):
+        if (
+            len(p) >= LONGITUD_MINIMA_PALABRA_DESCRIPCION
+            and p not in PALABRAS_VACIAS_DESCRIPCION
+            and p not in palabras
+        ):
+            palabras.append(p)
+    return palabras
+
+
+def _descripciones_por_nombre() -> dict[str, str]:
+    """Descripción de cada modelo activo (por `nombre`), juntando las de
+    todas sus unidades. Cada placa es una fila con su propia `descripcion` y
+    desde el dashboard es fácil llenarla en una unidad y no en las demás --
+    mirando solo al representante de `_grupos_activos` (el de menor id), esa
+    descripción podría no contar."""
+    textos: dict[str, list[str]] = {}
+    for r in Recurso.query.filter_by(estado=ESTADO_DISPONIBLE).order_by(Recurso.id).all():
+        descripcion = (r.descripcion or "").strip()
+        if not descripcion:
+            continue
+        lista = textos.setdefault(r.nombre, [])
+        if descripcion not in lista:
+            lista.append(descripcion)
+    return {nombre: " ".join(lista) for nombre, lista in textos.items()}
+
+
+def buscar_recursos_por_descripcion(texto: str) -> list[Recurso]:
+    """Representantes de los modelos cuya `descripcion` mejor coincide con el
+    texto -- mismo esquema que `buscar_recursos_en_texto`: gana el mejor
+    puntaje (palabras clave de la descripción presentes en el texto, con
+    tolerancia a plural) y los empates se devuelven todos.
+
+    Es el ÚLTIMO nivel de búsqueda: los llamadores solo lo usan cuando ni el
+    nombre ni la subcategoría encontraron nada. Por qué niveles y no un
+    puntaje mezclado: la descripción es texto libre que se carga desde el
+    dashboard y trae palabras genéricas. Sumada al puntaje del nombre,
+    "¿tienen cámaras?" empataría el "Dron DJI Mavic" ("Dron con cámara 4K")
+    con las cámaras de verdad, y cambiaría `es_match_debil` de respuestas que
+    hoy salen bien. Por niveles, todo lo que se resuelve por nombre queda
+    idéntico y la descripción solo rescata lo que antes no se encontraba
+    ("¿tienen un mac para editar?" -> iMac y MacBook).
+
+    Devuelve [] si empatan más de MAX_MODELOS_POR_DESCRIPCION modelos (las
+    palabras que coincidieron eran demasiado genéricas)."""
+    texto_norm = _normalizar(texto)
+    descripciones = _descripciones_por_nombre()
+    puntuados: list[tuple[int, Recurso]] = []
+    for nombre, representante in _grupos_activos():
+        score = sum(
+            1
+            for p in _palabras_clave_descripcion(descripciones.get(nombre))
+            if re.search(_regex_palabra(p), texto_norm)
+        )
+        if score > 0:
+            puntuados.append((score, representante))
+
+    if not puntuados:
+        return []
+    mejor_score = max(score for score, _ in puntuados)
+    candidatos = [recurso for score, recurso in puntuados if score == mejor_score]
+    return candidatos if len(candidatos) <= MAX_MODELOS_POR_DESCRIPCION else []
 
 
 def _grupo(nombre: str) -> list[Recurso]:
@@ -225,10 +374,10 @@ def listar_nombres_disponibles() -> list[str]:
 
 def listar_terminos_catalogo() -> list[str]:
     """Vocabulario real del catálogo: nombres de modelo, subcategorías,
-    categorías y marcas de los activos disponibles. `routes/webhook.py` se
-    lo pasa a `llm_client.clasificar_intent` como señal de dominio -- así
-    el bot reconoce un pedido que nombra un equipo sin usar ningún verbo de
-    reserva ("¿y el trípode Manfrotto?").
+    categorías y marcas de los activos disponibles, y palabras clave de las
+    descripciones. `routes/webhook.py` se lo pasa a `llm_client.clasificar_intent`
+    como señal de dominio -- así el bot reconoce un pedido que nombra un
+    equipo sin usar ningún verbo de reserva ("¿y el trípode Manfrotto?").
 
     Vive aquí y no en `llm_client` porque este módulo ya importa
     `llm_client`: al revés sería un import circular. Deduplicado
@@ -244,6 +393,19 @@ def listar_terminos_catalogo() -> list[str]:
         ):
             if valor and valor not in terminos:
                 terminos.append(valor)
+
+    # Palabras clave de las descripciones (ya sin palabras vacías, ver
+    # `_palabras_clave_descripcion`): así el guard de dominio de
+    # `llm_client._validar_intent_de_accion` también reconoce un pedido que
+    # solo usa vocabulario de la descripción ("¿tienen un mac para editar?").
+    # Sin esto, aunque el LLM lo clasifique bien, el guard no ve ninguna
+    # palabra "de la CPA" y lo manda al menú de fallback. Solo las de
+    # LONGITUD_MINIMA_PALABRA_CLAVE+ letras: `llm_client` descarta las más
+    # cortas de todos modos. Van normalizadas, que es como las compara.
+    for descripcion in _descripciones_por_nombre().values():
+        for palabra in _palabras_clave_descripcion(descripcion):
+            if len(palabra) >= LONGITUD_MINIMA_PALABRA_CLAVE and palabra not in terminos:
+                terminos.append(palabra)
     return terminos
 
 
@@ -360,36 +522,79 @@ def _estado_grupo(nombre: str, ahora: datetime) -> str:
     )
 
 
+def _mensaje_catalogo(catalogo_url: str) -> str:
+    """Respuesta cuando una consulta de disponibilidad no identifica ningún
+    activo y hay `CATALOGO_URL`. A propósito NO dice "no encontré": casi
+    siempre el usuario preguntó algo general o por un equipo que no sabemos
+    nombrar, y lo útil es mostrarle dónde ver todo y cómo seguir. El enlace va
+    solo en su línea para que WhatsApp lo convierta en link. `webhook.py` le
+    pega después la oferta de reservar (`menu_service.activar_oferta`), así
+    que el mensaje cierra con dos salidas claras: decir un nombre, o
+    responder "sí" para arrancar una reserva."""
+    return (
+        "Te comparto el *catálogo completo* de equipos y espacios de la CPA, "
+        "ahí puedes ver todo lo que tenemos:\n"
+        f"{catalogo_url}\n\n"
+        "Si ya sabes cuál te interesa, escríbeme su nombre (ej. \"cámara Sony\" "
+        "o \"sala de edición\") y te digo si está libre."
+    )
+
+
 def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     """Punto de entrada para el intent 'consultar_disponibilidad'. A
-    diferencia de reservar, aquí el usuario quiere saber qué hay y qué no
-    -- así que ante varias coincidencias (o ninguna) se listan todas con
-    su estado, en vez de preguntar cuál de todas necesita."""
+    diferencia de reservar, aquí el usuario quiere saber qué hay y qué no --
+    así que ante varias coincidencias se listan todas con su estado, en vez
+    de preguntar cuál de todas necesita.
+
+    Busca por niveles, de la señal más confiable a la más ruidosa, y se queda
+    con el primero que encuentre algo: nombre (+ modelo) -> subcategoría ->
+    descripción. Cada nivel solo se mira si el anterior no dio nada, así que
+    la descripción no cambia ninguna respuesta que ya salía por nombre (ver
+    `buscar_recursos_por_descripcion`).
+
+    Si ningún nivel identifica nada, en vez de volcar el estado de todo el
+    inventario (en WhatsApp, un muro de texto) se manda el enlace al catálogo
+    web (`CATALOGO_URL`, ver `_mensaje_catalogo`). Si esa variable está vacía
+    -- todavía no hay página -- se conserva el listado completo de antes: sin
+    enlace, es la única forma de que el usuario sepa qué existe."""
     ahora = datetime.now(timezone.utc)
     candidatos, es_match_debil = buscar_recursos_en_texto(texto_usuario)
 
-    if not candidatos:
-        subcategoria = _detectar_subcategoria_en_texto(texto_usuario)
-        if subcategoria:
-            grupos_subcategoria = _grupos_por_subcategoria(subcategoria)
-            if grupos_subcategoria:
-                lineas = "\n".join(
-                    f"- {_describir_modelo(nombre, rep)}: {_estado_grupo(nombre, ahora)}"
-                    for nombre, rep in grupos_subcategoria
-                )
-                return f"Esto es lo que tenemos en '{subcategoria}':\n{lineas}"
+    if candidatos:
+        lineas = "\n".join(f"- {r.nombre}: {_estado_grupo(r.nombre, ahora)}" for r in candidatos)
+        salvedad = "\n(si buscabas otro activo, dime el nombre completo)" if es_match_debil else ""
+        return f"Esto es lo que tengo:\n{lineas}{salvedad}"
 
-        grupos = _grupos_activos()
-        if not grupos:
-            return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA."
-        lineas = "\n".join(f"- {nombre}: {_estado_grupo(nombre, ahora)}" for nombre, _ in grupos)
-        return f"No identifiqué un activo específico, así que aquí tienes el estado de todo:\n{lineas}"
+    subcategoria = _detectar_subcategoria_en_texto(texto_usuario)
+    if subcategoria:
+        grupos_subcategoria = _grupos_por_subcategoria(subcategoria)
+        if grupos_subcategoria:
+            lineas = "\n".join(
+                f"- {_describir_modelo(nombre, rep)}: {_estado_grupo(nombre, ahora)}"
+                for nombre, rep in grupos_subcategoria
+            )
+            return f"Esto es lo que tenemos en '{subcategoria}':\n{lineas}"
 
-    lineas = "\n".join(f"- {r.nombre}: {_estado_grupo(r.nombre, ahora)}" for r in candidatos)
-    salvedad = (
-        "\n(si buscabas otro activo, dime el nombre completo)" if es_match_debil else ""
-    )
-    return f"Esto es lo que tengo:\n{lineas}{salvedad}"
+    por_descripcion = buscar_recursos_por_descripcion(texto_usuario)
+    if por_descripcion:
+        # Coincidir por descripción es más indirecto que por nombre, así que
+        # siempre va con salvedad, igual que un match débil por nombre.
+        lineas = "\n".join(f"- {r.nombre}: {_estado_grupo(r.nombre, ahora)}" for r in por_descripcion)
+        return (
+            f"Por lo que me cuentas, esto te puede servir:\n{lineas}\n"
+            "(si buscabas otra cosa, dime el nombre del equipo o espacio)"
+        )
+
+    grupos = _grupos_activos()
+    if not grupos:
+        return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA."
+
+    catalogo_url = (current_app.config.get("CATALOGO_URL") or "").strip()
+    if catalogo_url:
+        return _mensaje_catalogo(catalogo_url)
+
+    lineas = "\n".join(f"- {nombre}: {_estado_grupo(nombre, ahora)}" for nombre, _ in grupos)
+    return f"No identifiqué un activo específico, así que aquí tienes el estado de todo:\n{lineas}"
 
 
 def _reserva_solapada(recurso_id: int, inicio: datetime, fin: datetime) -> Reserva | None:
@@ -530,7 +735,9 @@ def _resolver_recurso_para_reserva(
 ) -> tuple[Recurso | None, list[Recurso], bool]:
     """Devuelve (recurso_resuelto, candidatos_por_palabra_clave, es_match_debil).
     `recurso_resuelto` es None si hace falta desambiguar con el usuario
-    (ver los otros dos valores para construir ese mensaje)."""
+    (ver los otros dos valores para construir ese mensaje). `candidatos`
+    puede venir del nivel descripción (ver más abajo); en ese caso
+    `recurso_resuelto` es siempre None."""
     candidatos, es_match_debil = buscar_recursos_en_texto(texto_usuario)
 
     nombre_llm = (extraido.get("recurso") or "").strip().lower()
@@ -560,6 +767,19 @@ def _resolver_recurso_para_reserva(
 
     if recurso_llm:
         return recurso_llm, candidatos, False
+
+    if not candidatos:
+        # Mismo tercer nivel que `evaluar_consulta_disponibilidad`: si el nombre
+        # no dio nada, se intenta por la descripción ("quiero reservar un mac"
+        # -> iMac y MacBook). Nunca se devuelve como recurso resuelto, aunque
+        # sea uno solo: una palabra de la descripción es un indicio, no el
+        # activo que el usuario nombró. Solo sirve para que `_iniciar_reserva`
+        # pre-llene subcategoría/marca y el wizard muestre el menú de modelos
+        # (si ahí queda un único modelo, `_avanzar_wizard` lo toma, pero
+        # avisándolo: "Solo tenemos un modelo de ..., sigo con ese").
+        por_descripcion = buscar_recursos_por_descripcion(texto_usuario)
+        if por_descripcion:
+            return None, por_descripcion, True
 
     if len(candidatos) == 1:
         return candidatos[0], candidatos, es_match_debil
@@ -973,7 +1193,7 @@ def _mensaje_confirmar_accesorios(nombre_padre: str, incluidos: list[str]) -> st
         f"*{nombre_padre}*\n"
         "Incluye por defecto:\n"
         f"{lineas}\n"
-        f"{numero_ninguno}. Ninguno (dejar todos incluidos)\n"
+        f"{numero_ninguno}. (dejar todos incluidos)\n"
         f"{_DIVISOR_FACTURA}\n"
         "¿Quieres quitar alguno? Responde con los números separados por "
         f"coma (ej. \"1,2\"), o {numero_ninguno} para no quitar ninguno."
@@ -1568,7 +1788,13 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         # comparten una) y arrancamos directo en el primero que sí hace
         # falta preguntar.
         subcategorias_candidatos = {c.subcategoria for c in candidatos if c.subcategoria}
-        if len(subcategorias_candidatos) == 1:
+        # Solo si TODOS los candidatos tienen subcategoría: un espacio no
+        # tiene, y antes simplemente se ignoraba al armar el set -- "quiero
+        # reservar audio" (empata "Interfaz de audio Focusrite" con "Cabina de
+        # audio 2") pre-llenaba "interfaz" y descartaba la cabina en silencio.
+        # Con la búsqueda por descripción esa mezcla es más fácil ("algo para
+        # podcast"), así que en ese caso se arranca en el menú general.
+        if len(subcategorias_candidatos) == 1 and all(c.subcategoria for c in candidatos):
             wizard["subcategoria"] = next(iter(subcategorias_candidatos))
             marcas_candidatos = {c.marca for c in candidatos if c.marca}
             if len(marcas_candidatos) == 1:

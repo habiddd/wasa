@@ -21,6 +21,14 @@ class Config:
     # lo requieren, así que puede quedar vacío.
     LLM_API_KEY = os.environ.get("LLM_API_KEY", "").strip() or None
 
+    # Página web con el catálogo completo de equipos y espacios. Cuando una
+    # consulta de disponibilidad no identifica ningún activo, el bot manda
+    # este enlace en vez de listar todo el inventario (ver
+    # recursos_service.evaluar_consulta_disponibilidad). Vacía = todavía no
+    # hay página: se conserva el listado completo de antes. .strip() por lo
+    # mismo que LLM_BASE_URL: un espacio de más en .env rompe el enlace.
+    CATALOGO_URL = os.environ.get("CATALOGO_URL", "").strip()
+
     # Guardrails
     MAX_MESSAGES_PER_MINUTE = int(os.environ.get("MAX_MESSAGES_PER_MINUTE", 8))
     # "saludo" está permitido a propósito: es conversación social sin pedido
