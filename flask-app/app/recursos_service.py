@@ -787,13 +787,13 @@ def _resolver_recurso_para_reserva(
     return None, candidatos, es_match_debil
 
 
-def _nota_seguro(recurso: Recurso) -> str:
+def _nota_requiere_confirmacion(recurso: Recurso) -> str:
     """Línea aparte (no inline) para el mensaje de confirmación -- lleva el
     nombre del activo porque puede haber más de uno en el carrito que
-    requiera seguro, y sin el nombre no se sabría a cuál se refiere."""
+    requiera confirmación, y sin el nombre no se sabría a cuál se refiere."""
     return (
-        f"⚠ {recurso.nombre} requiere seguro -- el equipo de la CPA te contactará para completar ese trámite."
-        if recurso.requiere_seguro
+        f"⚠ {recurso.nombre} requiere confirmación -- el equipo de la CPA te contactará para confirmar su préstamo."
+        if recurso.requiere_confirmacion
         else ""
     )
 
@@ -1633,7 +1633,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
     # dict.fromkeys: una sola nota por modelo aunque se reserven varias
     # unidades fijas del mismo (ej. las 3 iMac de una sala).
-    notas_seguro = list(dict.fromkeys(_nota_seguro(unidad) for unidad in unidades if unidad.requiere_seguro))
+    notas_confirmacion = list(dict.fromkeys(_nota_requiere_confirmacion(unidad) for unidad in unidades if unidad.requiere_confirmacion))
     mensaje = (
         "*RESERVA CONFIRMADA*\n"
         f"{_DIVISOR_FACTURA}\n"
@@ -1644,8 +1644,8 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
     )
-    if notas_seguro:
-        mensaje += "\n" + "\n".join(notas_seguro)
+    if notas_confirmacion:
+        mensaje += "\n" + "\n".join(notas_confirmacion)
     return mensaje, sesion_limpia
 
 

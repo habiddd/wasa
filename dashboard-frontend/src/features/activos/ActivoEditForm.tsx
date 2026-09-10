@@ -64,7 +64,7 @@ export function ActivoEditForm({
   // por defecto" también aplica al elegir el padre desde este form).
   const [lugarTocado, setLugarTocado] = useState(false)
   const [propagarEspacio, setPropagarEspacio] = useState(true)
-  const [requiereSeguro, setRequiereSeguro] = useState(recurso.requiere_seguro)
+  const [requiereConfirmacion, setRequiereConfirmacion] = useState(recurso.requiere_confirmacion)
   const [estado, setEstado] = useState<EstadoRecurso>(recurso.estado)
   const [error, setError] = useState<string | null>(null)
   const [guardando, setGuardando] = useState(false)
@@ -127,7 +127,7 @@ export function ActivoEditForm({
         descripcion: descripcion || null,
         padre_id: esEspacio || !padreId ? null : Number(padreId),
         espacio_id: espacioIdNumerico,
-        requiere_seguro: requiereSeguro,
+        requiere_confirmacion: requiereConfirmacion,
         estado,
         ...(mostrarPropagacion ? { propagar_espacio: propagarEspacio } : {}),
       })
@@ -261,11 +261,11 @@ export function ActivoEditForm({
       )}
       <div className="flex items-center gap-2 self-end pb-2">
         <Checkbox
-          id={`seguro-${recurso.id}`}
-          checked={requiereSeguro}
-          onCheckedChange={(v) => setRequiereSeguro(v === true)}
+          id={`confirmacion-${recurso.id}`}
+          checked={requiereConfirmacion}
+          onCheckedChange={(v) => setRequiereConfirmacion(v === true)}
         />
-        <Label htmlFor={`seguro-${recurso.id}`}>Requiere seguro</Label>
+        <Label htmlFor={`confirmacion-${recurso.id}`}>Requiere confirmación</Label>
       </div>
       <div className="flex flex-col gap-1">
         <Label>Estado</Label>

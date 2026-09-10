@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS recursos (
     marca           VARCHAR(100),
     modelo          VARCHAR(100),
     identificador   VARCHAR(100),                     -- número de serie o IMEI (alfanumérico), si lo tiene
-    requiere_seguro BOOLEAN NOT NULL DEFAULT FALSE,  -- activa secuencia de seguro de equipos
+    requiere_confirmacion BOOLEAN NOT NULL DEFAULT FALSE,  -- el equipo de la CPA debe confirmar el préstamo de este activo (ver recursos_service._nota_requiere_confirmacion)
     -- Estado de inventario del recurso -- no confundir con el estado de
     -- agenda que calcula recursos_service._estado_recurso() a partir de
     -- `reservas` ("en uso ahora mismo", "libre hasta tal hora"): este es
@@ -162,7 +162,24 @@ BEGIN
     END IF;
 END $$;
 
-CREATE TABLE IF NOT EXISTS secuencias_seguro (
+-- Antes se llamaba `secuencias_seguro` (no es un seguro sino una
+-- confirmación de la CPA). El renombre va aquí, antes del CREATE TABLE IF
+-- NOT EXISTS de abajo y no con las demás migraciones del final: si corriera
+-- después, en una base viva el CREATE ya habría creado una tabla
+-- `secuencias_confirmacion` nueva y vacía, y el RENAME de la vieja chocaría
+-- con ese nombre. Nadie usa esta tabla desde el código todavía, pero se
+-- conserva por si ya tiene filas cargadas a mano.
+DO $$
+BEGIN
+    IF to_regclass('secuencias_seguro') IS NOT NULL THEN
+        ALTER TABLE secuencias_seguro RENAME TO secuencias_confirmacion;
+        ALTER SEQUENCE secuencias_seguro_id_seq RENAME TO secuencias_confirmacion_id_seq;
+        ALTER TABLE secuencias_confirmacion RENAME CONSTRAINT secuencias_seguro_pkey TO secuencias_confirmacion_pkey;
+        ALTER TABLE secuencias_confirmacion RENAME CONSTRAINT secuencias_seguro_reserva_id_fkey TO secuencias_confirmacion_reserva_id_fkey;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS secuencias_confirmacion (
     id              SERIAL PRIMARY KEY,
     reserva_id      INTEGER NOT NULL REFERENCES reservas(id),
     paso            VARCHAR(50) NOT NULL,  -- ej: 'checklist_enviado', 'firmado', 'equipo_entregado'
@@ -227,6 +244,21 @@ ALTER TABLE recursos ADD COLUMN IF NOT EXISTS espacio_id INTEGER REFERENCES recu
 -- recursos_service._accesorios_por_defecto) -- ya no es configurable por
 -- activo.
 ALTER TABLE recursos DROP COLUMN IF EXISTS incluido_por_defecto;
+
+-- Renombre: la columna se llamaba "seguro" pero nunca fue un seguro, es una
+-- confirmación que da el equipo de la CPA antes de prestar el activo. Solo
+-- corre si la base todavía tiene el nombre viejo (una base recién creada ya
+-- nace con `requiere_confirmacion` por el CREATE TABLE de arriba). El RENAME
+-- conserva los valores existentes.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'recursos' AND column_name = 'requiere_seguro'
+    ) THEN
+        ALTER TABLE recursos RENAME COLUMN requiere_seguro TO requiere_confirmacion;
+    END IF;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recursos_placa_unica ON recursos (placa);
 CREATE INDEX IF NOT EXISTS idx_recursos_padre_id ON recursos (padre_id);

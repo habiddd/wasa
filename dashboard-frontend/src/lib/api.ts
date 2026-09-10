@@ -205,7 +205,7 @@ export type Recurso = {
   marca: string | null
   modelo: string | null
   identificador: string | null
-  requiere_seguro: boolean
+  requiere_confirmacion: boolean
   estado: EstadoRecurso
   creado_en: string | null
 }
@@ -223,7 +223,7 @@ export type CambiosActivo = Partial<
     | "marca"
     | "modelo"
     | "identificador"
-    | "requiere_seguro"
+    | "requiere_confirmacion"
     | "estado"
     | "padre_id"
     | "espacio_id"

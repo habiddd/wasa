@@ -49,7 +49,7 @@ export function ActivoNuevoForm({
   // padre por defecto"). Una vez que el usuario elige un lugar explícito,
   // ya no se lo pisa al cambiar de padre.
   const [lugarTocado, setLugarTocado] = useState(false)
-  const [requiereSeguro, setRequiereSeguro] = useState(false)
+  const [requiereConfirmacion, setRequiereConfirmacion] = useState(false)
   const [estado, setEstado] = useState<EstadoRecurso>("disponible")
   const [error, setError] = useState<string | null>(null)
   const [guardando, setGuardando] = useState(false)
@@ -103,7 +103,7 @@ export function ActivoNuevoForm({
         cambios.modelo = modelo || null
         cambios.identificador = identificador || null
         cambios.padre_id = padreId ? Number(padreId) : null
-        cambios.requiere_seguro = requiereSeguro
+        cambios.requiere_confirmacion = requiereConfirmacion
       }
       await onCreate(cambios)
     } catch (err) {
@@ -233,11 +233,11 @@ export function ActivoNuevoForm({
           {tipo === "equipo" && (
             <div className="flex items-center gap-2 self-end pb-2">
               <Checkbox
-                id="nuevo-requiere-seguro"
-                checked={requiereSeguro}
-                onCheckedChange={(v) => setRequiereSeguro(v === true)}
+                id="nuevo-requiere-confirmacion"
+                checked={requiereConfirmacion}
+                onCheckedChange={(v) => setRequiereConfirmacion(v === true)}
               />
-              <Label htmlFor="nuevo-requiere-seguro">Requiere seguro</Label>
+              <Label htmlFor="nuevo-requiere-confirmacion">Requiere confirmación</Label>
             </div>
           )}
 

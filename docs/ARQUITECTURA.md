@@ -458,10 +458,10 @@ resumen final comparten una plantilla fija en código (no generada por el
 LLM): título en `*negrita*`, un divisor (`――――――――――――――――――`), cada
 activo del carrito en `*negrita*` con sus hijos incluidos por defecto
 sangrados debajo con viñeta (`_formatear_item_factura`), otro divisor, y
-los datos del paso. El aviso de seguro (`_nota_seguro`) es una línea
-aparte con el nombre del activo, no un sufijo pegado a la línea del
-activo -- si hay más de uno en el carrito que requiere seguro, hace falta
-saber cuál es cuál. Los menús numerados *seleccionables* (`OPCIONES_CONFIRMAR`,
+los datos del paso. El aviso de confirmación (`_nota_requiere_confirmacion`)
+es una línea aparte con el nombre del activo, no un sufijo pegado a la línea
+del activo -- si hay más de uno en el carrito que requiere confirmación,
+hace falta saber cuál es cuál. Los menús numerados *seleccionables* (`OPCIONES_CONFIRMAR`,
 el menú de quitar un ítem) no llevan este formato: agregarle `*negrita*`
 ahí rompería el reconocimiento de "escribe el nombre de la opción en vez
 del número" (`_interpretar_opcion` compara substrings literales).

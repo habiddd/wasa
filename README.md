@@ -172,7 +172,7 @@ Si en el futuro quieres migrar a la API oficial de Meta:
   básico contra inyección de prompt, whitelist de intents, auditoría de
   cada interacción en la tabla `auditoria_bot`.
 - Esquema de datos base: `usuarios`, `recursos` (equipos/espacios),
-  `reservas`, `secuencias_seguro` (para tu flujo de seguro de equipos),
+  `reservas`, `secuencias_confirmacion` (para tu flujo de confirmación de equipos),
   `auditoria_bot` — ver `postgres/init/02-schema.sql`.
 - Dos endpoints de analítica de ejemplo (`/api/analytics/...`) como base
   de tu back-office.
@@ -186,7 +186,7 @@ Si en el futuro quieres migrar a la API oficial de Meta:
 
 - Lógica real de reservas por intent (hoy hay un `TODO` en
   `app/routes/webhook.py`): validar disponibilidad, crear/cancelar
-  reserva, activar secuencia de seguro.
+  reserva, activar secuencia de confirmación.
 - Migración de tu data actual de la CPA al esquema de `recursos`/`usuarios`.
 - Autenticación para los endpoints de analítica (hoy están abiertos;
   el dashboard en `/dashboard` sí tiene autenticación básica, pero

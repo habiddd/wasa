@@ -49,7 +49,7 @@ class Recurso(db.Model):
     marca = db.Column(db.String(100))
     modelo = db.Column(db.String(100))
     identificador = db.Column(db.String(100))             # número de serie o IMEI, si lo tiene
-    requiere_seguro = db.Column(db.Boolean, nullable=False, default=False)
+    requiere_confirmacion = db.Column(db.Boolean, nullable=False, default=False)
     # 'disponible' | 'en_mantenimiento' | 'no_disponible' -- estado de
     # inventario que fija quien administra desde el dashboard, distinto del
     # estado de agenda que calcula recursos_service._estado_recurso() a
