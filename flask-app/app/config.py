@@ -23,9 +23,17 @@ class Config:
 
     # Guardrails
     MAX_MESSAGES_PER_MINUTE = int(os.environ.get("MAX_MESSAGES_PER_MINUTE", 8))
+    # "saludo" está permitido a propósito: es conversación social sin pedido
+    # concreto, y se responde con texto que no consulta ni afirma nada de la
+    # base de datos (ver llm_client.responder_charla). "otro" NO debe
+    # agregarse aquí: es el único que sigue cayendo al menú de fallback, que
+    # es el guardrail (ver routes/webhook.py).
     ALLOWED_INTENTS = set(
-        (os.environ.get("ALLOWED_INTENTS", "reservar,consultar_disponibilidad,cancelar,ayuda"))
-        .split(",")
+        (
+            os.environ.get(
+                "ALLOWED_INTENTS", "reservar,consultar_disponibilidad,cancelar,ayuda,saludo"
+            )
+        ).split(",")
     )
 
     # Redis (por ahora solo usado para el chequeo de salud del dashboard;

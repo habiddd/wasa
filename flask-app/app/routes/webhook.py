@@ -183,6 +183,12 @@ def recibir_webhook():
             respuesta, sesion = recursos_service.gestionar_reserva(payload, usuario, sesion)
         elif accion == "consultar":
             respuesta = recursos_service.evaluar_consulta_disponibilidad(payload)
+            # Misma oferta de reservar que tras una consulta de disponibilidad
+            # normal (ver bloque de intent más abajo) -- esta es la otra de
+            # las dos rutas que responden disponibilidad.
+            respuesta, sesion = menu_service.activar_oferta(sesion, respuesta)
+        elif accion == "cancelar":
+            respuesta, sesion = recursos_service.gestionar_cancelacion(payload, usuario, sesion)
         else:  # "responder": menú, reintento, salida o rendición
             respuesta = payload
 
@@ -197,15 +203,60 @@ def recibir_webhook():
         )
         return jsonify({"status": "ok" if enviado else "error_envio"}), 200
 
+    # --- Oferta de reserva en curso: el mensaje anterior fue una consulta
+    # de disponibilidad y se le ofreció al usuario iniciar una reserva (ver
+    # los dos puntos más arriba donde se llama a `menu_service.activar_oferta`,
+    # y el bloque de intent `consultar_disponibilidad` más abajo). Un solo
+    # turno: si acepta o rechaza, se resuelve acá; si escribió otra cosa
+    # (cambió de tema), NO se retorna -- se limpia la oferta y el mensaje
+    # sigue su curso normal hacia clasificación de intent, para no dejarlo
+    # atrapado respondiendo "¿sí o no?" a algo que ya no preguntó. ---
+    if sesion.get(menu_service.CLAVE_OFERTA):
+        accion, payload, sesion, auditoria = menu_service.procesar_respuesta_oferta(texto, sesion)
+
+        if accion == "seguir_curso":
+            sesiones.guardar_sesion(numero, sesion)
+            # sin return: cae al bloque de clasificación de intent de abajo
+        else:
+            if accion == "reservar":
+                # El usuario solo dijo "sí" (o equivalente): no nombra ningún
+                # activo. `_iniciar_reserva` no resuelve ningún candidato con
+                # ese texto, así que el wizard arranca en su primer paso (el
+                # menú de subcategorías de equipo + espacios) en vez de
+                # precargar el activo que se acababa de consultar -- es lo
+                # que se pidió explícitamente: "desde el inicio".
+                respuesta, sesion = recursos_service.gestionar_reserva(payload, usuario, sesion)
+            else:  # "responder": rechazo cordial
+                respuesta = payload
+
+            sesiones.guardar_sesion(numero, sesion)
+            enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
+            guardrails.registrar_interaccion(
+                numero, texto, auditoria["intent"], respuesta,
+                permitido=auditoria["permitido"],
+                motivo_bloqueo=auditoria["motivo_bloqueo"],
+                mensaje_id=mensaje_id,
+                estado_envio="pendiente" if enviado else "error_http",
+            )
+            return jsonify({"status": "ok" if enviado else "error_envio"}), 200
+
     # --- Clasificación de intent + whitelist ---
-    intent = llm_client.clasificar_intent(texto)
+    # Los nombres reales del catálogo van como señal de dominio: le dan
+    # holgura al clasificador para reconocer un pedido que nombra un equipo
+    # sin usar ningún verbo de reserva ("¿y el trípode Manfrotto?"). Ver
+    # llm_client._tiene_senal_de_dominio. Solo es una consulta de lectura
+    # sobre recursos activos, y solo se ejecuta en la rama que de verdad
+    # clasifica (los wizards y el menú ya salieron por arriba).
+    intent = llm_client.clasificar_intent(
+        texto, terminos_catalogo=recursos_service.listar_terminos_catalogo()
+    )
     if not guardrails.intent_permitido(intent):
         # Antes esto bloqueaba con un mensaje estático fijo. Ahora se le
-        # ofrece al usuario un menú (Reservas / Preguntas) en vez de
-        # cortar la conversación -- ver menu_service.py. NO agregar "otro"
-        # a ALLOWED_INTENTS como atajo: eso enrutaría cualquier mensaje
-        # fuera de alcance a llm_client.generar_respuesta (línea de abajo),
-        # eliminando este guardrail.
+        # ofrece al usuario un menú (Reservar / Consultar / Cancelar) en
+        # vez de cortar la conversación -- ver menu_service.py. NO agregar
+        # "otro" a ALLOWED_INTENTS como atajo: eso enrutaría cualquier
+        # mensaje fuera de alcance a llm_client.generar_respuesta (línea de
+        # abajo), eliminando este guardrail.
         respuesta, sesion = menu_service.activar_menu(sesion)
         sesiones.guardar_sesion(numero, sesion)
         enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
@@ -219,15 +270,28 @@ def recibir_webhook():
     # Para reservar/consultar disponibilidad/cancelar, la respuesta sale de
     # datos reales de recursos/reservas (ver recursos_service) -- nunca del
     # LLM, que podría inventar disponibilidad o dejar cancelar una reserva
-    # ajena. Solo 'ayuda' sigue delegando en el LLM.
+    # ajena. Solo 'ayuda' y 'saludo' delegan en el LLM, y ninguno de los dos
+    # toca la base de datos ni afirma nada sobre disponibilidad.
     if intent == "consultar_disponibilidad":
         respuesta = recursos_service.evaluar_consulta_disponibilidad(texto)
+        # Tras responder disponibilidad, se ofrece iniciar una reserva para
+        # no cortar la conversación (ver menu_service.activar_oferta). La
+        # oferta se pega acá, no dentro de `evaluar_consulta_disponibilidad`,
+        # para no acoplar ese servicio puro al estado de sesión.
+        respuesta, sesion = menu_service.activar_oferta(sesion, respuesta)
+        sesiones.guardar_sesion(numero, sesion)
     elif intent == "reservar":
         respuesta, sesion = recursos_service.gestionar_reserva(texto, usuario, sesion)
         sesiones.guardar_sesion(numero, sesion)
     elif intent == "cancelar":
         respuesta, sesion = recursos_service.gestionar_cancelacion(texto, usuario, sesion)
         sesiones.guardar_sesion(numero, sesion)
+    elif intent == "saludo":
+        # Conversación social sin pedido concreto detrás. Antes esto caía en
+        # "otro" y se le respondía con el menú de fallback, que a un "hola"
+        # se siente como un portazo; ahora se contesta como una persona y el
+        # menú queda reservado para lo que de verdad no se entiende.
+        respuesta = llm_client.responder_charla(texto)
     else:
         respuesta = llm_client.generar_respuesta(texto)
 

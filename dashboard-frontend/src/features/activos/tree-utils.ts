@@ -17,6 +17,23 @@ export function contenidosEn(espacioId: number, lista: Recurso[]) {
   return lista.filter((r) => r.espacio_id === espacioId)
 }
 
+// Raíces de un lugar: los activos que están en ese espacio y NO son hijos de
+// otro activo que también esté en ese mismo espacio. Un activo hereda el
+// espacio_id de su padre cuando se lo asigna a un lugar, así que
+// `contenidosEn` trae padres e hijos mezclados en un solo array plano -- sin
+// este filtro, cada hijo se dibujaría también como si fuera raíz (además de
+// aparecer anidado dentro de su padre, que ya lo busca en `lista` vía
+// `hijosDe`). Si el padre del activo está en OTRO lugar (o no tiene padre),
+// el activo tiene que seguir contando como raíz de este lugar -- si no,
+// desaparecería de la vista.
+export function raicesEn(espacioId: number, lista: Recurso[]) {
+  return contenidosEn(espacioId, lista).filter((r) => {
+    if (r.padre_id === null) return true
+    const padre = lista.find((p) => p.id === r.padre_id)
+    return !padre || padre.espacio_id !== espacioId
+  })
+}
+
 export function descendientesEspacioDe(id: number, lista: Recurso[]): Recurso[] {
   const directos = contenidosEn(id, lista)
   let todos = [...directos]

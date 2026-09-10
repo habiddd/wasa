@@ -2,9 +2,15 @@
 Menú de fallback: qué pasa cuando `llm_client.clasificar_intent` no logra
 ubicar el mensaje en ninguno de los intents permitidos (en la práctica,
 "otro"). Antes se cortaba la conversación con un mensaje estático de
-rechazo (ver `webhook.py`); ahora se ofrece un menú de dos opciones
-("Reservas" / "Preguntas") que enruta hacia los flujos que ya existen
-(`recursos_service.gestionar_reserva` / `evaluar_consulta_disponibilidad`).
+rechazo (ver `webhook.py`); ahora se ofrece un menú de tres opciones
+("Reservar" / "Consultar" / "Cancelar") que enruta hacia los flujos que ya
+existen (`recursos_service.gestionar_reserva`,
+`evaluar_consulta_disponibilidad` y `gestionar_cancelacion`).
+
+Ojo con qué llega hasta aquí: desde que `llm_client` reconoce el intent
+"saludo", los saludos y las cortesías ya NO caen en este menú -- se
+responden como conversación (ver `llm_client.responder_charla`). A este
+módulo solo llega lo que de verdad no se entendió.
 
 Módulo puro a propósito: sin DB, sin LLM, sin importar `recursos_service`.
 `webhook.py` es quien decide qué servicio llamar según la `accion` que
@@ -21,6 +27,13 @@ SIEMPRE debe quedar en `None` antes de que la sesión se le pase a
 `{**sesion, "reserva_wizard": wizard}` en cada paso, `menu_fallback`
 quedaría propagándose para siempre y el bloque de `webhook.py` que lee
 `sesion.get(CLAVE_SESION)` interceptaría cada mensaje futuro del wizard.
+
+Además del menú de fallback, este módulo también implementa la "oferta de
+reserva": el empujoncito de un solo turno que se pega al final de una
+respuesta de disponibilidad para invitar al usuario a reservar sin tener
+que escribir un mensaje nuevo desde cero. Misma forma de máquina de
+estados, misma invariante de limpieza de sesión (ver `CLAVE_OFERTA` y
+`procesar_respuesta_oferta` más abajo).
 """
 
 import re
@@ -31,18 +44,23 @@ CLAVE_SESION = "menu_fallback"
 INTENT_AUDITORIA = "menu_fallback"
 MAX_REINTENTOS = 2
 
-# "no" queda fuera a propósito: en un menú "¿1 o 2?" no es una salida, es
+# "no" queda fuera a propósito: en un menú numerado no es una salida, es
 # una respuesta no reconocida (debe generar reintento, no cortar el flujo).
-PALABRAS_SALIR = {"salir", "cerrar", "cancelar", "cancela"}
+# "cancelar" tampoco está aquí desde que el menú tiene opción 3: dentro del
+# menú, "cancelar" ya no significa "salgamos de aquí" sino "quiero cancelar
+# una reserva", que es justo lo que hace esa opción.
+PALABRAS_SALIR = {"salir", "cerrar", "nada", "ninguna", "olvidalo"}
 
 PALABRAS_RESERVAR = {"reserv", "aparta", "prestamo", "alquil", "necesito"}
 PALABRAS_PREGUNTAS = {"pregunt", "consult", "disponib", "duda", "informacion", "libre", "tienen"}
+PALABRAS_CANCELAR = {"cancel", "anul"}
 
 TEXTO_MENU = (
-    "No estoy seguro de haber entendido. ¿Con qué te ayudo?\n\n"
-    "1. Reservas — apartar un equipo o espacio\n"
-    "2. Preguntas — saber si un equipo o espacio está disponible\n\n"
-    "Responde con el número (1 o 2)."
+    "Perdona, no te entendí bien 😅 ¿Con cuál de estas te ayudo?\n\n"
+    "1. Reservar — apartar un equipo o un espacio\n"
+    "2. Consultar — saber si un equipo o espacio está disponible\n"
+    "3. Cancelar — anular una reserva que ya tienes\n\n"
+    "Responde con el número, o escríbelo con tus palabras."
 )
 
 PREGUNTA_CONSULTA = '¿Sobre qué equipo o espacio quieres saber? (ej. "cámara Sony", "sala de edición")'
@@ -50,8 +68,8 @@ PREGUNTA_CONSULTA = '¿Sobre qué equipo o espacio quieres saber? (ej. "cámara 
 MENSAJE_REINTENTO = "No reconocí esa opción.\n\n" + TEXTO_MENU
 
 MENSAJE_SALIDA = (
-    'Listo, salgo del menú. Escríbeme cuando quieras reservar algo o consultar disponibilidad.\n'
-    'Si querías cancelar una reserva que ya tienes, escribe "cancelar mi reserva".'
+    "Listo, no te molesto más 🙂 Escríbeme cuando quieras reservar algo, "
+    "preguntar por disponibilidad o cancelar una reserva."
 )
 
 # Mismo texto que antes se usaba para bloquear directo (ver webhook.py) --
@@ -71,9 +89,11 @@ def activar_menu(sesion: dict) -> tuple[str, dict]:
 
 
 def _interpretar_opcion_menu(texto_usuario: str) -> str | None:
-    """Devuelve 'reservar' | 'preguntas' | 'salir' | None (no reconocida).
-    Orden deliberado: salir se chequea antes que las palabras clave de
-    reservar por el mismo motivo que `llm_client._clasificar_intent_heuristico`
+    """Devuelve 'reservar' | 'preguntas' | 'cancelar' | 'salir' | None (no
+    reconocida).
+
+    Orden deliberado: cancelar se chequea antes que las palabras clave de
+    reservar por el mismo motivo que `llm_client._clasificar_sin_llm`
     revisa "cancel" antes que "reserv" -- "cancelar mi reserva" contiene la
     subcadena "reserv"."""
     texto_norm = normalizar(texto_usuario)
@@ -89,7 +109,12 @@ def _interpretar_opcion_menu(texto_usuario: str) -> str | None:
             return "reservar"
         if numero == "2":
             return "preguntas"
+        if numero == "3":
+            return "cancelar"
         return None  # cualquier otro número -> no reconocida, reintento
+
+    if any(p in texto_norm for p in PALABRAS_CANCELAR):
+        return "cancelar"
 
     es_reservar = any(p in texto_norm for p in PALABRAS_RESERVAR)
     es_preguntas = any(p in texto_norm for p in PALABRAS_PREGUNTAS)
@@ -109,6 +134,8 @@ def procesar_respuesta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict
                                  `recursos_service.gestionar_reserva`.
       - accion == "consultar":  payload es el texto a pasarle a
                                  `recursos_service.evaluar_consulta_disponibilidad`.
+      - accion == "cancelar":   payload es el texto a pasarle a
+                                 `recursos_service.gestionar_cancelacion`.
       - auditoria: {"intent": str, "permitido": bool, "motivo_bloqueo": str | None}
     """
     estado = sesion.get(CLAVE_SESION)
@@ -130,6 +157,17 @@ def procesar_respuesta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict
                 sesion_limpia,
                 {"intent": INTENT_AUDITORIA, "permitido": True, "motivo_bloqueo": None},
             )
+        # Alguien que responde "cancelar" a "¿sobre qué equipo quieres
+        # saber?" no está nombrando un equipo: cambió de idea y quiere
+        # cancelar una reserva. Antes ese texto se le pasaba tal cual a la
+        # consulta de disponibilidad, que no encontraba nada.
+        if opcion == "cancelar":
+            return (
+                "cancelar",
+                texto_usuario,
+                sesion_limpia,
+                {"intent": "cancelar", "permitido": True, "motivo_bloqueo": None},
+            )
         return (
             "consultar",
             texto_usuario,
@@ -146,6 +184,14 @@ def procesar_respuesta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict
             texto_usuario,
             sesion_limpia,
             {"intent": "reservar", "permitido": True, "motivo_bloqueo": None},
+        )
+
+    if opcion == "cancelar":
+        return (
+            "cancelar",
+            texto_usuario,
+            sesion_limpia,
+            {"intent": "cancelar", "permitido": True, "motivo_bloqueo": None},
         )
 
     if opcion == "preguntas":
@@ -183,4 +229,93 @@ def procesar_respuesta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict
         MENSAJE_FUERA_DE_ALCANCE,
         sesion_limpia,
         {"intent": INTENT_AUDITORIA, "permitido": False, "motivo_bloqueo": "intent_no_permitido"},
+    )
+
+
+# --- Oferta de reserva tras una consulta de disponibilidad -----------------
+#
+# Se activa desde `webhook.py` justo después de responder una consulta de
+# disponibilidad (tanto la del intent normal como la que sale del menú de
+# fallback, opción "Consultar"). Un solo turno: o el usuario acepta, o
+# rechaza, o cambia de tema -- nunca reintenta ni queda en bucle.
+
+CLAVE_OFERTA = "oferta_reserva"
+INTENT_AUDITORIA_OFERTA = "oferta_reserva"
+
+TEXTO_OFERTA = "\n\n¿Quieres reservar algo? Responde *sí* y te ayudo 🙂"
+
+MENSAJE_OFERTA_RECHAZADA = "Listo, cualquier cosa me avisas 🙂"
+
+PALABRAS_ACEPTAR_OFERTA = {"si", "1", "dale", "listo", "claro", "ok", "bueno", "quiero"}
+PALABRAS_RECHAZAR_OFERTA = {"no", "nada", "gracias", "despues", "luego"}
+
+
+def activar_oferta(sesion: dict, respuesta: str) -> tuple[str, dict]:
+    """Se llama justo después de responder una consulta de disponibilidad.
+    Pega la invitación a reservar al final de `respuesta` y marca la sesión
+    para interpretar el próximo mensaje contra esta oferta."""
+    nueva_sesion = {**sesion, CLAVE_OFERTA: {"activa": True}}
+    return respuesta + TEXTO_OFERTA, nueva_sesion
+
+
+def _interpretar_respuesta_oferta(texto_usuario: str) -> str | None:
+    """Devuelve 'aceptar' | 'rechazar' | None (ninguna de las dos: el
+    usuario cambió de tema)."""
+    texto_norm = normalizar(texto_usuario)
+    tokens = set(texto_norm.split())
+
+    # "no" antes que "si" no hace falta acá (no hay subcadena en común),
+    # pero sí conviene chequear rechazo primero por si alguien escribe algo
+    # como "no, gracias" que también podría matchear una palabra suelta de
+    # aceptar en el futuro.
+    if tokens & PALABRAS_RECHAZAR_OFERTA:
+        return "rechazar"
+    if tokens & PALABRAS_ACEPTAR_OFERTA:
+        return "aceptar"
+    return None
+
+
+def procesar_respuesta_oferta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict, dict]:
+    """Interpreta la respuesta del usuario a la oferta de reservar.
+
+    Devuelve (accion, payload, nueva_sesion, auditoria), misma forma que
+    `procesar_respuesta`:
+      - accion == "reservar":    payload es el texto a pasarle a
+                                   `recursos_service.gestionar_reserva`.
+      - accion == "responder":   payload es el texto a enviar tal cual
+                                   (rechazo cordial).
+      - accion == "seguir_curso": el mensaje no fue ni sí ni no -- el
+                                   llamador debe limpiar la oferta y dejar
+                                   que el mensaje siga su camino normal
+                                   (clasificación de intent). `payload` es
+                                   None.
+      - auditoria: {"intent": str, "permitido": bool, "motivo_bloqueo": None}
+    """
+    sesion_limpia = {**sesion, CLAVE_OFERTA: None}
+    opcion = _interpretar_respuesta_oferta(texto_usuario)
+
+    if opcion == "aceptar":
+        return (
+            "reservar",
+            texto_usuario,
+            sesion_limpia,
+            {"intent": "reservar", "permitido": True, "motivo_bloqueo": None},
+        )
+
+    if opcion == "rechazar":
+        return (
+            "responder",
+            MENSAJE_OFERTA_RECHAZADA,
+            sesion_limpia,
+            {"intent": INTENT_AUDITORIA_OFERTA, "permitido": True, "motivo_bloqueo": None},
+        )
+
+    # Ni sí ni no: el usuario cambió de tema (p. ej. una pregunta nueva).
+    # No lo dejamos atrapado en un "¿sí o no?" -- se limpia la oferta y el
+    # mensaje sigue su curso normal hacia clasificación de intent.
+    return (
+        "seguir_curso",
+        None,
+        sesion_limpia,
+        {"intent": INTENT_AUDITORIA_OFERTA, "permitido": True, "motivo_bloqueo": None},
     )

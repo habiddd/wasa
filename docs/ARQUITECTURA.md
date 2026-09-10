@@ -115,8 +115,9 @@ ese `recurso` contra el catálogo real antes de confiarlo
 decide si se puede escribir en `reservas`. El LLM nunca toca la base de
 datos directamente.
 
-**Ni siquiera el campo `recurso` se acepta a ciegas.** Dos casos reales
-encontrados probando el bot (no solo en teoría):
+**Ni siquiera el campo `recurso` se aceptaba a ciegas**, y esa desconfianza
+se apretó tanto que terminó dejando la llamada entera sin efecto. Los dos
+guards, encontrados probando el bot (no solo en teoría):
 
 - Un mensaje que no menciona ningún activo (ej. "Reservar" a secas) podía
   volver con un `recurso` inventado -- el prompt le pide `null` en ese
@@ -132,43 +133,107 @@ encontrados probando el bot (no solo en teoría):
   ambigüedad real y se le pregunta al usuario. El LLM solo se consulta
   cuando el matcheo por palabra clave no encontró absolutamente nada.
 
-### El intent tampoco se acepta a ciegas (`_corroborar_o_heuristico`)
+Los dos juntos son contradictorios -- "sin candidatos" implica puntaje 0
+para todos los nombres, así que el primer guard nunca podía pasar cuando el
+segundo dejaba entrar. Por eso `_iniciar_reserva` ya no hace esa llamada;
+ver "El wizard de reservas no usa el LLM" más abajo.
 
-Mismo criterio que el punto anterior, un nivel más arriba: la categoría
-que devuelve `clasificar_intent` también tiene que tener respaldo en lo
-que el usuario escribió. El modelo local en uso (`liquid/lfm2.5-1.2b`)
-responde una sola palabra limpia -- no es un problema de parseo -- pero
-tiene un sesgo medido hacia `reservar`, y en menor medida `cancelar`,
-ante mensajes ambiguos o sin relación: "buenos días", "asdfgh" y "cual
-es la capital de mongolia" se clasificaban como `reservar`/`cancelar`
-incluso con `temperature=0`, arrancando wizards que el usuario nunca
-pidió. Ajustar `PROMPT_CLASIFICACION` con ejemplos few-shot no lo
-resuelve de forma estable en un modelo de este tamaño: cada ejemplo que
-se agrega desplaza el sesgo a otro caso en vez de eliminarlo (probado a
-mano contra el LLM real antes de descartarlo -- ver
-`docs/SESION_2026-09-09.md`, sección 14).
+### Clasificación de intent en tres capas (`llm_client.clasificar_intent`)
 
-Por eso, cuando el LLM responde `reservar`, `cancelar` o
-`consultar_disponibilidad`, `_corroborar_o_heuristico` exige que el
-mensaje del usuario contenga al menos una de las palabras clave de esa
-categoría (`PALABRAS_RESERVAR`, `PALABRAS_CANCELAR`,
-`PALABRAS_DISPONIBILIDAD` -- las mismas constantes que usa el heurístico
-de respaldo, para que no puedan quedar desalineadas). Sin ese respaldo se
-descarta la respuesta del LLM y se usa `_clasificar_intent_heuristico`,
-que en esos casos cae en `otro` -- y de ahí al menú de fallback, que le
-pregunta al usuario en vez de asumir.
+El modelo en uso es `lfm2.5-2.6b` (LM Studio). Razona antes de responder
+y **no se le puede apagar el razonamiento por API** -- probados
+`chat_template_kwargs.enable_thinking=false`, `reasoning_effort` y
+`/nothink` en el system prompt, los tres siguen gastando ~190 tokens. Una
+clasificación cuesta entre 13 y 25 segundos. Eso condiciona todo el
+diseño: la meta no es solo acertar, es llamar al modelo lo menos posible.
 
-`ayuda` y `otro` quedan fuera del guard a propósito: equivocarse ahí como
-mucho repite el texto de ayuda o abre el menú de fallback, nunca arranca
-un wizard ni le afirma al usuario una disponibilidad falsa. Exigirles
-corroboración solo empeoraría la detección de `ayuda` sin ganar
-seguridad.
+1. **Ruta rápida, sin red (`_clasificar_sin_llm`).** Si el mensaje trae
+   una señal inequívoca -- un marcador de reserva, de cancelación, de
+   disponibilidad, de ayuda, o es un saludo suelto -- se responde al
+   instante. Medido sobre una batería de 20 mensajes realistas, 11
+   resolvieron aquí (ver `docs/PRUEBAS_CHAT_2026-09-09.md`). Estos son
+   justamente los casos que cualquier modelo acierta, así que no se pierde
+   precisión.
 
-Limitación conocida que este guard no cubre: un mensaje que pide ayuda
-sin usar la palabra ("qué puedes hacer") se clasifica como `otro`, porque
-ni el LLM ni el heurístico lo reconocen. La consecuencia es benigna (el
-usuario ve el menú de fallback) y la salida real no es agregar más
-palabras clave, sino un modelo más grande en `LLM_MODEL`.
+   Excepción deliberada: `MARCADORES_DESISTIR` ("ya no", "no voy a",
+   "desisto"...). "Ya no voy a necesitar la reserva de mañana" contiene la
+   subcadena `reserv`, y sin esta excepción la ruta rápida abriría el
+   wizard de **reservas** justo cuando el usuario quiere lo contrario. Con
+   una de esas presentes, la ruta rápida se abstiene y decide el LLM (que
+   sí responde `cancelar`, verificado).
+
+2. **El LLM, validado después (`_validar_intent_de_accion`).** Cuando el
+   modelo responde `reservar`, `cancelar` o `consultar_disponibilidad`, se
+   le exige que el mensaje tenga **señal de dominio**: un verbo de
+   reserva, un equipo, un espacio, una fecha/hora, o un nombre real del
+   catálogo (`recursos_service.listar_terminos_catalogo()`, que
+   `webhook.py` le pasa al clasificador). Si no hay nada de eso, el
+   mensaje no puede haber sido una petición por más que el LLM lo diga, y
+   se enruta a `saludo` (si era conversación) o a `otro`.
+
+   Esto es **mucho más holgado** que el guard anterior
+   (`_corroborar_o_heuristico`), que exigía la palabra clave literal de la
+   *misma categoría*. Aquel guard existía porque `liquid/lfm2.5-1.2b`
+   tenía un sesgo medido hacia `reservar`/`cancelar` ante cualquier
+   mensaje ambiguo; con `lfm2.5-2.6b` ese sesgo desaparece ("buenos días"
+   → `otro`, donde el 1.2b decía `reservar`), así que la rigidez ya solo
+   estorbaba: "tienen algo para grabar el jueves" no contiene ninguna
+   palabra clave de `reservar` y terminaba en el menú de fallback aunque
+   el modelo lo hubiera entendido perfecto.
+
+3. **Heurístico de respaldo (`_clasificar_intent_heuristico`).** Si el LLM
+   no responde, se pasa de 45 s, o agota el presupuesto de tokens
+   (`finish_reason == "length"`), responde el heurístico por palabras
+   clave. Los topes son deliberados: toda clasificación que el modelo
+   acierta llegó en 30 s o menos, y pasado eso lo que hay es un modelo
+   enredado que además concluye mal -- cortar da mejor respuesta y menos
+   espera.
+
+`ayuda`, `saludo` y `otro` quedan fuera de la validación del punto 2 a
+propósito: equivocarse ahí como mucho repite el texto de ayuda, contesta
+un saludo, o abre el menú de fallback -- nunca arranca un wizard ni le
+afirma al usuario una disponibilidad falsa.
+
+### Conversación normal: el intent `saludo`
+
+Un saludo, una cortesía o una pregunta sobre el bot ("hola", "gracias",
+"quién eres") no son un pedido, pero tampoco son un mensaje
+incomprensible: responderlos con el menú de fallback se siente como un
+portazo. Por eso existe `saludo`, permitido en `ALLOWED_INTENTS`.
+
+`_es_charla_social` decide **restando**: al texto se le quitan las frases
+y palabras sociales conocidas y, si lo que queda es vacío o puro relleno,
+era un saludo suelto. Restar en vez de buscar coincidencias evita el falso
+positivo obvio -- "hola, necesito una cámara" contiene "hola" pero deja
+residuo ("necesito camara"), así que sigue siendo un pedido.
+
+`llm_client.responder_charla` contesta en dos velocidades: un saludo pelado
+("hola", "buenos días") sale de un texto fijo rotado entre varias
+redacciones -- instantáneo, y con este modelo eso importa, porque generar
+una respuesta cuesta 10-20 s y es una eternidad para contestar "hola". Lo
+demás que sea social pero no un saludo pelado ("cómo estás", "quién eres")
+sí pasa por el LLM, con el texto fijo como respaldo si falla. Ninguna de
+las dos rutas consulta la base de datos ni afirma nada sobre
+disponibilidad.
+
+**Con esto, al menú de fallback solo llega lo que de verdad no se
+entiende.**
+
+### El wizard de reservas no usa el LLM
+
+`_iniciar_reserva` **ya no llama** a `llm_client.extraer_datos_reserva`. De
+los tres campos que devuelve, `inicio` y `fin` nunca se usaron (la fecha y
+la hora se preguntan en pasos de formato fijo, ver más abajo), y `recurso`
+se consumía por una rama inalcanzable: `_resolver_recurso_para_reserva`
+solo mira el nombre del LLM cuando `buscar_recursos_en_texto` no encontró
+ningún candidato, y a la vez le exige `_puntaje_nombre_en_texto(...) > 0`
+-- pero `candidatos` **es** el conjunto de nombres con puntaje > 0, así que
+las dos condiciones no pueden cumplirse juntas.
+
+Costaba 54-78 s por cada reserva iniciada, sin poder cambiar el resultado.
+La función y su prompt siguen en `llm_client.py` por si se quieren usar de
+verdad; ya no están en el camino crítico. Detalle y verificación en
+`docs/PRUEBAS_CHAT_2026-09-09.md`, sección 5.
 
 ## Inventario: varias unidades del mismo modelo (`recursos_service.py`)
 
@@ -211,9 +276,9 @@ espacios entre sí, y por eso hay que chequear ciclos igual que con
 se le cambia el lugar, sus hijos que estaban en el mismo lugar que él se
 mueven con él por defecto (`propagar_espacio`, default `true` en el PATCH);
 los hijos que alguien ya había puesto a mano en otro lugar no se tocan, y
-esa excepción manual queda pegajosa ante cambios futuros del padre. No se
-tocó `recursos_service.py` (el bot): por ahora `espacio_id` es solo de
-inventario/dashboard, queda pendiente si el bot llega a necesitarlo.
+esa excepción manual queda pegajosa ante cambios futuros del padre.
+`recursos_service.py` (el bot) SÍ usa esta jerarquía al reservar un
+espacio -- ver "Contenidos de un espacio (`espacio_id`)" más abajo.
 
 Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
 `placa`), se tratan como intercambiables:
@@ -266,12 +331,16 @@ para un ítem (`_siguiente_paso_wizard`):
 
 ```
 elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
-  → fecha → hora_inicio → hora_fin → confirmar → listo
+  → [elegir_contenidos_espacio] → fecha → hora_inicio → hora_fin
+  → confirmar → listo
 ```
 
 `confirmar_accesorios` es condicional: solo aparece si el activo recién
 resuelto trae hijos marcados como incluidos por defecto (ver "Carrito de
-reserva" más abajo). `_avanzar_wizard` además salta solo cualquier paso
+reserva" más abajo). `elegir_contenidos_espacio` también es condicional:
+solo aparece si el ítem recién resuelto es un espacio con contenidos (ver
+"Contenidos de un espacio" más abajo); un equipo normal nunca pasa por
+ahí. `_avanzar_wizard` además salta solo cualquier paso
 que tenga una única opción posible (ej. una sola marca dentro de una
 subcategoría), avisando al usuario ("solo tenemos una marca de dron, sigo
 con esa") en vez de preguntar algo que no tiene sentido elegir. Si el
@@ -399,6 +468,46 @@ no como una reserva de un solo activo:
   `fin` del wizard y hace que `_avanzar_wizard` vuelva a preguntar justo
   eso, conservando el carrito ya armado.
 
+### Contenidos de un espacio (`espacio_id`)
+
+Cuando el ítem recién resuelto es un LUGAR (`tipo='espacio'`, ej. "Cabina
+de audio 2"), el fold-in de `_avanzar_wizard` copia la MECÁNICA del paso
+`confirmar_accesorios` de arriba pero para la jerarquía `espacio_id`, no
+`padre_id` -- son independientes (ver "Ubicación física" más arriba).
+`_contenidos_de_espacio(nombre_espacio)` devuelve los equipos activos que
+viven en ese lugar, solo las RAÍCES (si el padre de un equipo por
+`padre_id` también está en el mismo espacio, el hijo no se lista suelto,
+ya aparece anidado bajo su padre) y deduplicados por nombre (3 iMac
+cuentan como una sola opción). Solo ofrece equipos, no espacios anidados
+dentro de este espacio (ej. "Edificio CPA" contiene dos salas -- eso queda
+fuera por ahora).
+
+Si hay contenidos, el wizard entra al paso `elegir_contenidos_espacio`
+(`_mensaje_elegir_contenidos_espacio`): lista cada raíz numerada y, debajo
+e indentados, sus propios hijos por `padre_id` (reusando
+`_accesorios_por_defecto`) para que el usuario vea qué se lleva si elige
+esa raíz, más una última opción "Ninguno". Si el lugar no tiene contenidos,
+el wizard sigue exactamente igual que antes de este cambio, directo a
+pedir fecha.
+
+**Asimetría a propósito respecto a los accesorios por `padre_id`:** ahí
+todo viene incluido y el usuario quita lo que no quiere; acá NO se agrega
+nada solo -- el usuario elige qué sumar, y por defecto no se suma ninguno.
+Reservar "Sala de postproducción 4" no puede reservar de una sus 5
+computadores: dejaría sin máquinas a cualquier otra persona que también
+los necesite (agotar las unidades de un modelo hace que el siguiente
+usuario sea rechazado). `_interpretar_seleccion_multiple` se reusa igual
+que en `confirmar_accesorios`, pero los índices significan lo contrario:
+qué AGREGAR, no qué quitar. Cada raíz que el usuario suma arrastra sus
+propios hijos por `padre_id` automáticos (`auto=True`), igual que un
+accesorio normal.
+
+Por el mismo motivo que `confirmar_accesorios` (su opción "Ninguno"
+también se puede responder "no"), `elegir_contenidos_espacio` está
+excluido del atajo global que cancela el wizard al ver la palabra "no" --
+si no lo estuviera, responder "ninguno"/"no" cancelaría toda la reserva en
+vez de simplemente seguir a pedir fecha.
+
 **Disponibilidad: siempre se pregunta, nunca se decide en silencio.**
 `_resolver_disponibilidad_carrito` ya no distingue accesorio automático de
 ítem elegido a mano -- cualquiera sin unidad libre en el horario elegido
@@ -478,9 +587,16 @@ cualquier paso sin tocar la base, igual que en `gestionar_reserva`.
 
 Cuando `clasificar_intent` no ubica el mensaje en ningún intent permitido
 (en la práctica, siempre cae en `"otro"`), en vez de cortar la
-conversación con un mensaje fijo se le ofrece al usuario un menú de dos
-opciones -- "Reservas" / "Preguntas" -- para no perder el mensaje sin
-intentar ayudar. Vive en `menu_service.py`, un módulo puro (sin DB, sin
+conversación con un mensaje fijo se le ofrece al usuario un menú de tres
+opciones -- "Reservar" / "Consultar" / "Cancelar" -- para no perder el
+mensaje sin intentar ayudar.
+
+Ojo con **qué llega hasta aquí**: desde que existe el intent `saludo`, los
+saludos y las cortesías ya no caen en este menú, se contestan como
+conversación (ver "Conversación normal" más arriba). A este menú solo llega
+lo que de verdad no se entendió.
+
+Vive en `menu_service.py`, un módulo puro (sin DB, sin
 LLM, sin importar `recursos_service.py`) para no añadir superficie al
 archivo de negocio más grande y crítico del bot; `webhook.py` es quien
 decide a qué servicio despachar según la acción que devuelve.
@@ -496,22 +612,26 @@ clasificación de intent.
   el usuario (si ya menciona el activo, p. ej. "quiero reservar la sala de
   edición", el wizard salta esos pasos solo, igual que hace hoy con el
   intent `reservar` normal). `"2"`/palabras de preguntas piden qué activo
-  consultar y pasan al paso `esperando_consulta`. Una opción no reconocida
-  reintenta el menú hasta `MAX_REINTENTOS` (2) veces; agotados los
-  reintentos, se rinde con el mismo mensaje estático que antes bloqueaba
-  directo, auditado igual que antes
+  consultar y pasan al paso `esperando_consulta`. `"3"`/palabras de
+  cancelar arrancan `recursos_service.gestionar_cancelacion`. Una opción no
+  reconocida reintenta el menú hasta `MAX_REINTENTOS` (2) veces; agotados
+  los reintentos, se rinde con el mismo mensaje estático que antes
+  bloqueaba directo, auditado igual que antes
   (`motivo_bloqueo="intent_no_permitido"`).
-- **`esperando_consulta`**: cualquier texto (salvo una palabra de salida)
-  se pasa tal cual a `recursos_service.evaluar_consulta_disponibilidad`
-  -- función pura ya usada por el intent `consultar_disponibilidad`
-  normal, así que no hay lógica de disponibilidad nueva, solo un enrutamiento
-  distinto hacia ella. Es de un solo turno: siempre limpia el estado al
-  responder, no puede quedar en bucle.
-- Palabras de salida (`"salir"`, `"cerrar"`, `"cancelar"`, `"cancela"`)
-  cortan el menú en cualquier paso, igual que `PALABRAS_CANCELAR` corta los
-  otros wizards -- el mensaje de salida sugiere explícitamente escribir
-  "cancelar mi reserva" si eso era lo que el usuario quería, porque
-  mientras el menú está activo ese texto no llega al intent `cancelar`.
+- **`esperando_consulta`**: cualquier texto (salvo una palabra de salida o
+  de cancelar) se pasa tal cual a
+  `recursos_service.evaluar_consulta_disponibilidad` -- función pura ya
+  usada por el intent `consultar_disponibilidad` normal, así que no hay
+  lógica de disponibilidad nueva, solo un enrutamiento distinto hacia ella.
+  Es de un solo turno: siempre limpia el estado al responder, no puede
+  quedar en bucle. Responder `"cancelar"` a "¿sobre qué equipo quieres
+  saber?" no es nombrar un equipo: se enruta a la cancelación, no a una
+  consulta que no encontraría nada.
+- Palabras de salida (`"salir"`, `"cerrar"`, `"nada"`, `"ninguna"`,
+  `"olvídalo"`) cortan el menú en cualquier paso. `"cancelar"` ya **no**
+  está entre ellas: desde que existe la opción 3, dentro del menú esa
+  palabra significa "quiero cancelar una reserva", que es justo lo que hace
+  esa opción.
 
 **Invariante importante:** `menu_service.procesar_respuesta` siempre
 devuelve la sesión con `menu_fallback` en `None` antes de que `webhook.py`
@@ -526,11 +646,56 @@ eliminando el guardrail principal del bot.
 **Auditoría:** mostrar el menú, un reintento, o salir del menú se registran
 con `permitido=True` (ya no es un bloqueo, es ayuda ofrecida) e
 `intent_detectado="menu_fallback"`; elegir una opción audita el intent real
-elegido (`"reservar"` / `"consultar_disponibilidad"`). Solo la rendición
+elegido (`"reservar"` / `"consultar_disponibilidad"` / `"cancelar"`). Solo la rendición
 final tras agotar reintentos conserva `permitido=False` y
 `motivo_bloqueo="intent_no_permitido"`. Efecto esperado en el dashboard:
 `total_bloqueadas_30d` (`dashboard.py`) baja, porque ya no se cuenta cada
 mensaje inclasificable como bloqueado.
+
+### Oferta de reserva tras una consulta (`menu_service.py`)
+
+Cuando el bot responde una consulta de disponibilidad, no corta ahí la
+conversación: le ofrece al usuario iniciar una reserva para no obligarlo a
+escribir un mensaje nuevo desde cero. Pedido explícito del usuario: el
+wizard tiene que arrancar **desde su primer paso** (el menú de
+subcategorías de equipo + espacios), nunca precargado con el activo que se
+acababa de consultar.
+
+Se activa desde `webhook.py` en las dos rutas que responden disponibilidad
+-- el intent `consultar_disponibilidad` normal y la acción `"consultar"`
+del menú de fallback -- llamando a `menu_service.activar_oferta(sesion,
+respuesta)`, que pega un texto corto al final de la respuesta ("¿Quieres
+reservar algo? Responde *sí* y te ayudo 🙂") y marca
+`sesion["oferta_reserva"] = {"activa": True}`.
+
+Es de un solo turno, sin reintentos: el próximo mensaje se interpreta con
+`menu_service.procesar_respuesta_oferta`, misma forma de retorno
+`(accion, payload, nueva_sesion, auditoria)` que `procesar_respuesta`.
+
+- **Acepta** ("sí", "1", "dale", "listo", "claro", "ok", "bueno",
+  "quiero"): arranca `recursos_service.gestionar_reserva` con el propio
+  texto del usuario (p. ej. "si"). Como ese texto no nombra ningún activo,
+  `_iniciar_reserva` no resuelve ningún candidato y el wizard abre en su
+  primer menú -- que es justo el efecto pedido, sin necesidad de ninguna
+  lógica especial de "saltar al inicio".
+- **Rechaza** ("no", "nada", "gracias", "después", "luego"): responde algo
+  breve y cordial, sesión limpia.
+- **Ninguna de las dos** (el usuario escribió otra cosa, p. ej. cambió de
+  tema): `webhook.py` limpia la oferta pero **no retorna** -- deja que el
+  mensaje siga su curso normal hacia clasificación de intent. Igual que en
+  el menú de fallback, no tiene sentido dejar al usuario atrapado
+  respondiendo "¿sí o no?" a algo que ya no preguntó.
+
+**Misma invariante que el menú de fallback:** `procesar_respuesta_oferta`
+siempre devuelve la sesión con `oferta_reserva` en `None` antes de
+pasarla a `gestionar_reserva` -- si no, se propagaría en cada paso del
+wizard (`{**sesion, "reserva_wizard": wizard}`) y el bloque de `webhook.py`
+que lee `sesion.get(menu_service.CLAVE_OFERTA)` interceptaría cada mensaje
+futuro del wizard durante los 7 días de TTL de la sesión.
+
+**Auditoría:** ofrecer, aceptar o rechazar se registran con
+`permitido=True` (no son bloqueos); aceptar audita el intent real
+`"reservar"`.
 
 ## Identidad y registro (`registro_service.py`, `usuarios_service.py`)
 

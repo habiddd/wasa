@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/table"
 import { usePolling } from "@/hooks/use-polling"
 import { fetchMetricas } from "@/lib/api"
+import { formatearFechaHoraCPA } from "@/lib/fechas"
 
 const ESTADO_ENVIO_INFO: Record<
   string,
@@ -73,9 +74,7 @@ export function MetricasPanel() {
             <TableBody>
               {data?.ultimas_interacciones.map((i, idx) => (
                 <TableRow key={idx}>
-                  <TableCell>
-                    {i.creado_en ? new Date(i.creado_en).toLocaleString() : "-"}
-                  </TableCell>
+                  <TableCell>{formatearFechaHoraCPA(i.creado_en)}</TableCell>
                   <TableCell>{i.telefono_wa || "-"}</TableCell>
                   <TableCell>{i.intent || "-"}</TableCell>
                   <TableCell>{i.permitido ? "sí" : "no"}</TableCell>

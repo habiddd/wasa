@@ -116,7 +116,10 @@ services:
 
       # Guardrails
       MAX_MESSAGES_PER_MINUTE: ${MAX_MESSAGES_PER_MINUTE:-8}
-      ALLOWED_INTENTS: "reservar,consultar_disponibilidad,cancelar,ayuda"
+      # "saludo" = conversación social (ver llm_client.responder_charla); no
+      # toca la base de datos. "otro" queda fuera a propósito: es el que cae
+      # al menú de fallback, y ese es el guardrail.
+      ALLOWED_INTENTS: "reservar,consultar_disponibilidad,cancelar,ayuda,saludo"
 
       # Dashboard interno (/dashboard), protegido con autenticación básica
       DASHBOARD_USER: ${DASHBOARD_USER:-admin}

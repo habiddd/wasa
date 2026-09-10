@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table"
 import { usePolling } from "@/hooks/use-polling"
 import { actualizarUsuario, fetchUsuarios, type CambiosUsuario } from "@/lib/api"
+import { formatearFechaHoraCPA } from "@/lib/fechas"
 
 import { UsuarioEditForm } from "./UsuarioEditForm"
 
@@ -69,9 +70,7 @@ export function ListaUsuariosPanel() {
                   <TableCell>{u.cedula || "-"}</TableCell>
                   <TableCell>{u.rol}</TableCell>
                   <TableCell>{u.activo ? "sí" : "no"}</TableCell>
-                  <TableCell>
-                    {u.creado_en ? new Date(u.creado_en).toLocaleString() : "-"}
-                  </TableCell>
+                  <TableCell>{formatearFechaHoraCPA(u.creado_en)}</TableCell>
                   <TableCell>
                     <Button
                       size="sm"

@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/table"
 import { usePolling } from "@/hooks/use-polling"
 import { fetchSesiones, type EstadoReserva, type Sesion } from "@/lib/api"
+import { formatearFechaHoraCPA } from "@/lib/fechas"
 
 type Orden = "reciente" | "usuario"
 
@@ -36,7 +37,7 @@ function EstadoReservaBadge({ estado }: { estado: EstadoReserva }) {
 }
 
 function fecha(valor: string | null) {
-  return valor ? new Date(valor).toLocaleString() : "-"
+  return formatearFechaHoraCPA(valor)
 }
 
 function SesionesTabla({ sesiones }: { sesiones: Sesion[] }) {

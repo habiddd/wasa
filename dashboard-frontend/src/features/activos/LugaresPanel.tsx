@@ -8,7 +8,7 @@ import type { Recurso } from "@/lib/api"
 import { ActivoCard } from "./ActivoCard"
 import { ActivoNuevoForm } from "./ActivoNuevoForm"
 import { useActivosContext } from "./activos-context"
-import { contenidosEn } from "./tree-utils"
+import { contenidosEn, raicesEn } from "./tree-utils"
 
 // El árbol por padre_id de arriba (ActivoCard) usa el estado compartido
 // `expandidos` del contexto. Los "contenidos" son otra jerarquía
@@ -27,7 +27,13 @@ function LugarConContenidos({
   nivel: number
 }) {
   const [expandido, setExpandido] = useState(false)
+  // El contador y el botón cuentan TODOS los contenidos (incluye hijos
+  // anidados) porque al usuario le interesa cuántas cosas hay ahí, no
+  // cuántas ramas. El renderizado, en cambio, solo recorre las raíces --
+  // cada `ActivoCard` ya sabe encontrar y anidar sus propios hijos dentro
+  // de `contenidos` (se le sigue pasando la lista completa como `lista`).
   const contenidos = contenidosEn(lugar.id, activos)
+  const raices = raicesEn(lugar.id, activos)
 
   return (
     <div>
@@ -50,7 +56,7 @@ function LugarConContenidos({
           </Button>
           {expandido && (
             <div className="mt-1 space-y-1">
-              {contenidos.map((c) => (
+              {raices.map((c) => (
                 <ActivoCard key={c.id} recurso={c} lista={contenidos} nivel={0} />
               ))}
             </div>

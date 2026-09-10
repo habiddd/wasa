@@ -135,8 +135,88 @@ def _accesorios_por_defecto(nombre_padre: str) -> list[str]:
     return vistos
 
 
+def _contenidos_de_espacio(nombre_espacio: str) -> list[str]:
+    """Nombres (modelo) de los equipos activos que viven dentro de un lugar
+    (`recursos.espacio_id`) -- jerarquía DISTINTA e independiente de los
+    accesorios por `padre_id` (ver `_accesorios_por_defecto` arriba y el
+    comentario sobre `espacio_id` en `models.Recurso`).
+
+    ASIMETRÍA A PROPÓSITO respecto a los accesorios: estos NO se agregan
+    solos al carrito, solo se muestran (ver paso "elegir_contenidos_espacio"
+    en `_avanzar_wizard`/`_continuar_reserva`), y el usuario elige cuáles
+    sumar -- por defecto no se suma ninguno. Motivo: reservar un lugar (ej.
+    "Sala de postproducción 4") no puede reservar de una sus 5 computadores,
+    porque dejaría sin máquinas a cualquier otra persona que también los
+    necesite (agotar las unidades de un modelo hace que el siguiente
+    usuario sea rechazado). Si el día de mañana se quiere invertir esto a
+    opt-out (incluidos por defecto, se quitan los que sobren), el cambio es
+    en el fold-in de `_avanzar_wizard`: agregarlos al carrito de una con
+    `auto=True` igual que ya se hace con `_accesorios_por_defecto`, y reusar
+    `_mensaje_confirmar_accesorios` en vez de un mensaje propio.
+
+    Solo cuenta como RAÍZ un activo cuyo padre (por `padre_id`) NO esté
+    también en este mismo espacio -- si el padre sí está, el hijo no se
+    lista suelto porque ya aparece anidado bajo su padre (ver
+    `_mensaje_elegir_contenidos_espacio`, que a su vez reusa
+    `_accesorios_por_defecto` para esos hijos). Si el padre no tiene lugar
+    o vive en OTRO lugar, el hijo SÍ cuenta como raíz de este espacio. En la
+    práctica esto casi no debería pasar porque mover de lugar a un padre
+    arrastra a sus hijos (ver "Regla de propagación" en
+    docs/ARQUITECTURA.md), pero un hijo reubicado a mano queda cubierto
+    igual.
+
+    Excluye espacios anidados dentro de este espacio (ej. un edificio que
+    contiene salas) -- por ahora esta función solo ofrece equipos
+    (`tipo='equipo'`).
+
+    Deduplicado por nombre, igual que `_grupos_activos`/`_accesorios_por_defecto`:
+    varias unidades del mismo modelo en el mismo lugar (ej. 3 iMac) cuentan
+    como una sola opción."""
+    ids_espacio = [u.id for u in _grupo(nombre_espacio)]
+    if not ids_espacio:
+        return []
+    contenidos = (
+        Recurso.query.filter_by(estado=ESTADO_DISPONIBLE, tipo="equipo")
+        .filter(Recurso.espacio_id.in_(ids_espacio))
+        .order_by(Recurso.id)
+        .all()
+    )
+    ids_contenidos = {r.id for r in contenidos}
+    vistos: list[str] = []
+    for r in contenidos:
+        if r.padre_id in ids_contenidos:
+            continue  # es hijo de otro activo de este mismo espacio -- ya aparece anidado bajo ese padre, no es raíz
+        if r.nombre not in vistos:
+            vistos.append(r.nombre)
+    return vistos
+
+
 def listar_nombres_disponibles() -> list[str]:
     return [nombre for nombre, _ in _grupos_activos()]
+
+
+def listar_terminos_catalogo() -> list[str]:
+    """Vocabulario real del catálogo: nombres de modelo, subcategorías,
+    categorías y marcas de los activos disponibles. `routes/webhook.py` se
+    lo pasa a `llm_client.clasificar_intent` como señal de dominio -- así
+    el bot reconoce un pedido que nombra un equipo sin usar ningún verbo de
+    reserva ("¿y el trípode Manfrotto?").
+
+    Vive aquí y no en `llm_client` porque este módulo ya importa
+    `llm_client`: al revés sería un import circular. Deduplicado
+    conservando el orden, para que el resultado sea estable entre llamadas
+    y fácil de leer en un log."""
+    terminos: list[str] = []
+    for nombre, representante in _grupos_activos():
+        for valor in (
+            nombre,
+            representante.subcategoria,
+            representante.categoria,
+            representante.marca,
+        ):
+            if valor and valor not in terminos:
+                terminos.append(valor)
+    return terminos
 
 
 def _subcategorias_activas() -> list[str]:
@@ -208,14 +288,21 @@ def _proxima_reserva(recurso_id: int, ahora: datetime) -> Reserva | None:
 def _estado_recurso(recurso: Recurso, ahora: datetime) -> str:
     """Descripción corta y determinista del estado actual de un recurso,
     en base a `reservas` -- nunca inventada por el LLM."""
+    # `Reserva.inicio`/`.fin` vienen de una columna DateTime(timezone=True):
+    # SQLAlchemy las devuelve en UTC, así que hay que pasarlas a hora de
+    # Bogotá antes de formatear -- si no, se le muestra al usuario la hora
+    # cruda de la base (ej. 19:00 UTC en vez de 2:00 p.m. Colombia).
     en_curso = _reserva_en_curso(recurso.id, ahora)
     if en_curso:
-        return f"en uso ahora mismo, libre a las {en_curso.fin.strftime('%H:%M')}"
+        fin_local = en_curso.fin.astimezone(ZONA_HORARIA_CPA)
+        return f"en uso ahora mismo, libre a las {_formatear_hora(fin_local)}"
 
     proxima = _proxima_reserva(recurso.id, ahora)
     if proxima:
-        inicio = proxima.inicio.strftime("%d/%m %H:%M")
-        fin = proxima.fin.strftime("%H:%M")
+        inicio_local = proxima.inicio.astimezone(ZONA_HORARIA_CPA)
+        fin_local = proxima.fin.astimezone(ZONA_HORARIA_CPA)
+        inicio = f"{inicio_local.strftime('%d/%m')} {_formatear_hora(inicio_local)}"
+        fin = _formatear_hora(fin_local)
         return f"libre ahora, pero reservado del {inicio} a las {fin}"
 
     return "libre, sin reservas próximas"
@@ -235,10 +322,13 @@ def _estado_grupo(nombre: str, ahora: datetime) -> str:
     if libres:
         return f"disponible ahora ({len(libres)} de {len(unidades)} unidades libres)"
 
+    # Igual que en `_estado_recurso`: `.fin` viene de la base en UTC, se
+    # convierte a hora de Bogotá antes de mostrarla.
     fin_mas_cercano = min(_reserva_en_curso(u.id, ahora).fin for u in unidades)
+    fin_local = fin_mas_cercano.astimezone(ZONA_HORARIA_CPA)
     return (
         f"las {len(unidades)} unidades están en uso ahora mismo, "
-        f"la primera se libera a las {fin_mas_cercano.strftime('%H:%M')}"
+        f"la primera se libera a las {_formatear_hora(fin_local)}"
     )
 
 
@@ -815,6 +905,38 @@ def _mensaje_confirmar_accesorios(nombre_padre: str, incluidos: list[str]) -> st
     return mensaje
 
 
+def _mensaje_elegir_contenidos_espacio(nombre_espacio: str, raices: list[str]) -> str:
+    """Análogo a `_mensaje_confirmar_accesorios` pero para lo que contiene
+    un LUGAR (`_contenidos_de_espacio`), no para accesorios en bundle. Dos
+    diferencias clave con ese mensaje:
+    - Muestra el anidado: cada activo raíz y, debajo e indentado, sus
+      propios hijos por `padre_id` (reusando `_accesorios_por_defecto`) --
+      así el usuario ve qué se lleva si elige ese activo (ej. la Cámara
+      con sus 3 lentes debajo). Solo las raíces se numeran/eligen; los
+      hijos van pegados a su padre, no son una opción aparte.
+    - Nada viene incluido por defecto (ver la asimetría explicada en
+      `_contenidos_de_espacio`): la pregunta es qué AGREGAR, no qué quitar."""
+    lineas: list[str] = []
+    for i, nombre in enumerate(raices, start=1):
+        lineas.append(f"{i}. {nombre}")
+        for hijo in _accesorios_por_defecto(nombre):
+            lineas.append(f"    • {hijo}")
+    numero_ninguno = len(raices) + 1
+    lineas.append(f"{numero_ninguno}. Ninguno (solo reservar el lugar)")
+    mensaje = (
+        "*ESTE LUGAR INCLUYE*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"*{nombre_espacio}*\n"
+        "Contiene:\n"
+        f"{chr(10).join(lineas)}\n"
+        f"{_DIVISOR_FACTURA}\n"
+        "¿Quieres agregar alguno a la misma reserva? Responde con los "
+        f"números separados por coma (ej. \"1,2\"), o {numero_ninguno} si "
+        "no quieres agregar ninguno."
+    )
+    return mensaje
+
+
 def _interpretar_seleccion_multiple(texto: str, cantidad: int) -> list[int] | None:
     """Interpreta la respuesta a un menú donde se puede elegir más de una
     opción a la vez por número (ej. qué accesorios por defecto quitar):
@@ -944,6 +1066,26 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
                 mensaje = _mensaje_confirmar_accesorios(nombre, nuevos)
                 wizard["_mensaje_menu_actual"] = mensaje
                 return _con_avisos(avisos, mensaje), wizard, False
+
+            # Si el ítem recién resuelto es un LUGAR (tipo='espacio'), se
+            # muestra lo que contiene (jerarquía por `espacio_id`, ver
+            # `_contenidos_de_espacio`) para que el usuario elija qué sumar
+            # a la misma reserva -- a diferencia de los accesorios de
+            # arriba, acá NO se agrega nada solo (ver la asimetría explicada
+            # en `_contenidos_de_espacio`). Si el lugar no tiene contenidos
+            # (o ya están todos en el carrito), sigue de largo igual que
+            # hoy, directo a pedir fecha.
+            unidad_item = _grupo(nombre)
+            if unidad_item and unidad_item[0].tipo == "espacio":
+                raices = [r for r in _contenidos_de_espacio(nombre) if r not in ya_en_carrito]
+                if raices:
+                    wizard["contenidos_espacio_disponibles"] = raices
+                    wizard["espacio_padre_pendiente"] = nombre
+                    wizard["opciones_actuales"] = None
+                    wizard["paso"] = "elegir_contenidos_espacio"
+                    mensaje = _mensaje_elegir_contenidos_espacio(nombre, raices)
+                    wizard["_mensaje_menu_actual"] = mensaje
+                    return _con_avisos(avisos, mensaje), wizard, False
 
             continue
 
@@ -1266,23 +1408,39 @@ def _aplicar_hora_fin_valida(wizard: dict, usuario: Usuario, sesion: dict, hora:
 
 
 def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tuple[str, dict]:
-    """Primer mensaje de un intento de reserva. Usa el LLM solo para
-    identificar el ACTIVO (si el mensaje ya lo deja claro, ej. "cámara
-    sony", ese paso del wizard se salta solo -- ver _avanzar_wizard). La
-    fecha y hora nunca se le piden al LLM: se preguntan siempre con los
-    pasos de formato fijo (dd/mm/aaaa y hh:mm) para no arriesgarse a que
-    el modelo "invente" una hora que el usuario nunca dio (ver
-    PROMPT_EXTRACCION -- en la práctica no siempre respeta el "null si no
-    hay información suficiente")."""
-    ahora_utc = datetime.now(timezone.utc)
-    ahora_local = ahora_utc.astimezone(ZONA_HORARIA_CPA)
+    """Primer mensaje de un intento de reserva. El activo se identifica por
+    palabra clave (`buscar_recursos_en_texto`): si el mensaje ya lo deja
+    claro (ej. "cámara sony"), ese paso del wizard se salta solo -- ver
+    `_avanzar_wizard`. La fecha y hora nunca salen del LLM: se preguntan
+    siempre con los pasos de formato fijo (dd/mm/aaaa y hh:mm) para no
+    arriesgarse a que el modelo "invente" una hora que el usuario nunca dio.
+
+    Aquí ya no se llama a `llm_client.extraer_datos_reserva`. Se quitó
+    porque no podía cambiar el resultado y costaba carísimo:
+
+    - De los tres campos que devuelve, `inicio` y `fin` nunca se usaron (la
+      fecha y la hora se preguntan aparte, por lo dicho arriba). Y menos mal:
+      medido con `lfm2.5-2.6b`, "resérvame el dron mañana" devolvió
+      2026-10-10 estando a 9 de septiembre -- un mes de más.
+    - `recurso` sí se usaba, pero por una rama inalcanzable.
+      `_resolver_recurso_para_reserva` solo mira el nombre del LLM cuando
+      `buscar_recursos_en_texto` no encontró NINGÚN candidato, y además le
+      exige `_puntaje_nombre_en_texto(...) > 0`. Como `candidatos` es
+      justamente el conjunto de nombres con puntaje > 0, "sin candidatos"
+      implica puntaje 0 para todos: las dos condiciones no pueden darse a
+      la vez, así que ese `if` nunca se cumplía.
+    - El costo era todo el retraso del wizard: 54 a 78 segundos por
+      mensaje, medidos contra LM Studio.
+
+    `extraer_datos_reserva` sigue existiendo en `llm_client` (y su prompt
+    también), por si más adelante se quiere usar de verdad; simplemente ya
+    no está en el camino crítico de la conversación."""
     nombres = listar_nombres_disponibles()
 
     if not nombres:
         return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA.", sesion
 
-    extraido = llm_client.extraer_datos_reserva(texto_usuario, nombres, ahora_local) or {}
-    recurso, candidatos, _ = _resolver_recurso_para_reserva(texto_usuario, extraido)
+    recurso, candidatos, _ = _resolver_recurso_para_reserva(texto_usuario, {})
 
     wizard: dict = {
         "subcategoria": None,
@@ -1655,6 +1813,46 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
         return mensaje, {**sesion, "reserva_wizard": wizard}
 
+    if paso == "elegir_contenidos_espacio":
+        disponibles = wizard.get("contenidos_espacio_disponibles") or []
+        indices = _interpretar_seleccion_multiple(texto_usuario, len(disponibles))
+        if indices is None:
+            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                **sesion,
+                "reserva_wizard": wizard,
+            }
+
+        wizard.pop("contenidos_espacio_disponibles", None)
+        wizard.pop("espacio_padre_pendiente", None)
+        # OJO, semántica invertida respecto a "confirmar_accesorios" arriba:
+        # ahí nada venía incluido y los índices eran qué QUITAR de lo ya
+        # incluido; acá nada viene incluido y los índices son qué AGREGAR
+        # (ver la asimetría explicada en `_contenidos_de_espacio`).
+        a_agregar = [disponibles[i] for i in indices]
+        ya_en_carrito = {item["nombre_recurso"] for item in wizard["carrito"]}
+        for nombre_elegido in a_agregar:
+            if nombre_elegido in ya_en_carrito:
+                continue
+            wizard["carrito"].append({"nombre_recurso": nombre_elegido, "auto": False, "por": None})
+            ya_en_carrito.add(nombre_elegido)
+            # Cada activo del lugar que el usuario decide sumar puede a su
+            # vez tener sus propios hijos por `padre_id` (ej. la Cámara y
+            # sus lentes) -- esos sí se arrastran automáticos, reusando el
+            # mismo mecanismo que los accesorios en bundle normales.
+            for hijo in _accesorios_por_defecto(nombre_elegido):
+                if hijo in ya_en_carrito:
+                    continue
+                wizard["carrito"].append({"nombre_recurso": hijo, "auto": True, "por": nombre_elegido})
+                ya_en_carrito.add(hijo)
+        # No hace falta revisar disponibilidad acá -- ya se revisa en el
+        # paso "hora_fin" (o al confirmar), ver `_pausar_por_no_disponibles`.
+
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
     if paso == "resolver_disponibilidad":
         opciones = wizard.get("opciones_actuales") or OPCIONES_NO_DISPONIBLE
         valor = _interpretar_opcion(texto_usuario, opciones)
@@ -1747,13 +1945,19 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     # no se toca.
     # Mismo motivo para "confirmar_accesorios": su opción "No, no los
     # necesito" también empieza por "no", que ahí significa "excluye esos
-    # accesorios", no "cancela toda la reserva".
+    # accesorios", no "cancela toda la reserva". Mismo motivo, en espejo,
+    # para "elegir_contenidos_espacio": ahí su opción "Ninguno" también se
+    # puede responder como "no" (ver `_interpretar_seleccion_multiple`), y
+    # significa "no agregues nada de lo que contiene el lugar", no "cancela
+    # toda la reserva" -- si se olvida acá, "ninguno"/"no" cancelaría todo
+    # el wizard en vez de simplemente seguir a pedir fecha.
     palabras_cancelar = PALABRAS_CANCELAR
     if wizard is not None and wizard.get("paso") in (
         "confirmar_fecha_interpretada",
         "confirmar_hora_inicio_interpretada",
         "confirmar_hora_fin_interpretada",
         "confirmar_accesorios",
+        "elegir_contenidos_espacio",
     ):
         palabras_cancelar = {"cancelar", "cancela", "cerrar"}
 
