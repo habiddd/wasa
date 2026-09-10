@@ -6,6 +6,7 @@ import {
   CalendarClock,
   CalendarDays,
   ChevronRight,
+  ClipboardList,
   ListChecks,
   MapPin,
   QrCode,
@@ -43,6 +44,7 @@ import { ActivosProvider } from "@/features/activos/activos-context"
 import { LugaresPanel } from "@/features/activos/LugaresPanel"
 import { CalendarioPanel } from "@/features/calendario/CalendarioPanel"
 import { MetricasPanel } from "@/features/metricas/MetricasPanel"
+import { ReservasPanel } from "@/features/reservas/ReservasPanel"
 import { EstadoServiciosPanel, QrWhatsappPanel } from "@/features/servicios/ServiciosPanel"
 import { SesionesTab } from "@/features/usuarios/SesionesTab"
 import { ListaUsuariosPanel } from "@/features/usuarios/UsuariosPanel"
@@ -75,6 +77,7 @@ const MENU: (ItemMenu | GrupoMenu)[] = [
   },
   { value: "metricas", label: "Métricas", icon: BarChart3, Panel: MetricasPanel },
   { value: "calendario", label: "Calendario", icon: CalendarDays, Panel: CalendarioPanel },
+  { value: "reservas", label: "Reservas", icon: ClipboardList, Panel: ReservasPanel },
   {
     value: "usuarios",
     label: "Usuarios",

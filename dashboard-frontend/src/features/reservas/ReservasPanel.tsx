@@ -1,0 +1,346 @@
+import { useEffect, useMemo, useState } from "react"
+
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useActivosContext } from "@/features/activos/activos-context"
+import {
+  ZONA_CPA,
+  agruparEnEventos,
+  diaDe,
+  estiloDe,
+  etiquetaEvento,
+  horaCompacta,
+  mismoDia,
+  ubicarReservas,
+  type EventoCalendario,
+} from "@/features/calendario/calendario-utils"
+import { IconoTipo } from "@/features/calendario/IconoTipo"
+import { ReservaDetalle } from "@/features/calendario/ReservaDetalle"
+import { usePolling } from "@/hooks/use-polling"
+import { fetchSesiones, type EstadoReserva } from "@/lib/api"
+
+const FILTRO_STORAGE_KEY = "dashboard-cpa-reservas-estado"
+
+type FiltroEstado = "todas" | EstadoReserva
+
+const FILTROS: { valor: FiltroEstado; etiqueta: string }[] = [
+  { valor: "todas", etiqueta: "Todas" },
+  { valor: "confirmada", etiqueta: "Confirmadas" },
+  { valor: "completada", etiqueta: "Completadas" },
+  { valor: "cancelada", etiqueta: "Canceladas" },
+  { valor: "no_show", etiqueta: "No show" },
+]
+
+function filtroInicial(): FiltroEstado {
+  try {
+    const guardado = localStorage.getItem(FILTRO_STORAGE_KEY)
+    if (guardado && FILTROS.some((f) => f.valor === guardado)) return guardado as FiltroEstado
+  } catch {
+    // localStorage no disponible
+  }
+  return "todas"
+}
+
+// Más recientes arriba: las próximas y las de hoy son las que se consultan.
+function porInicioDesc(a: EventoCalendario, b: EventoCalendario) {
+  return b.inicio.getTime() - a.inicio.getTime()
+}
+
+// --- Formato corto -------------------------------------------------------
+// La tabla tiene que caber en el ancho que haya, así que usa fechas cortas
+// ("22 sept 2026", "9am") en vez de las largas del modal.
+
+const FECHA = new Intl.DateTimeFormat("es-CO", {
+  timeZone: ZONA_CPA,
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+})
+
+function fechaCorta(fecha: Date) {
+  return `${FECHA.format(fecha)}, ${horaCompacta(fecha)}`
+}
+
+/** Dos líneas: el día y el rango de horas, o inicio y fin si cambia de día. */
+function horario(evento: EventoCalendario): [string, string] {
+  const { inicio, fin } = evento
+  if (mismoDia(diaDe(inicio), diaDe(fin))) {
+    return [FECHA.format(inicio), `${horaCompacta(inicio)} – ${horaCompacta(fin)}`]
+  }
+  return [fechaCorta(inicio), `→ ${fechaCorta(fin)}`]
+}
+
+function numero(evento: EventoCalendario) {
+  return evento.numeros.length ? evento.numeros.join(", ") : "-"
+}
+
+function uso(evento: EventoCalendario) {
+  const primera = evento.reservas[0]
+  return primera.tipo_uso === "asignatura" ? `NRC ${primera.nrc}` : "Particular"
+}
+
+function creada(evento: EventoCalendario) {
+  const valor = evento.reservas[0].creado_en
+  return valor ? fechaCorta(new Date(valor)) : "-"
+}
+
+function EstadoBadge({ evento }: { evento: EventoCalendario }) {
+  return (
+    <Badge variant={estiloDe(evento.estado).badge}>
+      {evento.estadosMixtos ? "estados mixtos" : evento.estado}
+    </Badge>
+  )
+}
+
+function Activos({ evento }: { evento: EventoCalendario }) {
+  return (
+    <span className="flex items-start gap-1.5">
+      <IconoTipo tipo={evento.tipo} className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 break-words">{etiquetaEvento(evento)}</span>
+    </span>
+  )
+}
+
+type PropsVista = {
+  eventos: EventoCalendario[]
+  onSeleccionar: (evento: EventoCalendario) => void
+}
+
+// --- Vistas ----------------------------------------------------------------
+// Se eligen por el ancho del panel (container queries), no de la ventana:
+// así también se adaptan cuando el sidebar se abre o se retrae.
+
+/** Pantallas angostas: una tarjeta por reserva, sin columnas. */
+function ListaReservas({ eventos, onSeleccionar }: PropsVista) {
+  return (
+    <ul className="divide-y rounded-md border">
+      {eventos.map((evento) => {
+        const [dia, horas] = horario(evento)
+        return (
+          <li key={evento.clave}>
+            <button
+              type="button"
+              onClick={() => onSeleccionar(evento)}
+              className="w-full space-y-1 px-3 py-2.5 text-left text-sm outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+            >
+              <span className="flex items-start justify-between gap-2">
+                <Activos evento={evento} />
+                <EstadoBadge evento={evento} />
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                N.º {numero(evento)} · {evento.usuarioNombre} · {uso(evento)}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {dia} · {horas}
+              </span>
+            </button>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/**
+ * Desde ~670 px: tabla. Usuario y Uso tienen columna propia solo si hay
+ * espacio; si no, van en una línea bajo los activos. Creada es lo primero
+ * que sobra.
+ */
+function TablaReservas({ eventos, onSeleccionar }: PropsVista) {
+  return (
+    <div className="rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-12">N.º</TableHead>
+            <TableHead>Activos</TableHead>
+            <TableHead className="hidden @4xl:table-cell">Usuario</TableHead>
+            <TableHead className="hidden @4xl:table-cell">Uso</TableHead>
+            <TableHead>Horario</TableHead>
+            <TableHead>Estado</TableHead>
+            <TableHead className="hidden @5xl:table-cell">Creada</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {eventos.map((evento) => {
+            const [dia, horas] = horario(evento)
+            return (
+              <TableRow
+                key={evento.clave}
+                tabIndex={0}
+                className="cursor-pointer"
+                onClick={() => onSeleccionar(evento)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    onSeleccionar(evento)
+                  }
+                }}
+              >
+                <TableCell className="tabular-nums">{numero(evento)}</TableCell>
+                <TableCell className="whitespace-normal">
+                  <Activos evento={evento} />
+                  <p className="mt-0.5 text-xs text-muted-foreground @4xl:hidden">
+                    {evento.usuarioNombre} · {uso(evento)}
+                  </p>
+                </TableCell>
+                <TableCell className="hidden whitespace-normal @4xl:table-cell">
+                  <p>{evento.usuarioNombre}</p>
+                  <p className="text-xs text-muted-foreground">{evento.usuarioTelefono}</p>
+                </TableCell>
+                <TableCell className="hidden @4xl:table-cell">{uso(evento)}</TableCell>
+                <TableCell>
+                  <p>{dia}</p>
+                  <p className="text-xs text-muted-foreground">{horas}</p>
+                </TableCell>
+                <TableCell>
+                  <EstadoBadge evento={evento} />
+                </TableCell>
+                <TableCell className="hidden text-muted-foreground @5xl:table-cell">
+                  {creada(evento)}
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+export function ReservasPanel() {
+  const { activos, reload: recargarActivos } = useActivosContext()
+  const { data, error, loading, reload } = usePolling(fetchSesiones, 30000)
+  const [filtro, setFiltro] = useState<FiltroEstado>(filtroInicial)
+  const [idSeleccionado, setIdSeleccionado] = useState<number | null>(null)
+
+  // El modal de edición necesita el catálogo para elegir activos; el
+  // contexto no se carga solo (ver CalendarioPanel).
+  useEffect(() => {
+    recargarActivos()
+  }, [recargarActivos])
+
+  const ubicadas = useMemo(() => ubicarReservas(data ?? []), [data])
+
+  // Igual que el calendario, se filtra por línea antes de agrupar: una
+  // reserva con estados mixtos aparece en cada filtro con las líneas que
+  // le corresponden.
+  const eventosPorFiltro = useMemo(
+    () =>
+      new Map(
+        FILTROS.map(({ valor }) => [
+          valor,
+          agruparEnEventos(
+            valor === "todas" ? ubicadas : ubicadas.filter((u) => u.reserva.estado === valor)
+          ).sort(porInicioDesc),
+        ])
+      ),
+    [ubicadas]
+  )
+
+  const eventos = eventosPorFiltro.get(filtro) ?? []
+
+  // El modal se alimenta de la reserva completa, no de la filtrada: así
+  // sigue abierto si una edición cambia el estado y la saca del filtro, y el
+  // formulario no toma por activos de la reserva solo las líneas visibles.
+  const seleccionado = useMemo(
+    () =>
+      eventosPorFiltro
+        .get("todas")
+        ?.find((e) => e.reservas.some((r) => r.id === idSeleccionado)) ?? null,
+    [eventosPorFiltro, idSeleccionado]
+  )
+
+  function cambiarFiltro(nuevo: FiltroEstado) {
+    setFiltro(nuevo)
+    try {
+      localStorage.setItem(FILTRO_STORAGE_KEY, nuevo)
+    } catch {
+      // localStorage no disponible
+    }
+  }
+
+  function seleccionar(evento: EventoCalendario) {
+    setIdSeleccionado(evento.reservas[0].id)
+  }
+
+  return (
+    <div className="@container space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Reservas
+        </h2>
+        <Button size="sm" variant="outline" onClick={() => reload()}>
+          Refrescar
+        </Button>
+      </div>
+
+      <Tabs value={filtro} onValueChange={(v) => cambiarFiltro(v as FiltroEstado)}>
+        {/* h-auto! porque TabsList fija h-8 con una variante de grupo que le
+            gana a un h-auto normal, y al envolverse en pantallas angostas la
+            segunda fila de filtros se salía encima de la lista. */}
+        <TabsList className="h-auto! max-w-full flex-wrap justify-start">
+          {FILTROS.map(({ valor, etiqueta }) => (
+            <TabsTrigger key={valor} value={valor} className="flex-none px-2.5">
+              {etiqueta}
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {data ? eventosPorFiltro.get(valor)?.length ?? 0 : "–"}
+              </span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+
+      {loading && !data && (
+        <div className="space-y-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
+      )}
+
+      {error && !data && (
+        <p className="text-sm text-destructive">No se pudieron cargar las reservas: {error}</p>
+      )}
+
+      {data && eventos.length === 0 && (
+        <p className="rounded-md border p-4 text-sm text-muted-foreground">
+          No hay reservas para este filtro.
+        </p>
+      )}
+
+      {data && eventos.length > 0 && (
+        <>
+          <div className="@2xl:hidden">
+            <ListaReservas eventos={eventos} onSeleccionar={seleccionar} />
+          </div>
+          <div className="hidden @2xl:block">
+            <TablaReservas eventos={eventos} onSeleccionar={seleccionar} />
+          </div>
+        </>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        Horarios en hora local de la CPA (America/Bogota). Haz clic en una reserva para ver el
+        detalle o editarla.
+      </p>
+
+      <ReservaDetalle
+        evento={seleccionado}
+        recursos={activos}
+        onClose={() => setIdSeleccionado(null)}
+        onGuardado={reload}
+      />
+    </div>
+  )
+}
