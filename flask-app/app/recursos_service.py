@@ -994,7 +994,7 @@ def _mensaje_confirmar_contenidos_espacio(nombre_espacio: str, incluidos: list[d
         for i, (item, nivel) in enumerate(zip(incluidos, niveles), start=1)
     ]
     numero_ninguno = len(incluidos) + 1
-    lineas.append(f"{numero_ninguno}. Ninguno (dejar todos incluidos)")
+    lineas.append(f"{numero_ninguno}. (dejar todos incluidos)")
     aviso_cascada = "\nSi quitas un activo, también se quita lo que va debajo de él." if any(niveles) else ""
     return (
         "*ESTE LUGAR INCLUYE*\n"
