@@ -23,7 +23,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app import estado_bot
+from app import estado_bot, guardrails, recursos_service, whatsapp_client
 from app.extensions import db, redis_client
 from app.models import AuditoriaBot, Recurso, Reserva, ReservaGrupo, Usuario
 
@@ -334,13 +334,13 @@ def api_reservas():
 _CAMPOS_EDITABLES_RESERVA = {"inicio", "fin", "estado", "recurso_id"}
 
 # Ver el comentario de la columna `estado` en postgres/init/02-schema.sql.
-_ESTADOS_RESERVA = {"confirmada", "cancelada", "completada", "no_show"}
+_ESTADOS_RESERVA = {"confirmada", "pendiente", "cancelada", "completada", "no_show", "denegada"}
 
 # Constraints de reservas (postgres/init/02-schema.sql) traducidas a mensajes
 # legibles. El solapamiento lo impide Postgres con un EXCLUDE gist que solo
-# aplica a las confirmadas, igual que para las reservas que crea el bot.
+# aplica a las confirmadas y pendientes, igual que para las reservas que crea el bot.
 _MENSAJES_INTEGRIDAD_RESERVA = {
-    "reservas_no_solapamiento": "Ese recurso ya tiene otra reserva confirmada que se cruza con ese horario.",
+    "reservas_no_solapamiento": "Ese recurso ya tiene otra reserva confirmada o pendiente que se cruza con ese horario.",
     "rango_valido": "La hora de fin debe ser posterior a la de inicio.",
 }
 
@@ -474,7 +474,15 @@ def api_actualizar_reserva_grupo(grupo_id):
                 db.session.delete(reserva)
 
         reserva_base = reservas[0]
-        estado_nuevo = cambios.get("estado", reserva_base.estado)
+        # Un activo que agrega la CPA desde aquí ya lo aprobó ella misma: no
+        # nace pendiente aunque la línea que se toma de base lo esté.
+        estado_nuevo = cambios.get("estado")
+        if estado_nuevo is None:
+            estado_nuevo = (
+                "confirmada"
+                if reserva_base.estado == recursos_service.ESTADO_PENDIENTE
+                else reserva_base.estado
+            )
         inicio_nuevo = cambios.get("inicio", reserva_base.inicio)
         fin_nuevo = cambios.get("fin", reserva_base.fin)
         for recurso_id in ids_nuevos - ids_actuales:
@@ -498,6 +506,95 @@ def api_actualizar_reserva_grupo(grupo_id):
 
     actualizadas = Reserva.query.filter_by(grupo_id=grupo.id).order_by(Reserva.id).all()
     return jsonify([_serializar_reserva(reserva) for reserva in actualizadas])
+
+
+@bp.route("/api/reservas/grupo/<int:grupo_id>/confirmar", methods=["POST"])
+def api_confirmar_reserva_grupo(grupo_id):
+    """La CPA aprueba los activos de una reserva que esperaban su
+    confirmación (estado 'pendiente') y se le avisa al estudiante por
+    WhatsApp.
+
+    El cambio de estado se guarda antes de enviar y no depende del envío: si
+    WhatsApp no está conectado, la reserva queda confirmada igual y la
+    respuesta lo dice (`notificado: false`) para que el dashboard advierta
+    que hay que avisarle por otro medio."""
+    grupo = ReservaGrupo.query.get_or_404(grupo_id)
+    reservas = _reservas_del_grupo(grupo.id)
+    pendientes = [r for r in reservas if r.estado == recursos_service.ESTADO_PENDIENTE]
+    if not pendientes:
+        return jsonify({"error": "Esta reserva no tiene activos pendientes de confirmación."}), 400
+
+    for reserva in pendientes:
+        reserva.estado = "confirmada"
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        return jsonify({"error": _error_integridad_reserva(exc)}), 400
+
+    texto = recursos_service.mensaje_reserva_confirmada(reservas)
+    enviado = _avisar_estudiante(reservas[0].usuario, texto, "confirmacion_cpa")
+    return jsonify({
+        "reservas": [_serializar_reserva(r) for r in reservas],
+        "notificado": enviado,
+    })
+
+
+@bp.route("/api/reservas/<int:reserva_id>/<any(confirmar, denegar):decision>", methods=["POST"])
+def api_decidir_reserva(reserva_id, decision):
+    """Confirma o deniega un solo activo pendiente de una reserva (un botón
+    por activo en el modal) y le avisa al estudiante qué decidió la CPA y
+    cómo quedó el resto (recursos_service.mensaje_decision_cpa).
+
+    Denegar deja la línea 'denegada': el activo queda libre en ese horario y
+    deja de contar como parte de la reserva, pero la fila se conserva para
+    saber qué se negó. Igual que al confirmar la reserva completa, el cambio
+    se guarda aunque el WhatsApp no salga."""
+    reserva = Reserva.query.get_or_404(reserva_id)
+    if reserva.estado != recursos_service.ESTADO_PENDIENTE:
+        return jsonify({"error": "Ese activo ya no está pendiente de confirmación."}), 400
+
+    reserva.estado = "confirmada" if decision == "confirmar" else recursos_service.ESTADO_DENEGADA
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        return jsonify({"error": _error_integridad_reserva(exc)}), 400
+
+    reservas = _reservas_del_grupo(reserva.grupo_id)
+    decidida = next(r for r in reservas if r.id == reserva.id)
+    texto = recursos_service.mensaje_decision_cpa(decidida, reservas)
+    intent = "confirmacion_cpa" if decision == "confirmar" else "denegacion_cpa"
+    enviado = _avisar_estudiante(decidida.usuario, texto, intent)
+    return jsonify({
+        "reservas": [_serializar_reserva(r) for r in reservas],
+        "notificado": enviado,
+    })
+
+
+def _reservas_del_grupo(grupo_id: int) -> list[Reserva]:
+    return (
+        Reserva.query.options(
+            joinedload(Reserva.usuario), joinedload(Reserva.recurso), joinedload(Reserva.grupo)
+        )
+        .filter_by(grupo_id=grupo_id)
+        .order_by(Reserva.id)
+        .all()
+    )
+
+
+def _avisar_estudiante(usuario: Usuario, texto: str, intent: str) -> bool:
+    """Le escribe al estudiante sin un mensaje suyo al que responder (ver
+    whatsapp_client.jid_de) y lo deja en la auditoría como cualquier mensaje
+    del bot: así el ack de entrega de Baileys (/webhook/ack) lo encuentra por
+    mensaje_id. Devuelve si Baileys aceptó el envío."""
+    enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(whatsapp_client.jid_de(usuario), texto)
+    guardrails.registrar_interaccion(
+        usuario.telefono_wa, None, intent, texto, permitido=True,
+        mensaje_id=mensaje_id,
+        estado_envio="pendiente" if enviado else "error_http",
+    )
+    return enviado
 
 
 @bp.route("/api/reservas/grupo/<int:grupo_id>", methods=["DELETE"])

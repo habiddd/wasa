@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react"
-import { Pencil, Plus, Trash2 } from "lucide-react"
+import { Check, Pencil, Plus, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -26,26 +26,70 @@ import {
   actualizarReserva,
   actualizarReservaGrupo,
   actualizarReservasBloque,
+  confirmarReservaGrupo,
+  decidirReserva,
   eliminarReservaGrupo,
   type CambiosReserva,
   type EstadoReserva,
   type Recurso,
+  type Sesion,
   type TipoUso,
 } from "@/lib/api"
 
 import {
   aInputLocal,
   desdeInputLocal,
-  estiloDe,
   etiquetaEvento,
   etiquetaNumeros,
   etiquetaReserva,
   fechaHora,
   type EventoCalendario,
 } from "./calendario-utils"
+import { EstadoEventoBadge, EstadoReservaBadge } from "./EstadoBadge"
 import { IconoTipo } from "./IconoTipo"
 
-const ESTADOS: EstadoReserva[] = ["confirmada", "completada", "cancelada", "no_show"]
+const ESTADOS: EstadoReserva[] = [
+  "confirmada",
+  "pendiente",
+  "completada",
+  "cancelada",
+  "denegada",
+  "no_show",
+]
+
+/** Activos de la reserva que esperan la confirmación de la CPA, sin repetir modelo. */
+function nombresPendientes(evento: EventoCalendario) {
+  return [
+    ...new Set(evento.reservas.filter((r) => r.estado === "pendiente").map(etiquetaReserva)),
+  ]
+}
+
+type AccionPendiente = "confirmar" | "denegar"
+
+/** Lo que espera el diálogo: un activo pendiente, o todos a la vez (reserva null). */
+type Decision = { reserva: Sesion | null; accion: AccionPendiente }
+
+function textoDecision(evento: EventoCalendario, { reserva, accion }: Decision) {
+  const numero = etiquetaNumeros(evento)
+  if (!reserva) {
+    const pendientes = nombresPendientes(evento)
+    return {
+      titulo: `¿Confirmar todo lo pendiente de la reserva ${numero}?`,
+      descripcion: `Se ${pendientes.length === 1 ? "confirmará" : "confirmarán"} ${pendientes.join(", ")} y se le enviará un WhatsApp a ${evento.usuarioNombre} avisándole que su reserva quedó confirmada.`,
+    }
+  }
+  const nombre = etiquetaReserva(reserva)
+  if (accion === "confirmar") {
+    return {
+      titulo: `¿Confirmar ${nombre}?`,
+      descripcion: `Queda confirmado en la reserva ${numero} y se le enviará un WhatsApp a ${evento.usuarioNombre} avisándole.`,
+    }
+  }
+  return {
+    titulo: `¿Denegar ${nombre}?`,
+    descripcion: `Sale de la reserva ${numero}, queda libre en ese horario para otra persona y se le enviará un WhatsApp a ${evento.usuarioNombre} avisándole que la CPA no aprobó el préstamo.`,
+  }
+}
 
 function duracion(inicio: Date, fin: Date) {
   const minutos = Math.round((fin.getTime() - inicio.getTime()) / 60000)
@@ -68,7 +112,16 @@ function Dato({ etiqueta, children }: { etiqueta: string; children: ReactNode })
   )
 }
 
-function Detalle({ evento, recursos }: { evento: EventoCalendario; recursos: Recurso[] }) {
+function Detalle({
+  evento,
+  recursos,
+  onDecidir,
+}: {
+  evento: EventoCalendario
+  recursos: Recurso[]
+  /** Botones Confirmar / Denegar de cada activo pendiente. */
+  onDecidir: (reserva: Sesion, accion: AccionPendiente) => void
+}) {
   const lineas = evento.reservas.map((reserva) => ({
     reserva,
     padreId: recursos.find((recurso) => recurso.id === reserva.recurso_id)?.padre_id ?? null,
@@ -87,8 +140,10 @@ function Detalle({ evento, recursos }: { evento: EventoCalendario; recursos: Rec
     const { reserva } = linea
     return (
       <li key={reserva.id}>
+        {/* flex-wrap: en pantallas angostas los botones bajan a su propia
+            línea en vez de dejar el nombre en tres letras. */}
         <div
-          className="flex items-center justify-between gap-2"
+          className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 py-0.5"
           style={{ paddingLeft: `${nivel * 1.25}rem` }}
         >
           <span className="flex min-w-0 items-center gap-1.5">
@@ -98,7 +153,28 @@ function Detalle({ evento, recursos }: { evento: EventoCalendario; recursos: Rec
             />
             <span className="truncate">{etiquetaReserva(reserva)}</span>
           </span>
-          {evento.estadosMixtos && <Badge variant={estiloDe(reserva.estado).badge}>{reserva.estado}</Badge>}
+          <span className="ml-auto flex items-center gap-1.5">
+            {(evento.estadosMixtos || reserva.estado === "pendiente") && (
+              <EstadoReservaBadge estado={reserva.estado} />
+            )}
+            {reserva.estado === "pendiente" && (
+              <>
+                <Button size="xs" variant="outline" onClick={() => onDecidir(reserva, "confirmar")}>
+                  <Check />
+                  Confirmar
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => onDecidir(reserva, "denegar")}
+                >
+                  <X />
+                  Denegar
+                </Button>
+              </>
+            )}
+          </span>
         </div>
         {hijosDe(reserva.recurso_id).map((hijo) => renderLinea(hijo, nivel + 1))}
       </li>
@@ -108,12 +184,18 @@ function Detalle({ evento, recursos }: { evento: EventoCalendario; recursos: Rec
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
-        <Badge variant={estiloDe(evento.estado).badge}>
-          {evento.estadosMixtos ? "estados mixtos" : evento.estado}
-        </Badge>
+        <EstadoEventoBadge evento={evento} />
         <Badge variant="outline">{evento.reservas[0].canal_origen}</Badge>
         <Badge variant="outline">{evento.usuarioRol}</Badge>
       </div>
+
+      {evento.porConfirmar && (
+        <p className="rounded-md border border-dashed border-warning bg-warning/5 px-3 py-2 text-sm">
+          {evento.parcial && "Reserva parcial. "}Esperan la confirmación de la CPA:{" "}
+          {nombresPendientes(evento).join(", ")}. Confirma o deniega cada uno en la lista de
+          abajo; el estudiante recibe un WhatsApp con cada decisión.
+        </p>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Dato etiqueta="Inicio">{fechaHora(evento.inicio)}</Dato>
@@ -168,7 +250,13 @@ function FormularioEdicion({
   const [recursoIds, setRecursoIds] = useState(() => evento.reservas.map((r) => r.recurso_id))
   const [inicio, setInicio] = useState(aInputLocal(evento.inicio))
   const [fin, setFin] = useState(aInputLocal(evento.fin))
-  const [estado, setEstado] = useState<EstadoReserva>(evento.estado)
+  // Con estados mixtos (ej. una reserva parcial) no hay un estado único que
+  // mostrar: el Select arranca vacío y solo se envía si se elige uno. Si no,
+  // guardar otro cambio (el horario, por ejemplo) pisaba el estado de cada
+  // línea y confirmaba lo pendiente sin avisarle al estudiante.
+  const [estado, setEstado] = useState<EstadoReserva | "">(
+    evento.estadosMixtos ? "" : evento.estado
+  )
   const [tipoUso, setTipoUso] = useState<TipoUso>(primera.tipo_uso)
   const [nrc, setNrc] = useState(primera.nrc ?? "")
   const [guardando, setGuardando] = useState(false)
@@ -294,7 +382,7 @@ function FormularioEdicion({
     const cambios: CambiosReserva & { recurso_ids?: number[]; tipo_uso?: TipoUso; nrc?: string | null } = {}
     if (nuevoInicio.getTime() !== evento.inicio.getTime()) cambios.inicio = nuevoInicio.toISOString()
     if (nuevoFin.getTime() !== evento.fin.getTime()) cambios.fin = nuevoFin.toISOString()
-    if (estado !== evento.estado || evento.estadosMixtos) cambios.estado = estado
+    if (estado && (estado !== evento.estado || evento.estadosMixtos)) cambios.estado = estado
     const idsOriginales = evento.reservas.map((r) => r.recurso_id).sort((a, b) => a - b)
     const idsSeleccionados = [...recursoIds].sort((a, b) => a - b)
     const cambiaronActivos =
@@ -423,7 +511,7 @@ function FormularioEdicion({
         <Label htmlFor="reserva-estado">Estado</Label>
         <Select value={estado} onValueChange={(v) => setEstado(v as EstadoReserva)}>
           <SelectTrigger id="reserva-estado" className="w-full">
-            <SelectValue />
+            <SelectValue placeholder="Sin cambios (estados mixtos)" />
           </SelectTrigger>
           <SelectContent>
             {ESTADOS.map((e) => (
@@ -433,6 +521,12 @@ function FormularioEdicion({
             ))}
           </SelectContent>
         </Select>
+        {evento.porConfirmar && (
+          <p className="text-xs text-muted-foreground">
+            Para confirmar o denegar lo pendiente y avisarle al estudiante por WhatsApp, usa los
+            botones de cada activo en el detalle.
+          </p>
+        )}
       </div>
 
       {evento.numeros.length === 1 && (
@@ -465,7 +559,7 @@ function FormularioEdicion({
       )}
 
       <p className="text-xs text-muted-foreground">
-        Horarios en hora local de la CPA (America/Bogota). Dos reservas confirmadas del mismo activo no pueden cruzarse.
+        Horarios en hora local de la CPA (America/Bogota). Dos reservas confirmadas o pendientes del mismo activo no pueden cruzarse.
       </p>
 
       <DialogFooter>
@@ -499,6 +593,49 @@ function Contenido({
   const [editando, setEditando] = useState(false)
   const [confirmandoEliminacion, setConfirmandoEliminacion] = useState(false)
   const [eliminando, setEliminando] = useState(false)
+  // La decisión se conserva al cerrar el diálogo (solo se baja `abierto`)
+  // para que el texto no desaparezca durante la animación de salida.
+  const [decision, setDecision] = useState<Decision | null>(null)
+  const [dialogoDecision, setDialogoDecision] = useState(false)
+  const [decidiendo, setDecidiendo] = useState(false)
+
+  // "Confirmar todo" solo si hay más de un activo pendiente: con uno, sus
+  // botones propios ya lo cubren. Va por número de reserva; las pendientes
+  // siempre tienen uno (las crea el bot, ver recursos_service.crear_reservas_grupo).
+  const lineasPendientes = evento.reservas.filter((r) => r.estado === "pendiente")
+  const puedeConfirmarTodo = lineasPendientes.length > 1 && evento.numeros.length === 1
+
+  function pedirDecision(nueva: Decision) {
+    setDecision(nueva)
+    setDialogoDecision(true)
+  }
+
+  async function aplicarDecision() {
+    if (!decision) return
+    const { reserva, accion } = decision
+    setDecidiendo(true)
+    try {
+      const { notificado } = reserva
+        ? await decidirReserva(reserva.id, accion)
+        : await confirmarReservaGrupo(evento.numeros[0])
+      setDialogoDecision(false)
+      const hecho = reserva
+        ? `${etiquetaReserva(reserva)} ${accion === "confirmar" ? "confirmado" : "denegado"}.`
+        : "Reserva confirmada."
+      if (notificado) {
+        toast.success(`${hecho} Se le avisó a ${evento.usuarioNombre} por WhatsApp.`)
+      } else {
+        toast.warning(`${hecho} No se pudo enviar el WhatsApp: avísale al estudiante por otro medio.`)
+      }
+      onGuardado()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDecidiendo(false)
+    }
+  }
+
+  const texto = decision ? textoDecision(evento, decision) : null
 
   function solicitarEliminacion() {
     if (evento.numeros.length !== 1) {
@@ -550,7 +687,11 @@ function Contenido({
         />
       ) : (
         <>
-          <Detalle evento={evento} recursos={recursos} />
+          <Detalle
+            evento={evento}
+            recursos={recursos}
+            onDecidir={(reserva, accion) => pedirDecision({ reserva, accion })}
+          />
           <DialogFooter>
             <Button size="sm" variant="destructive" onClick={solicitarEliminacion}>
               <Trash2 />
@@ -560,9 +701,50 @@ function Contenido({
               <Pencil />
               Editar reserva
             </Button>
+            {puedeConfirmarTodo && (
+              <Button size="sm" onClick={() => pedirDecision({ reserva: null, accion: "confirmar" })}>
+                <Check />
+                Confirmar todo
+              </Button>
+            )}
           </DialogFooter>
         </>
       )}
+
+      <Dialog
+        open={dialogoDecision}
+        onOpenChange={(abierto) => {
+          if (!decidiendo) setDialogoDecision(abierto)
+        }}
+      >
+        <DialogContent showCloseButton={false} className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{texto?.titulo}</DialogTitle>
+            <DialogDescription>{texto?.descripcion}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDialogoDecision(false)}
+              disabled={decidiendo}
+            >
+              Cancelar
+            </Button>
+            {decision?.accion === "denegar" ? (
+              <Button type="button" variant="destructive" onClick={aplicarDecision} disabled={decidiendo}>
+                <X />
+                {decidiendo ? "Guardando…" : "Denegar y avisar"}
+              </Button>
+            ) : (
+              <Button type="button" onClick={aplicarDecision} disabled={decidiendo}>
+                <Check />
+                {decidiendo ? "Guardando…" : "Confirmar y avisar"}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={confirmandoEliminacion} onOpenChange={setConfirmandoEliminacion}>
         <DialogContent showCloseButton={false} className="sm:max-w-sm">

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -17,27 +16,32 @@ import {
   ZONA_CPA,
   agruparEnEventos,
   diaDe,
-  estiloDe,
   etiquetaEvento,
   horaCompacta,
   mismoDia,
   ubicarReservas,
   type EventoCalendario,
 } from "@/features/calendario/calendario-utils"
+import { EstadoEventoBadge } from "@/features/calendario/EstadoBadge"
 import { IconoTipo } from "@/features/calendario/IconoTipo"
 import { ReservaDetalle } from "@/features/calendario/ReservaDetalle"
 import { usePolling } from "@/hooks/use-polling"
 import { fetchSesiones, type EstadoReserva } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 const FILTRO_STORAGE_KEY = "dashboard-cpa-reservas-estado"
 
-type FiltroEstado = "todas" | EstadoReserva
+// "por_confirmar" no es un estado de línea: junta las reservas que tienen
+// algún activo pendiente de la CPA (parciales o pendientes del todo).
+type FiltroEstado = "todas" | "por_confirmar" | EstadoReserva
 
 const FILTROS: { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: "todas", etiqueta: "Todas" },
+  { valor: "por_confirmar", etiqueta: "Por confirmar" },
   { valor: "confirmada", etiqueta: "Confirmadas" },
   { valor: "completada", etiqueta: "Completadas" },
   { valor: "cancelada", etiqueta: "Canceladas" },
+  { valor: "denegada", etiqueta: "Denegadas" },
   { valor: "no_show", etiqueta: "No show" },
 ]
 
@@ -54,6 +58,10 @@ function filtroInicial(): FiltroEstado {
 // Más recientes arriba: las próximas y las de hoy son las que se consultan.
 function porInicioDesc(a: EventoCalendario, b: EventoCalendario) {
   return b.inicio.getTime() - a.inicio.getTime()
+}
+
+function porInicioAsc(a: EventoCalendario, b: EventoCalendario) {
+  return a.inicio.getTime() - b.inicio.getTime()
 }
 
 // --- Formato corto -------------------------------------------------------
@@ -94,14 +102,6 @@ function creada(evento: EventoCalendario) {
   return valor ? fechaCorta(new Date(valor)) : "-"
 }
 
-function EstadoBadge({ evento }: { evento: EventoCalendario }) {
-  return (
-    <Badge variant={estiloDe(evento.estado).badge}>
-      {evento.estadosMixtos ? "estados mixtos" : evento.estado}
-    </Badge>
-  )
-}
-
 function Activos({ evento }: { evento: EventoCalendario }) {
   return (
     <span className="flex items-start gap-1.5">
@@ -135,7 +135,7 @@ function ListaReservas({ eventos, onSeleccionar }: PropsVista) {
             >
               <span className="flex items-start justify-between gap-2">
                 <Activos evento={evento} />
-                <EstadoBadge evento={evento} />
+                <EstadoEventoBadge evento={evento} />
               </span>
               <span className="block text-xs text-muted-foreground">
                 N.º {numero(evento)} · {evento.usuarioNombre} · {uso(evento)}
@@ -204,7 +204,7 @@ function TablaReservas({ eventos, onSeleccionar }: PropsVista) {
                   <p className="text-xs text-muted-foreground">{horas}</p>
                 </TableCell>
                 <TableCell>
-                  <EstadoBadge evento={evento} />
+                  <EstadoEventoBadge evento={evento} />
                 </TableCell>
                 <TableCell className="hidden text-muted-foreground @5xl:table-cell">
                   {creada(evento)}
@@ -235,18 +235,24 @@ export function ReservasPanel() {
   // Igual que el calendario, se filtra por línea antes de agrupar: una
   // reserva con estados mixtos aparece en cada filtro con las líneas que
   // le corresponden.
-  const eventosPorFiltro = useMemo(
-    () =>
-      new Map(
-        FILTROS.map(({ valor }) => [
-          valor,
-          agruparEnEventos(
-            valor === "todas" ? ubicadas : ubicadas.filter((u) => u.reserva.estado === valor)
-          ).sort(porInicioDesc),
-        ])
-      ),
-    [ubicadas]
-  )
+  const eventosPorFiltro = useMemo(() => {
+    const porFiltro = new Map(
+      FILTROS.filter(({ valor }) => valor !== "por_confirmar").map(({ valor }) => [
+        valor,
+        agruparEnEventos(
+          valor === "todas" ? ubicadas : ubicadas.filter((u) => u.reserva.estado === valor)
+        ).sort(porInicioDesc),
+      ])
+    )
+    // "Por confirmar" es una lista de pendientes por atender: va la reserva
+    // completa (para ver también qué quedó confirmado) y la más próxima
+    // primero.
+    porFiltro.set(
+      "por_confirmar",
+      (porFiltro.get("todas") ?? []).filter((e) => e.porConfirmar).sort(porInicioAsc)
+    )
+    return porFiltro
+  }, [ubicadas])
 
   const eventos = eventosPorFiltro.get(filtro) ?? []
 
@@ -290,14 +296,24 @@ export function ReservasPanel() {
             gana a un h-auto normal, y al envolverse en pantallas angostas la
             segunda fila de filtros se salía encima de la lista. */}
         <TabsList className="h-auto! max-w-full flex-wrap justify-start">
-          {FILTROS.map(({ valor, etiqueta }) => (
-            <TabsTrigger key={valor} value={valor} className="flex-none px-2.5">
-              {etiqueta}
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {data ? eventosPorFiltro.get(valor)?.length ?? 0 : "–"}
-              </span>
-            </TabsTrigger>
-          ))}
+          {FILTROS.map(({ valor, etiqueta }) => {
+            const cantidad = eventosPorFiltro.get(valor)?.length ?? 0
+            // Las que esperan a la CPA resaltan para que no se queden sin atender.
+            const resaltar = valor === "por_confirmar" && cantidad > 0
+            return (
+              <TabsTrigger key={valor} value={valor} className="flex-none px-2.5">
+                {etiqueta}
+                <span
+                  className={cn(
+                    "text-xs tabular-nums",
+                    resaltar ? "font-semibold text-warning" : "text-muted-foreground"
+                  )}
+                >
+                  {data ? cantidad : "–"}
+                </span>
+              </TabsTrigger>
+            )
+          })}
         </TabsList>
       </Tabs>
 
@@ -315,12 +331,20 @@ export function ReservasPanel() {
 
       {data && eventos.length === 0 && (
         <p className="rounded-md border p-4 text-sm text-muted-foreground">
-          No hay reservas para este filtro.
+          {filtro === "por_confirmar"
+            ? "No hay reservas pendientes de confirmación."
+            : "No hay reservas para este filtro."}
         </p>
       )}
 
       {data && eventos.length > 0 && (
         <>
+          {filtro === "por_confirmar" && (
+            <p className="text-sm text-muted-foreground">
+              Abre una reserva para confirmar o denegar cada activo pendiente. El estudiante
+              recibe un WhatsApp con cada decisión.
+            </p>
+          )}
           <div className="@2xl:hidden">
             <ListaReservas eventos={eventos} onSeleccionar={seleccionar} />
           </div>

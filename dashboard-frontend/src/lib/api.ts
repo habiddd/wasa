@@ -104,7 +104,17 @@ export function actualizarUsuario(id: number, cambios: CambiosUsuario) {
 
 // --- Sesiones (reservas) -----------------------------------------------
 
-export type EstadoReserva = "confirmada" | "cancelada" | "completada" | "no_show"
+// "pendiente": el activo requiere confirmación y la CPA todavía no la da.
+// Una reserva con activos confirmados y pendientes a la vez es "parcial"
+// (ver calendario-utils, EventoCalendario.parcial). "denegada": la CPA no
+// aprobó ese activo y quedó libre.
+export type EstadoReserva =
+  | "confirmada"
+  | "pendiente"
+  | "denegada"
+  | "cancelada"
+  | "completada"
+  | "no_show"
 
 // Toda reserva es particular o para una asignatura; en ese caso lleva el
 // NRC (identificador de la asignatura que cursa el estudiante).
@@ -170,6 +180,24 @@ export function actualizarReservaGrupo(
 
 export function eliminarReservaGrupo(grupoId: number) {
   return request<void>(`/reservas/grupo/${grupoId}`, { method: "DELETE" })
+}
+
+// La CPA aprueba los activos pendientes y el backend le avisa al estudiante
+// por WhatsApp. `notificado` es false si el mensaje no salió: la reserva
+// queda confirmada igual.
+export function confirmarReservaGrupo(grupoId: number) {
+  return request<{ reservas: Sesion[]; notificado: boolean }>(
+    `/reservas/grupo/${grupoId}/confirmar`,
+    { method: "POST" }
+  )
+}
+
+// Confirma o deniega un solo activo pendiente. El backend le avisa al
+// estudiante qué se decidió y cómo quedó el resto de su reserva.
+export function decidirReserva(id: number, decision: "confirmar" | "denegar") {
+  return request<{ reservas: Sesion[]; notificado: boolean }>(`/reservas/${id}/${decision}`, {
+    method: "POST",
+  })
 }
 
 // Una reserva hecha para varios activos se edita como un bloque: el backend

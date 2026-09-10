@@ -35,7 +35,7 @@ def recursos_mas_usados():
             Reserva.recurso_id,
             func.count(Reserva.id).label("total"),
         )
-        .filter(Reserva.estado != "cancelada")
+        .filter(Reserva.estado.notin_(("cancelada", "denegada")))
         .group_by(Reserva.recurso_id)
         .order_by(func.count(Reserva.id).desc())
         .limit(10)

@@ -62,6 +62,19 @@ ZONA_HORARIA_CPA = ZoneInfo("America/Bogota")
 # se hacía con `activo=False` (ver models.py y postgres/init/02-schema.sql).
 ESTADO_DISPONIBLE = "disponible"
 MARGEN_INICIO_PASADO = timedelta(minutes=5)
+# Estado de `reservas.estado` de un activo con `requiere_confirmacion` que
+# la CPA todavía no aprueba (lo hace desde el dashboard, ver
+# routes/dashboard.api_confirmar_reserva_grupo). Una reserva con activos
+# confirmados y pendientes a la vez es una "reserva parcial".
+ESTADO_PENDIENTE = "pendiente"
+# Estados que apartan el activo en su horario. El pendiente también, si no
+# otro estudiante podría reservarlo mientras la CPA decide. Debe coincidir
+# con el WHERE del EXCLUDE reservas_no_solapamiento (postgres/init/02-schema.sql).
+ESTADOS_QUE_OCUPAN = ("confirmada", ESTADO_PENDIENTE)
+# La CPA le negó ese activo al estudiante (ver
+# routes/dashboard.api_decidir_reserva). No ocupa el activo: queda libre
+# para otra reserva en ese horario.
+ESTADO_DENEGADA = "denegada"
 
 
 def buscar_recursos_en_texto(texto: str) -> tuple[list[Recurso], bool]:
@@ -455,7 +468,7 @@ def _reserva_en_curso(recurso_id: int, ahora: datetime) -> Reserva | None:
     return (
         Reserva.query.filter(
             Reserva.recurso_id == recurso_id,
-            Reserva.estado == "confirmada",
+            Reserva.estado.in_(ESTADOS_QUE_OCUPAN),
             Reserva.inicio <= ahora,
             Reserva.fin > ahora,
         )
@@ -467,7 +480,7 @@ def _proxima_reserva(recurso_id: int, ahora: datetime) -> Reserva | None:
     return (
         Reserva.query.filter(
             Reserva.recurso_id == recurso_id,
-            Reserva.estado == "confirmada",
+            Reserva.estado.in_(ESTADOS_QUE_OCUPAN),
             Reserva.inicio > ahora,
         )
         .order_by(Reserva.inicio.asc())
@@ -601,7 +614,7 @@ def _reserva_solapada(recurso_id: int, inicio: datetime, fin: datetime) -> Reser
     return (
         Reserva.query.filter(
             Reserva.recurso_id == recurso_id,
-            Reserva.estado == "confirmada",
+            Reserva.estado.in_(ESTADOS_QUE_OCUPAN),
             Reserva.inicio < fin,
             Reserva.fin > inicio,
         )
@@ -750,8 +763,12 @@ def crear_reservas_grupo(
     """Inserta una reserva por cada recurso en `recursos`, todas ligadas al
     mismo ReservaGrupo y en una sola transacción -- si alguna choca al
     confirmar (la restricción EXCLUDE de Postgres sobre (recurso_id, rango
-    horario) para estado='confirmada', ver postgres/init/02-schema.sql), se
-    revierte todo el grupo en vez de dejar una reserva parcial del carrito.
+    horario) para ESTADOS_QUE_OCUPAN, ver postgres/init/02-schema.sql), se
+    revierte todo el grupo en vez de dejar solo una parte del carrito.
+
+    Cada activo con `requiere_confirmacion` nace 'pendiente' y el resto
+    'confirmada': si el carrito mezcla ambos, la reserva queda parcial hasta
+    que la CPA la confirme desde el dashboard.
     El chequeo de disponibilidad antes de llamar a esta función (ver
     `_resolver_disponibilidad_carrito` / `_unidad_libre_en_rango`) es solo
     para dar un mensaje más claro, no la garantía de consistencia.
@@ -769,7 +786,7 @@ def crear_reservas_grupo(
             recurso_id=recurso.id,
             inicio=inicio,
             fin=fin,
-            estado="confirmada",
+            estado=ESTADO_PENDIENTE if recurso.requiere_confirmacion else "confirmada",
             grupo_id=grupo.id,
         )
         for recurso in recursos
@@ -840,15 +857,121 @@ def _resolver_recurso_para_reserva(
     return None, candidatos, es_match_debil
 
 
-def _nota_requiere_confirmacion(recurso: Recurso) -> str:
-    """Línea aparte (no inline) para el mensaje de confirmación -- lleva el
-    nombre del activo porque puede haber más de uno en el carrito que
-    requiera confirmación, y sin el nombre no se sabría a cuál se refiere."""
-    return (
-        f"⚠ {recurso.nombre} requiere confirmación -- el equipo de la CPA te contactará para confirmar su préstamo."
-        if recurso.requiere_confirmacion
-        else ""
+def _estado_de_reserva_creada(unidades: list[Recurso]) -> tuple[str, str]:
+    """(título, aviso) de la factura final según cuántos activos esperan la
+    confirmación de la CPA (`requiere_confirmacion`, ver
+    `crear_reservas_grupo`): ninguno -> confirmada; algunos -> parcial;
+    todos -> pendiente. El aviso va en líneas aparte y nombra los activos
+    (una vez por modelo, aunque se reserven varias unidades del mismo): con
+    varios en el carrito hace falta saber cuál espera y cuál no."""
+    pendientes = list(dict.fromkeys(u.nombre for u in unidades if u.requiere_confirmacion))
+    if not pendientes:
+        return "RESERVA CONFIRMADA", ""
+
+    cierre = "Te escribiré por aquí apenas la CPA la confirme."
+    confirmados = list(dict.fromkeys(u.nombre for u in unidades if not u.requiere_confirmacion))
+    if confirmados:
+        return "RESERVA PARCIAL", (
+            f"✅ Confirmado: {', '.join(confirmados)}\n"
+            f"⏳ Pendiente de confirmación: {', '.join(pendientes)}\n"
+            f"El equipo de la CPA debe aprobar el préstamo de lo pendiente. {cierre}"
+        )
+    return "RESERVA PENDIENTE DE CONFIRMACIÓN", (
+        f"⏳ El equipo de la CPA debe aprobar el préstamo de: {', '.join(pendientes)}. {cierre}"
     )
+
+
+def mensaje_reserva_confirmada(reservas: list[Reserva]) -> str:
+    """WhatsApp para el estudiante cuando la CPA confirma desde el dashboard
+    lo que tenía pendiente (ver routes/dashboard.api_confirmar_reserva_grupo).
+    Mismo formato de factura que `_crear_reserva_desde_wizard`, con el número
+    de reserva para que la relacione con la que le quedó parcial o pendiente.
+    Las líneas canceladas de la reserva no se listan."""
+    vigentes = [r for r in reservas if r.estado in ESTADOS_QUE_OCUPAN] or reservas
+    cantidades: dict[str, int] = {}
+    for reserva in vigentes:
+        cantidades[reserva.recurso.nombre] = cantidades.get(reserva.recurso.nombre, 0) + 1
+    activos = "\n".join(
+        f"*{nombre}*" + (f" ×{cantidad}" if cantidad > 1 else "")
+        for nombre, cantidad in cantidades.items()
+    )
+    primera = vigentes[0]
+    inicio_local = primera.inicio.astimezone(ZONA_HORARIA_CPA)
+    fin_local = primera.fin.astimezone(ZONA_HORARIA_CPA)
+    return (
+        "*RESERVA CONFIRMADA*\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"{activos}\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"N.º de reserva: {primera.grupo_id}\n"
+        f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
+        f"Fin: {_formatear_fecha_hora(fin_local)}\n"
+        f"{_DIVISOR_FACTURA}\n"
+        f"{_cierre_confirmacion(reservas)}"
+    )
+
+
+def _cierre_confirmacion(reservas: list[Reserva]) -> str:
+    denegadas = [r for r in reservas if r.estado == ESTADO_DENEGADA]
+    if not denegadas:
+        return "✅ El equipo de la CPA confirmó tu reserva completa."
+    return (
+        "✅ El equipo de la CPA confirmó tu reserva. No incluye "
+        f"{_nombres_con_cantidad(denegadas)}, que no se aprobó."
+    )
+
+
+def _nombres_con_cantidad(reservas: list[Reserva]) -> str:
+    """"iMac 24 M3 ×3, Trípode Manfrotto": un nombre por modelo, en el orden
+    en que aparecen."""
+    cantidades: dict[str, int] = {}
+    for reserva in reservas:
+        cantidades[reserva.recurso.nombre] = cantidades.get(reserva.recurso.nombre, 0) + 1
+    return ", ".join(
+        nombre + (f" ×{cantidad}" if cantidad > 1 else "") for nombre, cantidad in cantidades.items()
+    )
+
+
+def mensaje_decision_cpa(decidida: Reserva, reservas: list[Reserva]) -> str:
+    """WhatsApp para el estudiante cuando la CPA confirma o deniega UN activo
+    pendiente desde el dashboard (ver routes/dashboard.api_decidir_reserva).
+    `decidida` es esa línea, ya con su estado nuevo; `reservas`, todas las del
+    mismo número de reserva. Dice qué se decidió y cómo quedó el resto, para
+    que cada mensaje se entienda solo aunque lleguen varios seguidos.
+
+    Si con esta confirmación ya no queda nada pendiente, se manda la factura
+    completa de `mensaje_reserva_confirmada`: es el cierre que el estudiante
+    estaba esperando."""
+    pendientes = [r for r in reservas if r.estado == ESTADO_PENDIENTE]
+    vigentes = [r for r in reservas if r.estado in ESTADOS_QUE_OCUPAN]
+    if decidida.estado == "confirmada" and not pendientes:
+        return mensaje_reserva_confirmada(reservas)
+
+    inicio_local = decidida.inicio.astimezone(ZONA_HORARIA_CPA)
+    referencia = f"de tu reserva N.º {decidida.grupo_id} ({_formatear_fecha_hora(inicio_local)})"
+    if decidida.estado == "confirmada":
+        lineas = [f"✅ La CPA confirmó el préstamo de *{decidida.recurso.nombre}* {referencia}."]
+    else:
+        lineas = [
+            f"❌ La CPA no aprobó el préstamo de *{decidida.recurso.nombre}* {referencia}, "
+            "así que no hace parte de la reserva."
+        ]
+
+    if not vigentes:
+        lineas.append(
+            "Como no le quedan otros activos, la reserva queda anulada. Si necesitas otro equipo, escríbeme."
+        )
+        return "\n".join(lineas)
+
+    otras_confirmadas = [r for r in reservas if r.estado == "confirmada" and r.id != decidida.id]
+    if otras_confirmadas:
+        lineas.append(f"✅ Sigue confirmado: {_nombres_con_cantidad(otras_confirmadas)}.")
+    if pendientes:
+        lineas.append(
+            f"⏳ Aún falta la confirmación de: {_nombres_con_cantidad(pendientes)}. "
+            "Te escribiré cuando la CPA decida."
+        )
+    return "\n".join(lineas)
 
 
 PALABRAS_CANCELAR = {"no", "cancelar", "cancela", "cerrar"}
@@ -1838,22 +1961,23 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
 
     inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
     fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
-    # dict.fromkeys: una sola nota por modelo aunque se reserven varias
-    # unidades fijas del mismo (ej. las 3 iMac de una sala).
-    notas_confirmacion = list(dict.fromkeys(_nota_requiere_confirmacion(unidad) for unidad in unidades if unidad.requiere_confirmacion))
+    titulo, aviso_confirmacion = _estado_de_reserva_creada(unidades)
+    # El número va en la factura para que el estudiante relacione con esta
+    # reserva el aviso que le llega cuando la CPA confirma lo pendiente.
     mensaje = (
-        "*RESERVA CONFIRMADA*\n"
+        f"*{titulo}*\n"
         f"{_DIVISOR_FACTURA}\n"
         f"{_lineas_carrito(carrito_final)}\n"
         f"{_DIVISOR_FACTURA}\n"
+        f"N.º de reserva: {reservas[0].grupo_id}\n"
         f"Reservado por: {usuario.nombre}\n"
         f"{_linea_tipo_uso(wizard)}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
     )
-    if notas_confirmacion:
-        mensaje += "\n" + "\n".join(notas_confirmacion)
+    if aviso_confirmacion:
+        mensaje += "\n" + aviso_confirmacion
     return mensaje, sesion_limpia
 
 
@@ -2619,16 +2743,17 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
 
 
 def _reservas_cancelables_de(usuario_id: int) -> list[list[Reserva]]:
-    """Reservas confirmadas y no terminadas (en curso o futuras) del usuario
-    dado, agrupadas por `grupo_id` -- un padre y sus accesorios se cancelan
-    juntos, como se reservaron juntos. Una reserva de antes de que existiera
-    el carrito (`grupo_id IS NULL`) se trata como su propio bundle de 1.
-    Ordenadas por fecha de inicio, para que la más próxima sea la opción 1."""
+    """Reservas vigentes (confirmadas o pendientes de la CPA) y no terminadas
+    (en curso o futuras) del usuario dado, agrupadas por `grupo_id` -- un
+    padre y sus accesorios se cancelan juntos, como se reservaron juntos.
+    Una reserva de antes de que existiera el carrito (`grupo_id IS NULL`) se
+    trata como su propio bundle de 1. Ordenadas por fecha de inicio, para
+    que la más próxima sea la opción 1."""
     ahora = datetime.now(timezone.utc)
     filas = (
         Reserva.query.filter(
             Reserva.usuario_id == usuario_id,
-            Reserva.estado == "confirmada",
+            Reserva.estado.in_(ESTADOS_QUE_OCUPAN),
             Reserva.fin > ahora,
         )
         .order_by(Reserva.inicio)
@@ -2657,10 +2782,15 @@ def _agrupar_por_reserva_grupo(filas: list[Reserva]) -> list[list[Reserva]]:
     return bundles
 
 
+def _linea_reserva_cancelable(reserva: Reserva) -> str:
+    pendiente = " _(pendiente de confirmación)_" if reserva.estado == ESTADO_PENDIENTE else ""
+    return f"    • {reserva.recurso.nombre}{pendiente}"
+
+
 def _mensaje_elegir_reserva_a_cancelar(bundles: list[list[Reserva]]) -> str:
     bloques = []
     for i, bundle in enumerate(bundles, start=1):
-        nombres = "\n".join(f"    • {r.recurso.nombre}" for r in bundle)
+        nombres = "\n".join(_linea_reserva_cancelable(r) for r in bundle)
         inicio_local = bundle[0].inicio.astimezone(ZONA_HORARIA_CPA)
         fin_local = bundle[0].fin.astimezone(ZONA_HORARIA_CPA)
         bloques.append(
@@ -2689,7 +2819,7 @@ OPCIONES_CONFIRMAR_CANCELACION = [
 def _mensaje_confirmar_cancelacion(bundles: list[list[Reserva]]) -> str:
     bloques = []
     for bundle in bundles:
-        nombres = "\n".join(f"    • {r.recurso.nombre}" for r in bundle)
+        nombres = "\n".join(_linea_reserva_cancelable(r) for r in bundle)
         inicio_local = bundle[0].inicio.astimezone(ZONA_HORARIA_CPA)
         fin_local = bundle[0].fin.astimezone(ZONA_HORARIA_CPA)
         bloques.append(
@@ -2745,7 +2875,7 @@ def _continuar_cancelacion(
         filas = Reserva.query.filter(
             Reserva.id.in_(ids_elegidos),
             Reserva.usuario_id == usuario.id,
-            Reserva.estado == "confirmada",
+            Reserva.estado.in_(ESTADOS_QUE_OCUPAN),
         ).all()
         if not filas:
             return (
@@ -2777,7 +2907,7 @@ def _continuar_cancelacion(
         actualizadas = Reserva.query.filter(
             Reserva.id.in_(wizard["reserva_ids"]),
             Reserva.usuario_id == usuario.id,
-            Reserva.estado == "confirmada",
+            Reserva.estado.in_(ESTADOS_QUE_OCUPAN),
         ).update({"estado": "cancelada"}, synchronize_session=False)
         db.session.commit()
 

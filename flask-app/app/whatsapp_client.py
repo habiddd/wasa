@@ -16,6 +16,16 @@ def _headers():
     }
 
 
+def jid_de(usuario) -> str:
+    """JID para escribirle a un usuario sin un mensaje suyo al que responder
+    (ej. el aviso de que la CPA confirmó su reserva). Usa el del último
+    mensaje que mandó (Usuario.jid_wa). Si no hay, porque no ha escrito
+    desde que existe esa columna, lo rearma con el número: sirve para las
+    cuentas "@s.whatsapp.net" pero no para las "@lid" (ver
+    enviar_mensaje_texto)."""
+    return usuario.jid_wa or f"{usuario.telefono_wa}@s.whatsapp.net"
+
+
 def enviar_mensaje_texto(jid_destino: str, texto: str, timeout: int = 10) -> tuple[bool, str | None]:
     """
     jid_destino: JID completo tal cual llegó en el webhook entrante (ej:

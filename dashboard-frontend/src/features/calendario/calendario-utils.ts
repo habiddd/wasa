@@ -173,13 +173,25 @@ export type EventoCalendario = {
   /** Estado con el que se pinta el evento; ver PRIORIDAD_ESTADO. */
   estado: EstadoReserva
   estadosMixtos: boolean
+  /** Alguna línea espera la confirmación de la CPA (estado "pendiente"). */
+  porConfirmar: boolean
+  /** Reserva parcial: mezcla activos confirmados y pendientes. */
+  parcial: boolean
   /** null cuando el evento mezcla activos y lugares. */
   tipo: TipoRecurso | null
 }
 
 // Con qué estado se pinta un evento cuyas líneas no coinciden: manda el más
-// vigente, porque es el que le importa a quien mira el calendario.
-const PRIORIDAD_ESTADO: EstadoReserva[] = ["confirmada", "no_show", "completada", "cancelada"]
+// vigente, porque es el que le importa a quien mira el calendario. Pendiente
+// va primero: una reserva parcial es algo que la CPA todavía tiene que atender.
+const PRIORIDAD_ESTADO: EstadoReserva[] = [
+  "pendiente",
+  "confirmada",
+  "no_show",
+  "completada",
+  "cancelada",
+  "denegada",
+]
 
 /** Junta en un solo evento las líneas de una misma reserva y horario. */
 export function agruparEnEventos(reservas: ReservaUbicada[]): EventoCalendario[] {
@@ -213,6 +225,8 @@ export function agruparEnEventos(reservas: ReservaUbicada[]): EventoCalendario[]
       numeros: [...new Set(lineas.map((l) => l.grupo_id).filter((n): n is number => n !== null))],
       estado: PRIORIDAD_ESTADO.find((e) => estados.has(e)) ?? primera.estado,
       estadosMixtos: estados.size > 1,
+      porConfirmar: estados.has("pendiente"),
+      parcial: estados.has("pendiente") && estados.has("confirmada"),
       tipo: tipos.size === 1 ? (primera.recurso_tipo ?? null) : null,
     })
   }
@@ -223,6 +237,12 @@ export function agruparEnEventos(reservas: ReservaUbicada[]): EventoCalendario[]
 export function etiquetaEvento(evento: EventoCalendario) {
   const primero = etiquetaReserva(evento.reservas[0])
   return evento.reservas.length > 1 ? `${primero} +${evento.reservas.length - 1}` : primero
+}
+
+/** Lo que dice el badge de estado de una reserva completa. */
+export function etiquetaEstadoEvento(evento: EventoCalendario) {
+  if (evento.parcial) return "parcial"
+  return evento.estadosMixtos ? "estados mixtos" : evento.estado
 }
 
 /** "N.º 8" o "N.º 8, 9" cuando el evento junta dos reservas del mismo horario. */
@@ -400,14 +420,28 @@ export const NOMBRES_DIA = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 // El color codifica el estado (mismos tonos que los badges de Sesiones) y el
 // icono codifica el tipo de recurso: la paleta del dashboard es neutra y no
 // tiene dos acentos que distingan activo/lugar sin inventar tokens nuevos.
+// Por lo mismo, pendiente comparte el ámbar de no_show pero con borde
+// punteado y sin relleno: todavía no es una reserva firme. Denegada comparte
+// el rojo de cancelada, sin relleno.
 export const ESTILO_ESTADO: Record<
   EstadoReserva,
-  { chip: string; barra: string; badge: "success" | "secondary" | "destructive" | "warning" }
+  {
+    chip: string
+    barra: string
+    badge: "success" | "secondary" | "destructive" | "warning" | "outline"
+    badgeClase?: string
+  }
 > = {
   confirmada: {
     chip: "border-success/40 bg-success/10 text-success hover:bg-success/20",
     barra: "bg-success",
     badge: "success",
+  },
+  pendiente: {
+    chip: "border-dashed border-warning bg-warning/5 text-warning hover:bg-warning/15",
+    barra: "border border-dashed border-warning",
+    badge: "outline",
+    badgeClase: "border-dashed border-warning text-warning",
   },
   completada: {
     chip: "border-border bg-muted text-muted-foreground hover:bg-muted/70",
@@ -418,6 +452,12 @@ export const ESTILO_ESTADO: Record<
     chip: "border-destructive/40 bg-destructive/10 text-destructive line-through hover:bg-destructive/20",
     barra: "bg-destructive",
     badge: "destructive",
+  },
+  denegada: {
+    chip: "border-destructive/40 text-destructive line-through hover:bg-destructive/10",
+    barra: "border border-destructive",
+    badge: "outline",
+    badgeClase: "border-destructive/50 text-destructive",
   },
   no_show: {
     chip: "border-warning/40 bg-warning/10 text-warning hover:bg-warning/20",

@@ -88,6 +88,15 @@ Por eso `webhook.py` guarda dos cosas por separado:
   usar para enviar la respuesta, vía `whatsapp_client.enviar_mensaje_texto`
   → `baileys-bot` `POST /send` con `{"jid": ...}`).
 
+Para escribirle a alguien **sin un mensaje suyo al que responder** (el
+aviso de que la CPA confirmó su reserva, ver "Confirmación de la CPA"), el
+JID completo se guarda en `usuarios.jid_wa` con cada mensaje entrante
+(`usuarios_service.obtener_o_crear_usuario`) y se lee con
+`whatsapp_client.jid_de`. Solo si no hay uno guardado (usuarios que no han
+escrito desde que existe la columna) se rearma con el número, que no llega
+a las cuentas `@lid`. Toda reserva nueva la crea un mensaje del estudiante,
+así que las pendientes siempre tienen su JID.
+
 ## Por qué separar el LLM de la lógica de reservas
 
 El LLM (`llm_client.py`) debería usarse para:
@@ -334,9 +343,11 @@ Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
 - **La garantía real contra choques de horario es de Postgres, no de la
   app**: `postgres/init/02-schema.sql` agrega la extensión `btree_gist` y
   una restricción `EXCLUDE USING gist (recurso_id WITH =, tstzrange(inicio,
-  fin) WITH &&) WHERE (estado = 'confirmada')` sobre `reservas`. Postgres
-  rechaza cualquier INSERT/UPDATE que se solape con una reserva confirmada
-  existente del mismo recurso, sin importar si la vía es la app, una
+  fin) WITH &&) WHERE (estado IN ('confirmada', 'pendiente'))` sobre
+  `reservas`. Postgres rechaza cualquier INSERT/UPDATE que se solape con una
+  reserva confirmada o pendiente de confirmación del mismo recurso (la
+  pendiente también aparta el activo mientras la CPA decide, ver
+  `ESTADOS_QUE_OCUPAN` en `recursos_service.py`), sin importar si la vía es la app, una
   migración, un script manual, o dos requests concurrentes que pasaron el
   chequeo de la aplicación al mismo tiempo. `crear_reservas_grupo` en
   `recursos_service.py` solo atrapa el `IntegrityError` que Postgres lanza
@@ -460,10 +471,14 @@ resumen final comparten una plantilla fija en código (no generada por el
 LLM): título en `*negrita*`, un divisor (`――――――――――――――――――`), cada
 activo del carrito en `*negrita*` con sus hijos incluidos por defecto
 sangrados debajo con viñeta (`_formatear_item_factura`), otro divisor, y
-los datos del paso. El aviso de confirmación (`_nota_requiere_confirmacion`)
-es una línea aparte con el nombre del activo, no un sufijo pegado a la línea
-del activo -- si hay más de uno en el carrito que requiere confirmación,
-hace falta saber cuál es cuál. Los menús numerados *seleccionables* (`OPCIONES_CONFIRMAR`,
+los datos del paso. La factura final lleva el número de reserva, y su
+título y aviso dependen de los activos con `requiere_confirmacion`
+(`_estado_de_reserva_creada`): ninguno -> *RESERVA CONFIRMADA*; algunos ->
+*RESERVA PARCIAL*, con una línea de lo confirmado y otra de lo pendiente;
+todos -> *RESERVA PENDIENTE DE CONFIRMACIÓN*. El aviso va en líneas aparte
+con el nombre de cada activo, no como sufijo pegado a su línea -- si hay
+más de uno en el carrito, hace falta saber cuál espera y cuál no (ver
+"Confirmación de la CPA" más abajo). Los menús numerados *seleccionables* (`OPCIONES_CONFIRMAR`,
 el menú de quitar un ítem) no llevan este formato: agregarle `*negrita*`
 ahí rompería el reconocimiento de "escribe el nombre de la opción en vez
 del número" (`_interpretar_opcion` compara substrings literales).
@@ -652,7 +667,8 @@ puede quedar sin número, ni las que crea el bot ni las de `seed.py`.
 
 Distinto de "cortar el wizard" de arriba (que aborta una reserva que
 **todavía no se escribió** en la base): esto es el intent `cancelar`,
-para anular una reserva que ya quedó `confirmada`. Vive en
+para anular una reserva que ya quedó `confirmada` (o `pendiente` de la
+CPA; en la lista esas líneas dicen "pendiente de confirmación"). Vive en
 `gestionar_cancelacion` (`recursos_service.py`), con su propio wizard corto
 en `sesion["cancelacion_wizard"]` que webhook.py trata igual que
 `reserva_wizard` -- mientras esté activo, la respuesta del usuario (un
@@ -666,8 +682,8 @@ reserva con id X". Por eso toda consulta filtra siempre por
 `Reserva.usuario_id == usuario.id`:
 
 - `_reservas_cancelables_de(usuario.id)` -- la única lista que se le
-  muestra al usuario, ya filtrada por dueño (y por `estado='confirmada'`
-  y `fin` en el futuro), agrupada por `grupo_id` igual que se reservó (un
+  muestra al usuario, ya filtrada por dueño (y por estado vigente,
+  `ESTADOS_QUE_OCUPAN`, y `fin` en el futuro), agrupada por `grupo_id` igual que se reservó (un
   padre y sus accesorios se cancelan juntos).
 - El `UPDATE ... SET estado='cancelada'` final repite el mismo filtro por
   `usuario_id`, sobre **todos** los ids que el usuario haya elegido -- ese
@@ -696,6 +712,59 @@ resto del wizard de reserva: nunca se cancela de una sola respuesta, hay
 un paso `confirmar_cancelacion` explícito de por medio. `PALABRAS_CANCELAR`
 ("cancelar", "cancela", "cerrar") aborta el wizard de cancelación en
 cualquier paso sin tocar la base, igual que en `gestionar_reserva`.
+
+### Confirmación de la CPA: reservas parciales y pendientes
+
+Un activo con `recursos.requiere_confirmacion` no se presta hasta que el
+equipo de la CPA lo aprueba. El estado vive **por línea** (`reservas.estado`),
+como el resto: `crear_reservas_grupo` crea esas líneas como `pendiente` y
+las demás como `confirmada`. El estado de la reserva completa se deriva de
+sus líneas:
+
+| Líneas | Reserva | Factura del bot |
+|---|---|---|
+| todas `confirmada` | confirmada | *RESERVA CONFIRMADA* |
+| `confirmada` + `pendiente` | **parcial** | *RESERVA PARCIAL* + qué quedó confirmado y qué no |
+| todas `pendiente` | pendiente | *RESERVA PENDIENTE DE CONFIRMACIÓN* |
+
+- **Una pendiente aparta el activo.** Si no, otro estudiante podría
+  reservarlo mientras la CPA decide. Por eso el EXCLUDE
+  `reservas_no_solapamiento` y todas las consultas de ocupación
+  (`_reserva_solapada`, `_reserva_en_curso`, `_proxima_reserva`, las de
+  cancelación) usan `ESTADOS_QUE_OCUPAN = ('confirmada', 'pendiente')`.
+- **La CPA confirma desde el dashboard**, en la pestaña Reservas: el filtro
+  "Por confirmar" junta las reservas con alguna línea pendiente (la más
+  próxima primero) y en el modal de detalle cada activo pendiente tiene
+  sus botones (ver el punto siguiente). "Confirmar todo" aparece solo si
+  hay más de un activo pendiente.
+  `POST /dashboard/api/reservas/grupo/<id>/confirmar` pasa las líneas
+  pendientes a `confirmada`, hace commit y **después** le escribe al
+  estudiante (`recursos_service.mensaje_reserva_confirmada`, con el número
+  de reserva, que también va en la factura de cuando reservó). El envío
+  queda en `auditoria_bot` con intent `confirmacion_cpa`. Si WhatsApp
+  falla, la reserva queda confirmada igual y la respuesta trae
+  `notificado: false`, para que el dashboard avise que hay que contactarlo
+  por otro medio.
+- **Cada activo se confirma o se deniega por separado**, en el mismo
+  modal: `POST /dashboard/api/reservas/<id>/confirmar|denegar`. Denegar
+  deja la línea `denegada`, que no está en `ESTADOS_QUE_OCUPAN`: el activo
+  queda libre en ese horario, pero la fila se conserva para saber qué se
+  negó. Cada decisión le manda al estudiante un WhatsApp
+  (`mensaje_decision_cpa`, intent `confirmacion_cpa` o `denegacion_cpa`)
+  que dice qué se decidió y cómo quedó el resto, para que se entienda solo
+  aunque lleguen varios seguidos. Cuando ya no queda nada pendiente, en vez
+  de eso va la factura completa de *RESERVA CONFIRMADA*, que aclara lo que
+  no se aprobó; si se negó todo, el mensaje dice que la reserva queda
+  anulada.
+- **Editar no confirma en silencio.** El formulario de edición del modal
+  deja el estado sin cambiar cuando la reserva tiene estados mixtos (antes
+  lo aplanaba a uno solo al guardar cualquier otro cambio), y un activo que
+  la CPA agrega desde el dashboard nace `confirmada` aunque la reserva siga
+  pendiente: lo agregó ella misma. Poner "confirmada" a mano en el
+  formulario sí confirma, pero sin avisarle al estudiante; el formulario lo
+  advierte.
+- Las reservas creadas antes de este cambio con activos que requieren
+  confirmación quedan como estaban (`confirmada`): no se migraron.
 
 ### Menú de fallback (`menu_service.py`)
 

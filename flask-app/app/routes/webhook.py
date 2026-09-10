@@ -117,7 +117,7 @@ def recibir_webhook():
     # registro_service.py), sin pasar por clasificación de intent -- si no,
     # "Juan Pérez" como respuesta a "¿cuál es tu nombre?" se clasificaría
     # como intent "otro" y quedaría bloqueado por la whitelist. ---
-    usuario = usuarios_service.obtener_o_crear_usuario(numero)
+    usuario = usuarios_service.obtener_o_crear_usuario(numero, remote_jid)
     sesion = sesiones.obtener_sesion(numero)
 
     if not registro_service.usuario_esta_completo(usuario):

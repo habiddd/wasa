@@ -39,15 +39,24 @@ type FiltroTipo = "todos" | "equipo" | "espacio"
 const USUARIO_SIN_CODIGO = "__sin_codigo__"
 
 const ESTADOS: { valor: FiltroEstado; etiqueta: string }[] = [
-  { valor: "vigentes", etiqueta: "Sin canceladas" },
+  { valor: "vigentes", etiqueta: "Sin canceladas ni denegadas" },
   { valor: "todas", etiqueta: "Todos los estados" },
   { valor: "confirmada", etiqueta: "Confirmadas" },
+  { valor: "pendiente", etiqueta: "Pendientes de confirmación" },
   { valor: "completada", etiqueta: "Completadas" },
   { valor: "cancelada", etiqueta: "Canceladas" },
+  { valor: "denegada", etiqueta: "Denegadas" },
   { valor: "no_show", etiqueta: "No show" },
 ]
 
-const LEYENDA: EstadoReserva[] = ["confirmada", "completada", "cancelada", "no_show"]
+const LEYENDA: EstadoReserva[] = [
+  "confirmada",
+  "pendiente",
+  "completada",
+  "cancelada",
+  "denegada",
+  "no_show",
+]
 
 function guardado<T extends string>(clave: string, valores: readonly T[], porDefecto: T): T {
   try {
@@ -153,7 +162,9 @@ export function CalendarioPanel() {
           const codigo = reserva.usuario_codigo_uninorte || USUARIO_SIN_CODIGO
           if (codigo !== usuarioCodigo) return false
         }
-        if (filtroEstado === "vigentes") return reserva.estado !== "cancelada"
+        if (filtroEstado === "vigentes") {
+          return reserva.estado !== "cancelada" && reserva.estado !== "denegada"
+        }
         if (filtroEstado !== "todas") return reserva.estado === filtroEstado
         return true
       }),

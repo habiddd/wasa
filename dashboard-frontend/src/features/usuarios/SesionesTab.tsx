@@ -19,22 +19,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { EstadoReservaBadge } from "@/features/calendario/EstadoBadge"
 import { usePolling } from "@/hooks/use-polling"
-import { fetchSesiones, type EstadoReserva, type Sesion } from "@/lib/api"
+import { fetchSesiones, type Sesion } from "@/lib/api"
 import { formatearFechaHoraCPA } from "@/lib/fechas"
 
 type Orden = "reciente" | "usuario"
-
-const ESTADO_VARIANTE: Record<EstadoReserva, "success" | "destructive" | "warning" | "secondary"> = {
-  confirmada: "success",
-  completada: "secondary",
-  cancelada: "destructive",
-  no_show: "warning",
-}
-
-function EstadoReservaBadge({ estado }: { estado: EstadoReserva }) {
-  return <Badge variant={ESTADO_VARIANTE[estado] ?? "secondary"}>{estado}</Badge>
-}
 
 function fecha(valor: string | null) {
   return formatearFechaHoraCPA(valor)

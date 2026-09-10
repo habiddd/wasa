@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS usuarios (
     -- que se crea la fila (primer contacto, antes de preguntarle nada).
     nombre            VARCHAR(150),
     telefono_wa       VARCHAR(20) UNIQUE NOT NULL,   -- número de WhatsApp (con código país)
+    -- JID completo con el que escribe (ej. '573001234567@s.whatsapp.net' o
+    -- '144186850431118@lid'). Hace falta para escribirle sin que haya un
+    -- mensaje suyo al que responder (ej. avisarle que la CPA confirmó su
+    -- reserva): rearmarlo como telefono_wa + '@s.whatsapp.net' no llega a
+    -- las cuentas '@lid'. Se actualiza con cada mensaje entrante.
+    jid_wa            VARCHAR(64),
     codigo_uninorte   VARCHAR(30),                   -- id de estudiante
     cedula            VARCHAR(20),
     registro_completo BOOLEAN NOT NULL DEFAULT FALSE, -- true cuando ya dio nombre+codigo+cedula
@@ -128,7 +134,12 @@ CREATE TABLE IF NOT EXISTS reservas (
     recurso_id      INTEGER NOT NULL REFERENCES recursos(id),
     inicio          TIMESTAMPTZ NOT NULL,
     fin             TIMESTAMPTZ NOT NULL,
-    estado          VARCHAR(20) NOT NULL DEFAULT 'confirmada', -- confirmada | cancelada | completada | no_show
+    -- confirmada | pendiente | denegada | cancelada | completada | no_show.
+    -- 'pendiente' es un activo con recursos.requiere_confirmacion que espera
+    -- a que la CPA lo apruebe desde el dashboard; ocupa el activo igual que
+    -- una confirmada (ver reservas_no_solapamiento). 'denegada': la CPA no lo
+    -- aprobó; no ocupa el activo.
+    estado          VARCHAR(20) NOT NULL DEFAULT 'confirmada',
     canal_origen    VARCHAR(20) NOT NULL DEFAULT 'whatsapp',
     -- Número de reserva: lo comparten todos los activos confirmados juntos
     -- en la misma sesión. Obligatorio (ver el bloque de migración al final,
@@ -149,8 +160,18 @@ CREATE INDEX IF NOT EXISTS idx_reservas_recurso_rango ON reservas (recurso_id, i
 -- o dos requests concurrentes pasen el chequeo de la aplicación a la vez.
 -- Postgres rechaza el INSERT/UPDATE con un error de exclusión si detecta
 -- solapamiento; recursos_service.crear_reserva() atrapa ese error.
+-- Una reserva 'pendiente' (espera la confirmación de la CPA) también aparta
+-- el activo: si no, otro estudiante podría reservarlo mientras la CPA decide.
+-- La primera versión solo cubría 'confirmada'; se recrea si todavía es esa.
 DO $$
 BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'reservas_no_solapamiento'
+          AND pg_get_constraintdef(oid) NOT LIKE '%pendiente%'
+    ) THEN
+        ALTER TABLE reservas DROP CONSTRAINT reservas_no_solapamiento;
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'reservas_no_solapamiento'
     ) THEN
@@ -158,7 +179,7 @@ BEGIN
             EXCLUDE USING gist (
                 recurso_id WITH =,
                 tstzrange(inicio, fin) WITH &&
-            ) WHERE (estado = 'confirmada');
+            ) WHERE (estado IN ('confirmada', 'pendiente'));
     END IF;
 END $$;
 
@@ -209,6 +230,7 @@ ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS estado_envio VARCHAR(20) NOT 
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cedula VARCHAR(20);
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS registro_completo BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE usuarios ALTER COLUMN nombre DROP NOT NULL;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS jid_wa VARCHAR(64);
 
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS placa VARCHAR(10);
 ALTER TABLE recursos ALTER COLUMN placa TYPE VARCHAR(10);

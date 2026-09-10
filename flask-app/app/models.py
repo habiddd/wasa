@@ -12,6 +12,10 @@ class Usuario(db.Model):
     # crea el Usuario (primer contacto, antes de preguntarle nada).
     nombre = db.Column(db.String(150))
     telefono_wa = db.Column(db.String(20), unique=True, nullable=False)
+    # JID completo del último mensaje entrante ("...@s.whatsapp.net" o
+    # "...@lid"): para escribirle sin un mensaje suyo al que responder. Ver
+    # whatsapp_client.jid_de y postgres/init/02-schema.sql.
+    jid_wa = db.Column(db.String(64))
     codigo_uninorte = db.Column(db.String(30))
     cedula = db.Column(db.String(20))
     registro_completo = db.Column(db.Boolean, nullable=False, default=False)
@@ -89,6 +93,10 @@ class Reserva(db.Model):
     recurso_id = db.Column(db.Integer, db.ForeignKey("recursos.id"), nullable=False)
     inicio = db.Column(db.DateTime(timezone=True), nullable=False)
     fin = db.Column(db.DateTime(timezone=True), nullable=False)
+    # 'confirmada' | 'pendiente' | 'denegada' | 'cancelada' | 'completada' |
+    # 'no_show'. 'pendiente': el activo requiere confirmación y la CPA aún no
+    # la da (ver recursos_service.ESTADOS_QUE_OCUPAN); 'denegada': la CPA no
+    # lo aprobó y el activo quedó libre.
     estado = db.Column(db.String(20), nullable=False, default="confirmada")
     canal_origen = db.Column(db.String(20), nullable=False, default="whatsapp")
     # Número de reserva (ver ReservaGrupo): lo comparten todas las reservas
