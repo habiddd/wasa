@@ -77,6 +77,8 @@ class ReservaGrupo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     usuario_id = db.Column(db.Integer, db.ForeignKey("usuarios.id"), nullable=False)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    tipo_uso = db.Column(db.String(20), nullable=False, default="particular")  # 'particular' | 'asignatura'
+    nrc = db.Column(db.String(4))  # 4 dígitos, solo si tipo_uso='asignatura'
 
 
 class Reserva(db.Model):

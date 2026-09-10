@@ -636,7 +636,10 @@ de disponibilidad sin nada pendiente) se llama a
 `crear_reservas_grupo`: crea un `ReservaGrupo` y una `Reserva` por cada
 unidad **en una sola transacción**. Si la restricción `EXCLUDE` de
 Postgres rechaza alguna justo al confirmar (condición de carrera), se
-revierte el carrito completo en vez de dejar una reserva parcial.
+revierte el carrito completo en vez de dejar una reserva parcial. El
+`ReservaGrupo` también guarda `tipo_uso` ('particular' o 'asignatura') y,
+si aplica, el `nrc` de la asignatura -- primera pregunta del wizard, ver
+"Uso: particular o asignatura" en `recursos_service.py`.
 
 El id de ese `ReservaGrupo` es el **número de reserva**: lo que identifica
 de forma única una reserva *hecha*, que puede cubrir varios activos (una

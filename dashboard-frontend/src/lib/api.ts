@@ -106,6 +106,10 @@ export function actualizarUsuario(id: number, cambios: CambiosUsuario) {
 
 export type EstadoReserva = "confirmada" | "cancelada" | "completada" | "no_show"
 
+// Toda reserva es particular o para una asignatura; en ese caso lleva el
+// NRC (identificador de la asignatura que cursa el estudiante).
+export type TipoUso = "particular" | "asignatura"
+
 export type Sesion = {
   id: number
   usuario_id: number
@@ -119,6 +123,10 @@ export type Sesion = {
   // Reservas creadas juntas en el mismo carrito comparten grupo (ej. una
   // cámara y sus lentes). NULL en las anteriores al carrito.
   grupo_id: number | null
+  // La reserva es particular o de una asignatura, y `nrc` es el de la
+  // asignatura (null si es particular).
+  tipo_uso: TipoUso
+  nrc: string | null
   inicio: string | null
   fin: string | null
   estado: EstadoReserva
@@ -152,7 +160,7 @@ export function actualizarReserva(id: number, cambios: CambiosReserva) {
 
 export function actualizarReservaGrupo(
   grupoId: number,
-  cambios: CambiosReserva & { recurso_ids?: number[] }
+  cambios: CambiosReserva & { recurso_ids?: number[]; tipo_uso?: TipoUso; nrc?: string | null }
 ) {
   return request<Sesion[]>(`/reservas/grupo/${grupoId}`, {
     method: "PATCH",

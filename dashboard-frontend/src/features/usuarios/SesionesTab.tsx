@@ -48,6 +48,7 @@ function SesionesTabla({ sesiones }: { sesiones: Sesion[] }) {
           <TableHead>Usuario</TableHead>
           <TableHead>Categoría</TableHead>
           <TableHead>Recurso</TableHead>
+          <TableHead>Uso</TableHead>
           <TableHead>Inicio</TableHead>
           <TableHead>Fin</TableHead>
           <TableHead>Estado</TableHead>
@@ -57,7 +58,7 @@ function SesionesTabla({ sesiones }: { sesiones: Sesion[] }) {
       <TableBody>
         {sesiones.length === 0 && (
           <TableRow>
-            <TableCell colSpan={7}>No hay sesiones para este filtro.</TableCell>
+            <TableCell colSpan={8}>No hay sesiones para este filtro.</TableCell>
           </TableRow>
         )}
         {sesiones.map((s) => (
@@ -65,6 +66,7 @@ function SesionesTabla({ sesiones }: { sesiones: Sesion[] }) {
             <TableCell>{s.usuario_nombre || s.usuario_telefono}</TableCell>
             <TableCell>{s.usuario_rol}</TableCell>
             <TableCell>{s.recurso_nombre || "-"}</TableCell>
+            <TableCell>{s.tipo_uso === "asignatura" ? `${s.nrc}` : "Particular"}</TableCell>
             <TableCell>{fecha(s.inicio)}</TableCell>
             <TableCell>{fecha(s.fin)}</TableCell>
             <TableCell>

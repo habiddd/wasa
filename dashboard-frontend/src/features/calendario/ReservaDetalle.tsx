@@ -30,6 +30,7 @@ import {
   type CambiosReserva,
   type EstadoReserva,
   type Recurso,
+  type TipoUso,
 } from "@/lib/api"
 
 import {
@@ -122,6 +123,11 @@ function Detalle({ evento, recursos }: { evento: EventoCalendario; recursos: Rec
           <p>{evento.usuarioNombre}</p>
           <p className="text-muted-foreground">{evento.usuarioTelefono}</p>
         </Dato>
+        <Dato etiqueta="Uso">
+          {evento.reservas[0].tipo_uso === "asignatura"
+            ? `Asignatura · NRC ${evento.reservas[0].nrc}`
+            : "Particular"}
+        </Dato>
       </div>
 
       <Dato
@@ -163,6 +169,8 @@ function FormularioEdicion({
   const [inicio, setInicio] = useState(aInputLocal(evento.inicio))
   const [fin, setFin] = useState(aInputLocal(evento.fin))
   const [estado, setEstado] = useState<EstadoReserva>(evento.estado)
+  const [tipoUso, setTipoUso] = useState<TipoUso>(primera.tipo_uso)
+  const [nrc, setNrc] = useState(primera.nrc ?? "")
   const [guardando, setGuardando] = useState(false)
   const [agregandoActivo, setAgregandoActivo] = useState(false)
   const [activosParaAgregar, setActivosParaAgregar] = useState<number[]>([])
@@ -283,7 +291,7 @@ function FormularioEdicion({
 
     // Solo se envía lo que cambió: así una edición de estado no reescribe el
     // horario y no choca con el EXCLUDE de solapamiento de Postgres.
-    const cambios: CambiosReserva & { recurso_ids?: number[] } = {}
+    const cambios: CambiosReserva & { recurso_ids?: number[]; tipo_uso?: TipoUso; nrc?: string | null } = {}
     if (nuevoInicio.getTime() !== evento.inicio.getTime()) cambios.inicio = nuevoInicio.toISOString()
     if (nuevoFin.getTime() !== evento.fin.getTime()) cambios.fin = nuevoFin.toISOString()
     if (estado !== evento.estado || evento.estadosMixtos) cambios.estado = estado
@@ -297,6 +305,20 @@ function FormularioEdicion({
       return
     }
     if (cambiaronActivos) cambios.recurso_ids = recursoIds
+
+    // Uso (particular/asignatura) solo se edita cuando hay un único número
+    // de reserva: es un dato del grupo, no de cada línea suelta.
+    if (evento.numeros.length === 1) {
+      if (tipoUso === "asignatura" && !/^\d{4}$/.test(nrc)) {
+        toast.error("El NRC debe tener exactamente 4 dígitos.")
+        return
+      }
+      const nrcOriginal = primera.nrc ?? ""
+      if (tipoUso !== primera.tipo_uso || (tipoUso === "asignatura" && nrc !== nrcOriginal)) {
+        cambios.tipo_uso = tipoUso
+        cambios.nrc = tipoUso === "asignatura" ? nrc : null
+      }
+    }
 
     if (Object.keys(cambios).length === 0) {
       onCancelar()
@@ -412,6 +434,35 @@ function FormularioEdicion({
           </SelectContent>
         </Select>
       </div>
+
+      {evento.numeros.length === 1 && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="reserva-uso">Uso</Label>
+            <Select value={tipoUso} onValueChange={(v) => setTipoUso(v as TipoUso)}>
+              <SelectTrigger id="reserva-uso" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="particular">Particular</SelectItem>
+                <SelectItem value="asignatura">Asignatura</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {tipoUso === "asignatura" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="reserva-nrc">NRC</Label>
+              <Input
+                id="reserva-nrc"
+                inputMode="numeric"
+                maxLength={4}
+                value={nrc}
+                onChange={(e) => setNrc(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       <p className="text-xs text-muted-foreground">
         Horarios en hora local de la CPA (America/Bogota). Dos reservas confirmadas del mismo activo no pueden cruzarse.

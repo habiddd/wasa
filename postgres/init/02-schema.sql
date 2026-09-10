@@ -408,6 +408,33 @@ BEGIN
     END IF;
 END $$;
 
+-- Uso de la reserva: particular (uso personal) o para una asignatura, en
+-- cuyo caso lleva el NRC (identificador de la asignatura que cursa el
+-- estudiante) -- ver recursos_service.crear_reservas_grupo.
+ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS tipo_uso VARCHAR(20) NOT NULL DEFAULT 'particular';
+ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS nrc VARCHAR(4);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reserva_grupos_tipo_uso_valido') THEN
+    ALTER TABLE reserva_grupos ADD CONSTRAINT reserva_grupos_tipo_uso_valido CHECK (tipo_uso IN ('particular', 'asignatura'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reserva_grupos_nrc_segun_tipo') THEN
+    ALTER TABLE reserva_grupos ADD CONSTRAINT reserva_grupos_nrc_segun_tipo CHECK ((tipo_uso = 'asignatura') = (nrc IS NOT NULL));
+  END IF;
+  -- El NRC siempre son exactamente 4 dígitos. La primera versión de la
+  -- columna era VARCHAR(10); aquí se angosta en una base que ya la tenía.
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'reserva_grupos'
+      AND column_name = 'nrc'
+      AND character_maximum_length <> 4
+  ) THEN
+    ALTER TABLE reserva_grupos ALTER COLUMN nrc TYPE VARCHAR(4);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reserva_grupos_nrc_formato') THEN
+    ALTER TABLE reserva_grupos ADD CONSTRAINT reserva_grupos_nrc_formato CHECK (nrc ~ '^[0-9]{4}$');
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_auditoria_telefono_fecha ON auditoria_bot (telefono_wa, creado_en);
 CREATE INDEX IF NOT EXISTS idx_auditoria_mensaje_id ON auditoria_bot (mensaje_id);
 

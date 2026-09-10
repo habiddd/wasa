@@ -12,6 +12,7 @@ de /dashboard/api/ hacia acá -- este blueprint ya no sirve HTML ni assets.
 
 import base64
 import io
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -268,6 +269,8 @@ def _serializar_reserva(r: Reserva) -> dict:
         "recurso_nombre": r.recurso.nombre if r.recurso else None,
         "recurso_tipo": r.recurso.tipo if r.recurso else None,
         "grupo_id": r.grupo_id,
+        "tipo_uso": r.grupo.tipo_uso if r.grupo else "particular",
+        "nrc": r.grupo.nrc if r.grupo else None,
         "inicio": r.inicio.isoformat() if r.inicio else None,
         "fin": r.fin.isoformat() if r.fin else None,
         "estado": r.estado,
@@ -309,7 +312,9 @@ def api_reservas():
     except ValueError:
         return jsonify({"error": "Los parámetros 'desde' y 'hasta' deben ser fechas ISO-8601."}), 400
 
-    consulta = Reserva.query.options(joinedload(Reserva.usuario), joinedload(Reserva.recurso))
+    consulta = Reserva.query.options(
+        joinedload(Reserva.usuario), joinedload(Reserva.recurso), joinedload(Reserva.grupo)
+    )
 
     if desde or hasta:
         if hasta:
@@ -414,9 +419,16 @@ def api_actualizar_reserva_grupo(grupo_id):
     """Actualiza horario/estado y activos de una reserva completa atomically."""
     datos = request.get_json(silent=True) or {}
     recurso_ids = datos.pop("recurso_ids", None)
+    tiene_tipo_uso = "tipo_uso" in datos
+    tipo_uso_nuevo = datos.pop("tipo_uso", None)
+    tiene_nrc = "nrc" in datos
+    nrc_nuevo = datos.pop("nrc", None)
     cambios, error = _preparar_cambios_reserva(datos, _CAMPOS_EDITABLES_RESERVA)
     if error:
         return jsonify({"error": error}), 400
+
+    if tiene_tipo_uso and tipo_uso_nuevo not in ("particular", "asignatura"):
+        return jsonify({"error": "El uso debe ser 'particular' o 'asignatura'."}), 400
 
     if recurso_ids is not None:
         if (
@@ -434,6 +446,20 @@ def api_actualizar_reserva_grupo(grupo_id):
     reservas = Reserva.query.filter_by(grupo_id=grupo.id).order_by(Reserva.id).all()
     if not reservas:
         return jsonify({"error": "La reserva no tiene activos."}), 404
+
+    # Si solo llega uno de los dos (ej. el usuario corrige el NRC sin tocar
+    # el tipo de uso), el otro se completa con lo que ya tenía el grupo.
+    if tiene_tipo_uso or tiene_nrc:
+        tipo_uso_efectivo = tipo_uso_nuevo if tiene_tipo_uso else grupo.tipo_uso
+        if tipo_uso_efectivo == "asignatura":
+            nrc_efectivo = nrc_nuevo if tiene_nrc else grupo.nrc
+            if not isinstance(nrc_efectivo, str) or not re.fullmatch(r"\d{4}", nrc_efectivo):
+                return jsonify({"error": "El NRC debe tener exactamente 4 dígitos."}), 400
+            grupo.tipo_uso = "asignatura"
+            grupo.nrc = nrc_efectivo
+        else:
+            grupo.tipo_uso = "particular"
+            grupo.nrc = None
 
     for reserva in reservas:
         error = _aplicar_cambios_reserva(reserva, cambios)

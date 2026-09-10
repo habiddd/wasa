@@ -740,7 +740,12 @@ def _quitar_del_carrito(carrito: list[dict], nombres: set[str]) -> list[dict]:
 
 
 def crear_reservas_grupo(
-    usuario_id: int, recursos: list[Recurso], inicio: datetime, fin: datetime
+    usuario_id: int,
+    recursos: list[Recurso],
+    inicio: datetime,
+    fin: datetime,
+    tipo_uso: str = "particular",
+    nrc: str | None = None,
 ) -> tuple[list[Reserva] | None, str | None]:
     """Inserta una reserva por cada recurso en `recursos`, todas ligadas al
     mismo ReservaGrupo y en una sola transacción -- si alguna choca al
@@ -749,8 +754,12 @@ def crear_reservas_grupo(
     revierte todo el grupo en vez de dejar una reserva parcial del carrito.
     El chequeo de disponibilidad antes de llamar a esta función (ver
     `_resolver_disponibilidad_carrito` / `_unidad_libre_en_rango`) es solo
-    para dar un mensaje más claro, no la garantía de consistencia."""
-    grupo = ReservaGrupo(usuario_id=usuario_id)
+    para dar un mensaje más claro, no la garantía de consistencia.
+
+    `tipo_uso`/`nrc` van en el grupo, no en cada reserva por separado: es un
+    dato de la reserva completa (particular o de una asignatura), no de
+    cada activo dentro de ella."""
+    grupo = ReservaGrupo(usuario_id=usuario_id, tipo_uso=tipo_uso, nrc=nrc if tipo_uso == "asignatura" else None)
     db.session.add(grupo)
     db.session.flush()  # asigna grupo.id sin cerrar la transacción
 
@@ -1333,8 +1342,37 @@ OPCIONES_CONFIRMAR = [
     ("quitar_item", "Quitar un activo de la reserva"),
     ("cambiar_fecha", "Cambiar fecha"),
     ("cambiar_hora", "Cambiar hora"),
+    ("cambiar_uso", "Cambiar particular / asignatura (NRC)"),
     ("cancelar", "Cancelar"),
 ]
+
+OPCIONES_TIPO_USO = [
+    ("particular", "Particular (uso personal)"),
+    ("asignatura", "Para una asignatura (con NRC)"),
+]
+
+# El NRC siempre son exactamente 4 dígitos, que no formen parte de un número
+# más largo (evita capturar, por ejemplo, parte de una fecha escrita junto al
+# NRC). Mismo formato que exige el CHECK reserva_grupos_nrc_formato en
+# postgres/init/02-schema.sql.
+NRC_PATRON = re.compile(r"(?<!\d)(\d{4})(?!\d)")
+
+
+def _extraer_nrc(texto: str) -> str | None:
+    """Busca un NRC (4 dígitos) en el texto del usuario. None si no aparece
+    ninguno."""
+    coincidencia = NRC_PATRON.search(texto)
+    return coincidencia.group(1) if coincidencia else None
+
+
+_MENSAJE_PEDIR_NRC = (
+    "¿Cuál es el NRC de la asignatura? Son 4 dígitos, ej. 1234. Si no "
+    "es para una asignatura, escribe *particular*."
+)
+_MENSAJE_NRC_INVALIDO = (
+    "No reconocí ese NRC. Son 4 dígitos, ej. 1234. Si no es para una "
+    "asignatura, escribe *particular*."
+)
 
 OPCIONES_CONFIRMAR_FECHA = [
     ("si", "Sí, esa fecha está bien"),
@@ -1399,6 +1437,24 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
     avisos: list[str] = []
 
     while True:
+        # Primera pregunta de toda reserva nueva: particular o para una
+        # asignatura (y, en ese caso, el NRC) -- va antes que el activo
+        # porque no depende de qué se esté reservando. Si el texto inicial
+        # ya traía un activo (ej. "reservar cámara sony"), `nombre_recurso`
+        # se conserva en el wizard y sigue resolviéndose después de esto.
+        if not wizard.get("tipo_uso"):
+            wizard["opciones_actuales"] = OPCIONES_TIPO_USO
+            wizard["paso"] = "tipo_uso"
+            mensaje = _formatear_menu("¿Esta reserva es particular o para una asignatura?", OPCIONES_TIPO_USO)
+            wizard["_mensaje_menu_actual"] = mensaje
+            return _con_avisos(avisos, mensaje), wizard, False
+
+        if wizard["tipo_uso"] == "asignatura" and not wizard.get("nrc"):
+            wizard["opciones_actuales"] = None
+            wizard["paso"] = "nrc"
+            wizard["_mensaje_menu_actual"] = _MENSAJE_PEDIR_NRC
+            return _con_avisos(avisos, _MENSAJE_PEDIR_NRC), wizard, False
+
         if wizard.get("resolviendo_item") and wizard.get("nombre_recurso"):
             nombre = _mover_item_resuelto_al_carrito(wizard)
             ya_en_carrito = {item["nombre_recurso"] for item in wizard["carrito"]}
@@ -1590,6 +1646,15 @@ def _lineas_carrito(carrito: list[dict]) -> str:
     )
 
 
+def _linea_tipo_uso(wizard: dict) -> str:
+    """Línea "Uso: ..." que acompaña a "Reservado por" tanto en el resumen
+    como en la factura final -- ver `_mensaje_resumen` y
+    `_crear_reserva_desde_wizard`."""
+    if wizard.get("tipo_uso") == "asignatura":
+        return f"Uso: Asignatura (NRC {wizard['nrc']})"
+    return "Uso: Particular"
+
+
 def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, str]]) -> str:
     inicio_utc = datetime.fromisoformat(wizard["inicio"])
     fin_utc = datetime.fromisoformat(wizard["fin"])
@@ -1602,6 +1667,7 @@ def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, s
         f"{lineas_activos}\n"
         f"{_DIVISOR_FACTURA}\n"
         f"Reservado por: {usuario.nombre}\n"
+        f"{_linea_tipo_uso(wizard)}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
@@ -1761,7 +1827,10 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     # contra choques es el EXCLUDE de Postgres que atrapa
     # crear_reservas_grupo -- esto solo evita el caso común (nadie más
     # reservó nada en el instante entre el chequeo y el commit).
-    reservas, error = crear_reservas_grupo(usuario.id, unidades, inicio_utc, fin_utc)
+    reservas, error = crear_reservas_grupo(
+        usuario.id, unidades, inicio_utc, fin_utc,
+        tipo_uso=wizard.get("tipo_uso") or "particular", nrc=wizard.get("nrc"),
+    )
     if error is not None:
         return (
             "Uno de los activos se acaba de reservar justo mientras confirmabas. Intenta reservar de nuevo."
@@ -1778,6 +1847,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         f"{_lineas_carrito(carrito_final)}\n"
         f"{_DIVISOR_FACTURA}\n"
         f"Reservado por: {usuario.nombre}\n"
+        f"{_linea_tipo_uso(wizard)}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
@@ -1909,6 +1979,8 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         "nombre_recurso": None,
         "carrito": [],
         "resolviendo_item": True,
+        "tipo_uso": None,
+        "nrc": None,
         "fecha": None,
         "fecha_fin": None,
         "inicio": None,
@@ -1956,6 +2028,41 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
     interpreta según el paso en el que quedó el wizard, nunca como un
     mensaje nuevo y suelto."""
     paso = wizard.get("paso")
+
+    if paso == "tipo_uso":
+        nrc = _extraer_nrc(texto_usuario)
+        if nrc:
+            wizard["tipo_uso"] = "asignatura"
+            wizard["nrc"] = nrc
+        else:
+            valor = _interpretar_opcion(texto_usuario, OPCIONES_TIPO_USO)
+            if valor is None:
+                return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                    **sesion,
+                    "reserva_wizard": wizard,
+                }
+            wizard["tipo_uso"] = valor
+            if valor == "particular":
+                wizard["nrc"] = None
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "nrc":
+        if "particular" in _normalizar(texto_usuario):
+            wizard["tipo_uso"] = "particular"
+            wizard["nrc"] = None
+        else:
+            nrc = _extraer_nrc(texto_usuario)
+            if nrc is None:
+                return _MENSAJE_NRC_INVALIDO, {**sesion, "reserva_wizard": wizard}
+            wizard["nrc"] = nrc
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
 
     if paso in ("elegir_activo", "elegir_marca", "elegir_modelo"):
         error = _aplicar_respuesta_menu(wizard, texto_usuario)
@@ -2260,6 +2367,8 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             wizard.update(fecha=None, fecha_fin=None, inicio=None, fin=None, alternativas_para=[])
         elif valor == "cambiar_hora":
             wizard.update(inicio=None, fin=None, alternativas_para=[])
+        elif valor == "cambiar_uso":
+            wizard.update(tipo_uso=None, nrc=None)
 
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
         if listo:
