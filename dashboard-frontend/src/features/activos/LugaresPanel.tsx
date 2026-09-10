@@ -76,11 +76,9 @@ export function LugaresPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Un lugar no va dentro de otro ni tiene padre (CHECK
+  // recursos_espacio_sin_padre_ni_lugar): todos son de primer nivel.
   const espacios = activos.filter((r) => r.tipo === "espacio")
-  const raiz = espacios.filter((r) => r.padre_id === null)
-  // Excluye nada (a diferencia del selector de ActivoEditForm): es un alta
-  // nueva, todavía no tiene id propio, así que no puede formar un ciclo.
-  const espaciosParaSelector = espacios
 
   return (
     <div className="space-y-3">
@@ -106,7 +104,7 @@ export function LugaresPanel() {
         <ActivoNuevoForm
           tipo="espacio"
           equipos={[]}
-          espacios={espaciosParaSelector}
+          espacios={[]}
           onCancel={() => setMostrarNuevo(false)}
           onCreate={async (cambios) => {
             try {
@@ -128,7 +126,7 @@ export function LugaresPanel() {
       )}
 
       <div>
-        {raiz.map((r) => (
+        {espacios.map((r) => (
           <LugarConContenidos key={r.id} lugar={r} lista={espacios} activos={activos} nivel={0} />
         ))}
       </div>

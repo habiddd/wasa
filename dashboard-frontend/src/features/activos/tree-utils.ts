@@ -34,15 +34,6 @@ export function raicesEn(espacioId: number, lista: Recurso[]) {
   })
 }
 
-export function descendientesEspacioDe(id: number, lista: Recurso[]): Recurso[] {
-  const directos = contenidosEn(id, lista)
-  let todos = [...directos]
-  directos.forEach((h) => {
-    todos = todos.concat(descendientesEspacioDe(h.id, lista))
-  })
-  return todos
-}
-
 export function espaciosDisponibles(lista: Recurso[]) {
   return lista.filter((r) => r.tipo === "espacio")
 }

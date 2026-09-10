@@ -269,10 +269,14 @@ esquema. El destino de `espacio_id` debe ser una fila con `tipo='espacio'`,
 pero eso se valida en el dashboard (`flask-app/app/routes/dashboard.py`,
 `_validar_espacio`), no con un `CHECK` de Postgres -- un `CHECK` no admite
 subqueries, y un trigger daría un error genérico en vez de uno que el
-dashboard pueda traducir a un mensaje legible. Como un espacio puede estar
-dentro de otro (edificio > piso > sala), la misma columna también anida
-espacios entre sí, y por eso hay que chequear ciclos igual que con
-`padre_id`. Regla de propagación: si a un activo con hijos (por `padre_id`)
+dashboard pueda traducir a un mensaje legible. Un espacio, en cambio, no
+tiene lugar ni padre -- no se anidan lugares, no es un caso de uso de la
+CPA. Eso sí es un `CHECK` sobre la propia fila
+(`recursos_espacio_sin_padre_ni_lugar`); el dashboard además exige que el
+padre de un activo sea un equipo, y oculta Padre y Lugar en el formulario
+de un espacio. Como un espacio nunca tiene lugar, la cadena de lugares no
+pasa de un nivel y no hace falta chequear ciclos (con `padre_id` sí).
+Regla de propagación: si a un activo con hijos (por `padre_id`)
 se le cambia el lugar, sus hijos que estaban en el mismo lugar que él se
 mueven con él por defecto (`propagar_espacio`, default `true` en el PATCH);
 los hijos que alguien ya había puesto a mano en otro lugar no se tocan, y
@@ -331,13 +335,13 @@ para un ítem (`_siguiente_paso_wizard`):
 
 ```
 elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
-  → [elegir_contenidos_espacio] → fecha → hora_inicio → hora_fin
+  → [confirmar_contenidos_espacio] → fecha → hora_inicio → hora_fin
   → confirmar → listo
 ```
 
 `confirmar_accesorios` es condicional: solo aparece si el activo recién
 resuelto trae hijos marcados como incluidos por defecto (ver "Carrito de
-reserva" más abajo). `elegir_contenidos_espacio` también es condicional:
+reserva" más abajo). `confirmar_contenidos_espacio` también es condicional:
 solo aparece si el ítem recién resuelto es un espacio con contenidos (ver
 "Contenidos de un espacio" más abajo); un equipo normal nunca pasa por
 ahí. `_avanzar_wizard` además salta solo cualquier paso
@@ -461,9 +465,11 @@ no como una reserva de un solo activo:
   ítem nuevo en el mismo horario ya elegido; al resolverse, pasa por el
   mismo `confirmar_accesorios` si aplica.
 - **"Quitar un activo de la reserva"** abre un menú numerado
-  (`quitar_item_menu`) con lo que hay en el carrito; quitar un padre
-  también quita los accesorios que se agregaron por él. Si el carrito
-  queda vacío, vuelve a pedir un activo.
+  (`quitar_item_menu`) con lo que hay en el carrito; quitar un ítem
+  también quita, en cascada, todo lo que se agregó por él (sus accesorios;
+  si es un lugar, sus activos y los hijos de esos activos -- ver
+  `_quitar_del_carrito`). Si el carrito queda vacío, vuelve a pedir un
+  activo.
 - Elegir "Cambiar fecha" (por ejemplo) borra `fecha`/`fecha_fin`/`inicio`/
   `fin` del wizard y hace que `_avanzar_wizard` vuelva a preguntar justo
   eso, conservando el carrito ya armado.
@@ -471,42 +477,47 @@ no como una reserva de un solo activo:
 ### Contenidos de un espacio (`espacio_id`)
 
 Cuando el ítem recién resuelto es un LUGAR (`tipo='espacio'`, ej. "Cabina
-de audio 2"), el fold-in de `_avanzar_wizard` copia la MECÁNICA del paso
-`confirmar_accesorios` de arriba pero para la jerarquía `espacio_id`, no
-`padre_id` -- son independientes (ver "Ubicación física" más arriba).
-`_contenidos_de_espacio(nombre_espacio)` devuelve los equipos activos que
-viven en ese lugar, solo las RAÍCES (si el padre de un equipo por
-`padre_id` también está en el mismo espacio, el hijo no se lista suelto,
-ya aparece anidado bajo su padre) y deduplicados por nombre (3 iMac
-cuentan como una sola opción). Solo ofrece equipos, no espacios anidados
-dentro de este espacio (ej. "Edificio CPA" contiene dos salas -- eso queda
-fuera por ahora).
+de audio 2"), el fold-in de `_avanzar_wizard` hace lo mismo que con los
+accesorios de `confirmar_accesorios`, pero sobre la jerarquía `espacio_id`,
+no `padre_id` -- son independientes (ver "Ubicación física" más arriba):
+**todo lo que vive en el lugar entra al carrito de una**, y el usuario
+quita lo que no necesite.
 
-Si hay contenidos, el wizard entra al paso `elegir_contenidos_espacio`
-(`_mensaje_elegir_contenidos_espacio`): lista cada raíz numerada y, debajo
-e indentados, sus propios hijos por `padre_id` (reusando
-`_accesorios_por_defecto`) para que el usuario vea qué se lleva si elige
-esa raíz, más una última opción "Ninguno". Si el lugar no tiene contenidos,
-el wizard sigue exactamente igual que antes de este cambio, directo a
-pedir fecha.
+`_contenidos_de_espacio(nombre_espacio)` arma un árbol: las RAÍCES son los
+equipos activos del lugar cuyo padre por `padre_id` no está también en el
+lugar, y debajo de cada una van sus hijos por `padre_id` (recursivo). Solo
+equipos: un lugar dentro de otro lugar no se ofrece, a propósito -- no es
+un caso de uso de la CPA.
 
-**Asimetría a propósito respecto a los accesorios por `padre_id`:** ahí
-todo viene incluido y el usuario quita lo que no quiere; acá NO se agrega
-nada solo -- el usuario elige qué sumar, y por defecto no se suma ninguno.
-Reservar "Sala de postproducción 4" no puede reservar de una sus 5
-computadores: dejaría sin máquinas a cualquier otra persona que también
-los necesite (agotar las unidades de un modelo hace que el siguiente
-usuario sea rechazado). `_interpretar_seleccion_multiple` se reusa igual
-que en `confirmar_accesorios`, pero los índices significan lo contrario:
-qué AGREGAR, no qué quitar. Cada raíz que el usuario suma arrastra sus
-propios hijos por `padre_id` automáticos (`auto=True`), igual que un
-accesorio normal.
+**Unidades concretas, no modelos.** Los accesorios normales se reservan
+por modelo (cualquier unidad libre, `_unidad_libre_en_rango`). Los
+contenidos de un lugar no: cada ítem guarda `unidades` (ids), así que "la
+sala 4 con sus iMac" son las 3 iMac que están en esa sala -- se muestran
+como "iMac 24 M3 ×3" y se reservan las 3, no una iMac cualquiera del
+inventario. `_resolver_disponibilidad_carrito` exige que todas esas
+unidades estén libres; si solo algunas lo están, lo dice ("1 de 3
+unidades") y "Quitar esos activos y continuar" deja al ítem con las
+libres en vez de descartar el modelo entero.
 
-Por el mismo motivo que `confirmar_accesorios` (su opción "Ninguno"
-también se puede responder "no"), `elegir_contenidos_espacio` está
-excluido del atajo global que cancela el wizard al ver la palabra "no" --
-si no lo estuviera, responder "ninguno"/"no" cancelaría toda la reserva en
-vez de simplemente seguir a pedir fecha.
+El paso `confirmar_contenidos_espacio`
+(`_mensaje_confirmar_contenidos_espacio`) numera TODAS las líneas, padres
+e hijos, con los hijos sangrados bajo su padre, más "Ninguno (dejar todos
+incluidos)" y la pista de responder "todos" si solo se necesita el lugar.
+Los números que responde el usuario se **quitan**; quitar un padre
+arrastra lo que va debajo (`_quitar_del_carrito`, en cascada por `por`),
+quitar solo un hijo (ej. el brazo del micrófono) deja al padre. Un "sí" a
+secas se repregunta en vez de tomarse como "todos". Si el lugar no tiene
+contenidos, el wizard sigue directo a pedir fecha.
+
+Cada ítem lleva en `por` quién lo trajo (el lugar para las raíces, el
+activo padre para sus hijos); con eso `_niveles` calcula la sangría en
+todos los mensajes tipo factura (fecha, horas, resumen, confirmación): el
+lugar en negrita, sus activos con `•`, los hijos de esos activos con `◦`.
+
+Por el mismo motivo que `confirmar_accesorios` (ahí "no" responde a
+"¿quieres quitar alguno?"), `confirmar_contenidos_espacio` está excluido
+del atajo global que cancela el wizard al ver la palabra "no" -- si no lo
+estuviera, "no" cancelaría toda la reserva en vez de seguir a pedir fecha.
 
 **Disponibilidad: siempre se pregunta, nunca se decide en silencio.**
 `_resolver_disponibilidad_carrito` ya no distingue accesorio automático de

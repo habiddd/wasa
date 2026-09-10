@@ -27,9 +27,8 @@ export function ActivoNuevoForm({
 }: {
   tipo: TipoRecurso
   equipos: Recurso[]
-  // Opciones del selector "Lugar / espacio": un equipo va en una sala, pero
-  // una sala también puede ir dentro de otra (edificio > piso > sala), así
-  // que este selector aplica a los dos tipos.
+  // Opciones del selector "Lugar / espacio" -- solo para equipos: un lugar
+  // no va dentro de otro lugar (quien crea un espacio pasa `[]`).
   espacios: Recurso[]
   onCancel: () => void
   onCreate: (cambios: CambiosActivo) => Promise<void>
@@ -94,9 +93,9 @@ export function ActivoNuevoForm({
         ubicacion: ubicacion || null,
         descripcion: descripcion || null,
         estado,
-        espacio_id: espacioId ? Number(espacioId) : null,
       }
       if (tipo === "equipo") {
+        cambios.espacio_id = espacioId ? Number(espacioId) : null
         cambios.categoria = categoria || null
         cambios.subcategoria = subcategoria || null
         cambios.placa = placa ? placa.toUpperCase() : null
@@ -185,22 +184,24 @@ export function ActivoNuevoForm({
             <Input value={ubicacion} onChange={(e) => setUbicacion(e.target.value)} />
           </div>
 
-          <div className="flex flex-col gap-1">
-            <Label>Lugar / espacio</Label>
-            <Select value={espacioId || "__ninguno__"} onValueChange={handleEspacioChange}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__ninguno__">— Sin lugar —</SelectItem>
-                {espacios.map((r) => (
-                  <SelectItem key={r.id} value={String(r.id)}>
-                    {r.nombre}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {tipo === "equipo" && (
+            <div className="flex flex-col gap-1">
+              <Label>Lugar / espacio</Label>
+              <Select value={espacioId || "__ninguno__"} onValueChange={handleEspacioChange}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__ninguno__">— Sin lugar —</SelectItem>
+                  {espacios.map((r) => (
+                    <SelectItem key={r.id} value={String(r.id)}>
+                      {r.nombre}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <div className="col-span-full flex flex-col gap-1">
             <Label>Descripción</Label>

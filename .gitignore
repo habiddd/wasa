@@ -8,6 +8,7 @@ instance/
 .DS_Store
 .claude/
 .mcp.json
+.vscode
 
 # Dashboard frontend (React + shadcn/ui) — ver dashboard-frontend/
 dashboard-frontend/node_modules/

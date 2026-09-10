@@ -41,8 +41,8 @@ class Recurso(db.Model):
     # accesorios en bundle, esta dice en qué lugar está el activo. Debe
     # apuntar a un recurso con tipo='espacio' -- se valida en
     # routes/dashboard.py (_validar_espacio), no acá, porque Postgres no
-    # admite subqueries en un CHECK. Un espacio puede estar dentro de otro
-    # espacio (edificio > piso > sala), así que también sirve para anidarlos.
+    # admite subqueries en un CHECK. Un espacio no tiene lugar ni padre (no
+    # se anidan lugares): CHECK recursos_espacio_sin_padre_ni_lugar.
     espacio_id = db.Column(db.Integer, db.ForeignKey("recursos.id"))
     categoria = db.Column(db.String(50))                  # agrupación gruesa, ej. 'grabación audiovisual' (texto libre)
     subcategoria = db.Column(db.String(50))               # 'camara' | 'celular' | 'dron' | ... -- nivel fino sobre el que trabaja el asistente del bot (texto libre)

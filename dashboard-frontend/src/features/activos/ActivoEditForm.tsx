@@ -18,7 +18,6 @@ import { useActivosContext } from "./activos-context"
 import { CampoCategoria } from "./CampoCategoria"
 import {
   descendientesDe,
-  descendientesEspacioDe,
   espaciosDisponibles,
   ESTADOS_ACTIVO,
   hijosSincronizados,
@@ -76,16 +75,10 @@ export function ActivoEditForm({
   ])
   const opcionesPadre = lista.filter((r) => !excluidos.has(r.id))
 
-  // Un espacio no puede terminar dentro de sí mismo ni de uno de sus
-  // propios contenidos (eso crearía un ciclo) -- se excluyen contra TODOS
-  // los activos, no solo `lista`, por el mismo motivo de arriba.
-  const excluidosEspacio = new Set([
-    recurso.id,
-    ...descendientesEspacioDe(recurso.id, activos).map((r) => r.id),
-  ])
-  const opcionesEspacio = espaciosDisponibles(activos).filter(
-    (r) => !excluidosEspacio.has(r.id)
-  )
+  // Contra TODOS los activos, no solo `lista`, por el mismo motivo de
+  // arriba. Sin el propio recurso: si era un espacio y en este form se lo
+  // pasa a equipo, no puede quedar dentro de sí mismo.
+  const opcionesEspacio = espaciosDisponibles(activos).filter((r) => r.id !== recurso.id)
 
   // Valores de Categoría/Subcategoría ya usados -- contra TODOS los
   // activos (contexto), no contra `lista` (que viene filtrada), para que
@@ -94,9 +87,13 @@ export function ActivoEditForm({
   const categoriasConocidas = valoresCategoria(activos)
   const subcategoriasConocidas = valoresSubcategoria(activos)
 
-  const espacioIdNumerico = espacioId ? Number(espacioId) : null
+  // Un espacio no tiene padre ni lugar (no se anidan lugares): el form
+  // oculta esos dos selectores y los manda en null.
+  const esEspacio = tipo === "espacio"
+  const espacioIdNumerico = esEspacio || !espacioId ? null : Number(espacioId)
   const hijosAMover = hijosSincronizados(recurso, activos)
-  const mostrarPropagacion = hijosAMover.length > 0 && espacioIdNumerico !== recurso.espacio_id
+  const mostrarPropagacion =
+    !esEspacio && hijosAMover.length > 0 && espacioIdNumerico !== recurso.espacio_id
 
   function handlePadreChange(valor: string) {
     const nuevoPadreId = valor === "__ninguno__" ? "" : valor
@@ -128,7 +125,7 @@ export function ActivoEditForm({
         identificador: identificador || null,
         ubicacion: ubicacion || null,
         descripcion: descripcion || null,
-        padre_id: padreId ? Number(padreId) : null,
+        padre_id: esEspacio || !padreId ? null : Number(padreId),
         espacio_id: espacioIdNumerico,
         requiere_seguro: requiereSeguro,
         estado,
@@ -212,39 +209,43 @@ export function ActivoEditForm({
         <Label>Descripción</Label>
         <Textarea rows={2} value={descripcion} onChange={(e) => setDescripcion(e.target.value)} />
       </div>
-      <div className="flex flex-col gap-1">
-        <Label>Padre (activo del que depende)</Label>
-        <Select value={padreId || "__ninguno__"} onValueChange={handlePadreChange}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__ninguno__">— Ninguno —</SelectItem>
-            {opcionesPadre.map((r) => (
-              <SelectItem key={r.id} value={String(r.id)}>
-                {r.nombre}
-                {r.placa ? ` (${r.placa})` : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="flex flex-col gap-1">
-        <Label>Lugar / espacio</Label>
-        <Select value={espacioId || "__ninguno__"} onValueChange={handleEspacioChange}>
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__ninguno__">— Sin lugar —</SelectItem>
-            {opcionesEspacio.map((r) => (
-              <SelectItem key={r.id} value={String(r.id)}>
-                {r.nombre}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {!esEspacio && (
+        <>
+          <div className="flex flex-col gap-1">
+            <Label>Padre (activo del que depende)</Label>
+            <Select value={padreId || "__ninguno__"} onValueChange={handlePadreChange}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__ninguno__">— Ninguno —</SelectItem>
+                {opcionesPadre.map((r) => (
+                  <SelectItem key={r.id} value={String(r.id)}>
+                    {r.nombre}
+                    {r.placa ? ` (${r.placa})` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label>Lugar / espacio</Label>
+            <Select value={espacioId || "__ninguno__"} onValueChange={handleEspacioChange}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__ninguno__">— Sin lugar —</SelectItem>
+                {opcionesEspacio.map((r) => (
+                  <SelectItem key={r.id} value={String(r.id)}>
+                    {r.nombre}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </>
+      )}
       {mostrarPropagacion && (
         <div className="col-span-full flex items-center gap-2">
           <Checkbox

@@ -59,9 +59,9 @@ CREATE TABLE IF NOT EXISTS recursos (
     -- tener padre, ambos, o ninguno. La fila referenciada debe tener
     -- tipo='espacio' -- eso se valida en la app (ver
     -- flask-app/app/routes/dashboard.py, _validar_espacio) y no con un CHECK
-    -- porque Postgres no admite subqueries en un CHECK. Como un espacio
-    -- puede estar dentro de otro (edificio > piso > sala), esta misma
-    -- columna también se usa para anidar espacios.
+    -- porque Postgres no admite subqueries en un CHECK. Un espacio, en
+    -- cambio, no tiene lugar ni padre: no se anidan lugares (ver
+    -- recursos_espacio_sin_padre_ni_lugar).
     espacio_id      INTEGER REFERENCES recursos(id),
     -- Dos niveles de clasificación del equipo -- distintos de la columna
     -- `tipo` de arriba (equipo/espacio):
@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS recursos (
     CONSTRAINT recursos_categoria_requerida_equipo CHECK (tipo <> 'equipo' OR categoria IS NOT NULL),
     CONSTRAINT recursos_padre_no_self CHECK (padre_id IS NULL OR padre_id <> id),
     CONSTRAINT recursos_espacio_no_self CHECK (espacio_id IS NULL OR espacio_id <> id),
+    CONSTRAINT recursos_espacio_sin_padre_ni_lugar CHECK (tipo <> 'espacio' OR (padre_id IS NULL AND espacio_id IS NULL)),
     CONSTRAINT recursos_estado_valido CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible'))
 );
 
@@ -280,6 +281,24 @@ BEGIN
     ) THEN
         ALTER TABLE recursos ADD CONSTRAINT recursos_espacio_no_self
             CHECK (espacio_id IS NULL OR espacio_id <> id);
+    END IF;
+END $$;
+
+-- Un lugar no va dentro de otro lugar ni es hijo (padre_id) de nada: no es
+-- un caso de uso de la CPA (decisión del 10/09/2026, ver
+-- docs/SESION_2026-09-10.md). Antes se permitía anidar espacios (edificio >
+-- piso > sala); las filas que lo usaban se desvinculan justo antes de crear
+-- el CHECK, dentro del mismo IF, para que re-ejecutar el script no toque
+-- nada una vez que la constraint existe.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'recursos_espacio_sin_padre_ni_lugar'
+    ) THEN
+        UPDATE recursos SET espacio_id = NULL, padre_id = NULL
+            WHERE tipo = 'espacio' AND (espacio_id IS NOT NULL OR padre_id IS NOT NULL);
+        ALTER TABLE recursos ADD CONSTRAINT recursos_espacio_sin_padre_ni_lugar
+            CHECK (tipo <> 'espacio' OR (padre_id IS NULL AND espacio_id IS NULL));
     END IF;
 END $$;
 

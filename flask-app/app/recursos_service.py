@@ -135,43 +135,37 @@ def _accesorios_por_defecto(nombre_padre: str) -> list[str]:
     return vistos
 
 
-def _contenidos_de_espacio(nombre_espacio: str) -> list[str]:
-    """Nombres (modelo) de los equipos activos que viven dentro de un lugar
+def _contenidos_de_espacio(nombre_espacio: str) -> list[dict]:
+    """Árbol de los equipos activos que viven dentro de un lugar
     (`recursos.espacio_id`) -- jerarquía DISTINTA e independiente de los
     accesorios por `padre_id` (ver `_accesorios_por_defecto` arriba y el
-    comentario sobre `espacio_id` en `models.Recurso`).
+    comentario sobre `espacio_id` en `models.Recurso`). Cada nodo es
+    `{"nombre", "unidades": [ids], "hijos": [nodos]}`, donde `hijos` son los
+    hijos por `padre_id` de esas unidades.
 
-    ASIMETRÍA A PROPÓSITO respecto a los accesorios: estos NO se agregan
-    solos al carrito, solo se muestran (ver paso "elegir_contenidos_espacio"
-    en `_avanzar_wizard`/`_continuar_reserva`), y el usuario elige cuáles
-    sumar -- por defecto no se suma ninguno. Motivo: reservar un lugar (ej.
-    "Sala de postproducción 4") no puede reservar de una sus 5 computadores,
-    porque dejaría sin máquinas a cualquier otra persona que también los
-    necesite (agotar las unidades de un modelo hace que el siguiente
-    usuario sea rechazado). Si el día de mañana se quiere invertir esto a
-    opt-out (incluidos por defecto, se quitan los que sobren), el cambio es
-    en el fold-in de `_avanzar_wizard`: agregarlos al carrito de una con
-    `auto=True` igual que ya se hace con `_accesorios_por_defecto`, y reusar
-    `_mensaje_confirmar_accesorios` en vez de un mensaje propio.
+    Se incluyen TODOS por defecto (ver paso "confirmar_contenidos_espacio"
+    en `_avanzar_wizard`/`_continuar_reserva`), igual que los accesorios en
+    bundle: quien reserva un lugar normalmente lo quiere con lo que tiene
+    adentro, y si solo necesita el lugar, quita lo que le sobre.
+
+    A diferencia de los accesorios, acá se guardan las UNIDADES concretas
+    (`unidades`), no solo el modelo: "la sala con sus iMac" son las 3 iMac
+    que están en esa sala, no una iMac cualquiera del inventario. Por eso
+    varias unidades del mismo modelo se juntan en un solo nodo (se muestra
+    como "iMac 24 M3 ×3") en vez de colapsar a una sola.
 
     Solo cuenta como RAÍZ un activo cuyo padre (por `padre_id`) NO esté
     también en este mismo espacio -- si el padre sí está, el hijo no se
-    lista suelto porque ya aparece anidado bajo su padre (ver
-    `_mensaje_elegir_contenidos_espacio`, que a su vez reusa
-    `_accesorios_por_defecto` para esos hijos). Si el padre no tiene lugar
-    o vive en OTRO lugar, el hijo SÍ cuenta como raíz de este espacio. En la
-    práctica esto casi no debería pasar porque mover de lugar a un padre
-    arrastra a sus hijos (ver "Regla de propagación" en
+    lista suelto porque ya aparece anidado bajo su padre. Si el padre no
+    tiene lugar o vive en OTRO lugar, el hijo SÍ cuenta como raíz de este
+    espacio. En la práctica esto casi no debería pasar porque mover de
+    lugar a un padre arrastra a sus hijos (ver "Regla de propagación" en
     docs/ARQUITECTURA.md), pero un hijo reubicado a mano queda cubierto
     igual.
 
-    Excluye espacios anidados dentro de este espacio (ej. un edificio que
-    contiene salas) -- por ahora esta función solo ofrece equipos
-    (`tipo='equipo'`).
-
-    Deduplicado por nombre, igual que `_grupos_activos`/`_accesorios_por_defecto`:
-    varias unidades del mismo modelo en el mismo lugar (ej. 3 iMac) cuentan
-    como una sola opción."""
+    Solo equipos (`tipo='equipo'`): un lugar dentro de otro lugar no se
+    ofrece, y es a propósito -- no es un caso de uso de la CPA (decisión
+    del 10/09/2026, ver docs/SESION_2026-09-10.md)."""
     ids_espacio = [u.id for u in _grupo(nombre_espacio)]
     if not ids_espacio:
         return []
@@ -182,13 +176,47 @@ def _contenidos_de_espacio(nombre_espacio: str) -> list[str]:
         .all()
     )
     ids_contenidos = {r.id for r in contenidos}
-    vistos: list[str] = []
-    for r in contenidos:
-        if r.padre_id in ids_contenidos:
-            continue  # es hijo de otro activo de este mismo espacio -- ya aparece anidado bajo ese padre, no es raíz
-        if r.nombre not in vistos:
-            vistos.append(r.nombre)
-    return vistos
+    raices = [r for r in contenidos if r.padre_id not in ids_contenidos]
+    return _nodos_por_nombre(raices, set())
+
+
+def _nodos_por_nombre(recursos: list[Recurso], vistos: set[int]) -> list[dict]:
+    """Junta `recursos` en nodos por nombre (varias placas del mismo modelo
+    = un nodo con varias `unidades`) y baja recursivamente a los hijos por
+    `padre_id` de esas unidades. `vistos` evita repetir una unidad (y
+    corta cualquier ciclo de `padre_id` mal cargado)."""
+    nodos: dict[str, dict] = {}
+    for r in recursos:
+        if r.id in vistos:
+            continue
+        vistos.add(r.id)
+        nodos.setdefault(r.nombre, {"nombre": r.nombre, "unidades": [], "hijos": []})["unidades"].append(r.id)
+
+    for nodo in nodos.values():
+        hijos = (
+            Recurso.query.filter_by(estado=ESTADO_DISPONIBLE)
+            .filter(Recurso.padre_id.in_(nodo["unidades"]))
+            .order_by(Recurso.id)
+            .all()
+        )
+        nodo["hijos"] = _nodos_por_nombre(hijos, vistos)
+    return list(nodos.values())
+
+
+def _items_de_contenidos(nodos: list[dict], por: str, ya_en_carrito: set[str]) -> list[dict]:
+    """Aplana el árbol de `_contenidos_de_espacio` a ítems de carrito, en
+    orden (cada padre seguido de sus hijos). `por` enlaza cada ítem con
+    quien lo trajo -- el lugar para las raíces, el activo padre para sus
+    hijos -- y es lo que usan la sangría (`_niveles`) y el borrado en
+    cascada (`_quitar_del_carrito`). Se salta lo que ya esté en el carrito
+    (y agrega a `ya_en_carrito` lo que sí suma)."""
+    items: list[dict] = []
+    for nodo in nodos:
+        if nodo["nombre"] not in ya_en_carrito:
+            items.append({"nombre_recurso": nodo["nombre"], "auto": True, "por": por, "unidades": nodo["unidades"]})
+            ya_en_carrito.add(nodo["nombre"])
+        items.extend(_items_de_contenidos(nodo["hijos"], nodo["nombre"], ya_en_carrito))
+    return items
 
 
 def listar_nombres_disponibles() -> list[str]:
@@ -387,31 +415,79 @@ def _unidad_libre_en_rango(nombre: str, inicio: datetime, fin: datetime) -> Recu
     return None
 
 
+def _unidades_fijas_libres(ids: list[int], inicio: datetime, fin: datetime) -> list[Recurso]:
+    """De las unidades concretas `ids` (ítems con `unidades`, ver
+    `_items_de_contenidos`), las que siguen disponibles en inventario y sin
+    choque de horario. A diferencia de `_unidad_libre_en_rango`, no se
+    busca reemplazo en otra unidad del mismo modelo: el usuario pidió
+    justo esas (las que están en el lugar que reservó)."""
+    unidades = (
+        Recurso.query.filter(Recurso.id.in_(ids), Recurso.estado == ESTADO_DISPONIBLE)
+        .order_by(Recurso.id)
+        .all()
+    )
+    return [u for u in unidades if _reserva_solapada(u.id, inicio, fin) is None]
+
+
 def _resolver_disponibilidad_carrito(
     carrito: list[dict], inicio: datetime, fin: datetime
-) -> tuple[list[dict], list[Recurso], list[str]]:
+) -> tuple[list[dict], list[Recurso], list[dict]]:
     """Revisa la disponibilidad de cada ítem del carrito en el rango dado.
     Ya no distingue accesorio automático de elegido a mano: cualquier ítem
     sin unidad libre en ese horario -- sea el activo que el usuario pidió o
     un hijo que se incluyó por defecto -- se reporta en `no_disponibles`
     para que el llamador se lo diga al usuario y le pregunte qué hacer (ver
     paso "resolver_disponibilidad" en `_continuar_reserva`), en vez de
-    decidir en silencio por él. Cuando `no_disponibles` viene vacío,
-    `disponibles` y `unidades` quedan en el mismo orden -- una unidad por
-    ítem, listas para reservar."""
+    decidir en silencio por él.
+
+    Un ítem con `unidades` fijas (contenidos de un lugar) está disponible
+    solo si lo están TODAS; si no, se reporta con cuáles sí quedan libres
+    (`libres`), para que "quitar lo no disponible" deje las libres en vez
+    de descartar el modelo completo. Cada entrada de `no_disponibles` es
+    `{"nombre", "total", "libres": [ids]}`.
+
+    Cuando `no_disponibles` viene vacío, `unidades` trae todas las unidades
+    a reservar (una por ítem, o varias si el ítem tiene `unidades` fijas)."""
     disponibles: list[dict] = []
     unidades: list[Recurso] = []
-    no_disponibles: list[str] = []
+    no_disponibles: list[dict] = []
 
     for item in carrito:
+        fijas = item.get("unidades")
+        if fijas:
+            libres = _unidades_fijas_libres(fijas, inicio, fin)
+            if len(libres) == len(fijas):
+                disponibles.append(item)
+                unidades.extend(libres)
+            else:
+                no_disponibles.append(
+                    {"nombre": item["nombre_recurso"], "total": len(fijas), "libres": [u.id for u in libres]}
+                )
+            continue
+
         unidad = _unidad_libre_en_rango(item["nombre_recurso"], inicio, fin)
         if unidad is not None:
             disponibles.append(item)
             unidades.append(unidad)
         else:
-            no_disponibles.append(item["nombre_recurso"])
+            no_disponibles.append({"nombre": item["nombre_recurso"], "total": 1, "libres": []})
 
     return disponibles, unidades, no_disponibles
+
+
+def _quitar_del_carrito(carrito: list[dict], nombres: set[str]) -> list[dict]:
+    """Quita del carrito los ítems nombrados y, en cascada, todo lo que
+    colgaba de ellos por `por`: los accesorios de un equipo, los contenidos
+    de un lugar y los hijos de esos contenidos."""
+    quitados = set(nombres)
+    hubo_cambio = True
+    while hubo_cambio:
+        hubo_cambio = False
+        for item in carrito:
+            if item["nombre_recurso"] not in quitados and item.get("por") in quitados:
+                quitados.add(item["nombre_recurso"])
+                hubo_cambio = True
+    return [item for item in carrito if item["nombre_recurso"] not in quitados]
 
 
 def crear_reservas_grupo(
@@ -905,36 +981,33 @@ def _mensaje_confirmar_accesorios(nombre_padre: str, incluidos: list[str]) -> st
     return mensaje
 
 
-def _mensaje_elegir_contenidos_espacio(nombre_espacio: str, raices: list[str]) -> str:
+def _mensaje_confirmar_contenidos_espacio(nombre_espacio: str, incluidos: list[dict]) -> str:
     """Análogo a `_mensaje_confirmar_accesorios` pero para lo que contiene
-    un LUGAR (`_contenidos_de_espacio`), no para accesorios en bundle. Dos
-    diferencias clave con ese mensaje:
-    - Muestra el anidado: cada activo raíz y, debajo e indentado, sus
-      propios hijos por `padre_id` (reusando `_accesorios_por_defecto`) --
-      así el usuario ve qué se lleva si elige ese activo (ej. la Cámara
-      con sus 3 lentes debajo). Solo las raíces se numeran/eligen; los
-      hijos van pegados a su padre, no son una opción aparte.
-    - Nada viene incluido por defecto (ver la asimetría explicada en
-      `_contenidos_de_espacio`): la pregunta es qué AGREGAR, no qué quitar."""
-    lineas: list[str] = []
-    for i, nombre in enumerate(raices, start=1):
-        lineas.append(f"{i}. {nombre}")
-        for hijo in _accesorios_por_defecto(nombre):
-            lineas.append(f"    • {hijo}")
-    numero_ninguno = len(raices) + 1
-    lineas.append(f"{numero_ninguno}. Ninguno (solo reservar el lugar)")
-    mensaje = (
+    un LUGAR (`_contenidos_de_espacio`): todo ya quedó incluido en el
+    carrito y se pregunta qué QUITAR. Diferencia con ese mensaje: muestra
+    el anidado -- cada hijo sangrado debajo de su padre -- y numera TODAS
+    las líneas, padres e hijos, para que se pueda quitar solo un hijo (ej.
+    el brazo del micrófono) o un padre con todo lo que lleva debajo."""
+    niveles = _niveles(incluidos)
+    lineas = [
+        f"{'    ' * nivel}{i}. {item['nombre_recurso']}{_sufijo_cantidad(item)}"
+        for i, (item, nivel) in enumerate(zip(incluidos, niveles), start=1)
+    ]
+    numero_ninguno = len(incluidos) + 1
+    lineas.append(f"{numero_ninguno}. Ninguno (dejar todos incluidos)")
+    aviso_cascada = "\nSi quitas un activo, también se quita lo que va debajo de él." if any(niveles) else ""
+    return (
         "*ESTE LUGAR INCLUYE*\n"
         f"{_DIVISOR_FACTURA}\n"
         f"*{nombre_espacio}*\n"
-        "Contiene:\n"
+        "Incluye por defecto:\n"
         f"{chr(10).join(lineas)}\n"
         f"{_DIVISOR_FACTURA}\n"
-        "¿Quieres agregar alguno a la misma reserva? Responde con los "
-        f"números separados por coma (ej. \"1,2\"), o {numero_ninguno} si "
-        "no quieres agregar ninguno."
+        "¿Quieres quitar alguno? Responde con los números separados por "
+        f"coma (ej. \"1,2\"), {numero_ninguno} para no quitar ninguno, o "
+        "\"todos\" si solo necesitas el lugar."
+        f"{aviso_cascada}"
     )
-    return mensaje
 
 
 def _interpretar_seleccion_multiple(texto: str, cantidad: int) -> list[int] | None:
@@ -977,7 +1050,7 @@ def _iniciar_quitar_item(wizard: dict, sesion: dict) -> tuple[str, dict]:
     opciones = [
         (
             item["nombre_recurso"],
-            item["nombre_recurso"] + (" (incluido por defecto)" if item["auto"] else ""),
+            item["nombre_recurso"] + _sufijo_cantidad(item) + (" (incluido por defecto)" if item["auto"] else ""),
         )
         for item in wizard["carrito"]
     ]
@@ -1067,23 +1140,22 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
                 wizard["_mensaje_menu_actual"] = mensaje
                 return _con_avisos(avisos, mensaje), wizard, False
 
-            # Si el ítem recién resuelto es un LUGAR (tipo='espacio'), se
-            # muestra lo que contiene (jerarquía por `espacio_id`, ver
-            # `_contenidos_de_espacio`) para que el usuario elija qué sumar
-            # a la misma reserva -- a diferencia de los accesorios de
-            # arriba, acá NO se agrega nada solo (ver la asimetría explicada
-            # en `_contenidos_de_espacio`). Si el lugar no tiene contenidos
-            # (o ya están todos en el carrito), sigue de largo igual que
-            # hoy, directo a pedir fecha.
+            # Si el ítem recién resuelto es un LUGAR (tipo='espacio'), lo
+            # que contiene (jerarquía por `espacio_id`, con los hijos por
+            # `padre_id` de cada activo, ver `_contenidos_de_espacio`) se
+            # incluye de una vez, igual que los accesorios de arriba, y se
+            # le muestra al usuario por si quiere quitar algo -- p. ej. si
+            # solo necesita el lugar. Si el lugar no tiene contenidos (o ya
+            # están todos en el carrito), sigue de largo a pedir fecha.
             unidad_item = _grupo(nombre)
             if unidad_item and unidad_item[0].tipo == "espacio":
-                raices = [r for r in _contenidos_de_espacio(nombre) if r not in ya_en_carrito]
-                if raices:
-                    wizard["contenidos_espacio_disponibles"] = raices
-                    wizard["espacio_padre_pendiente"] = nombre
+                contenidos = _items_de_contenidos(_contenidos_de_espacio(nombre), nombre, set(ya_en_carrito))
+                if contenidos:
+                    wizard["carrito"].extend(contenidos)
+                    wizard["contenidos_incluidos"] = contenidos
                     wizard["opciones_actuales"] = None
-                    wizard["paso"] = "elegir_contenidos_espacio"
-                    mensaje = _mensaje_elegir_contenidos_espacio(nombre, raices)
+                    wizard["paso"] = "confirmar_contenidos_espacio"
+                    mensaje = _mensaje_confirmar_contenidos_espacio(nombre, contenidos)
                     wizard["_mensaje_menu_actual"] = mensaje
                     return _con_avisos(avisos, mensaje), wizard, False
 
@@ -1133,9 +1205,7 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
             wizard["opciones_actuales"] = None
             wizard["paso"] = "fecha"
-            lineas_activos = "\n".join(
-                _formatear_item_factura(item["nombre_recurso"], item["auto"]) for item in wizard["carrito"]
-            )
+            lineas_activos = _lineas_carrito(wizard["carrito"])
             mensaje = (
                 "*FECHA DE RESERVA*\n"
                 f"{_DIVISOR_FACTURA}\n"
@@ -1151,9 +1221,7 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             fecha_inicio = date.fromisoformat(wizard["fecha"])
             wizard["opciones_actuales"] = None
             wizard["paso"] = "hora_inicio"
-            lineas_activos = "\n".join(
-                _formatear_item_factura(item["nombre_recurso"], item["auto"]) for item in wizard["carrito"]
-            )
+            lineas_activos = _lineas_carrito(wizard["carrito"])
             mensaje = (
                 "*HORA DE INICIO*\n"
                 f"{_DIVISOR_FACTURA}\n"
@@ -1169,9 +1237,7 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             inicio_local = datetime.fromisoformat(wizard["inicio"]).astimezone(ZONA_HORARIA_CPA)
             wizard["opciones_actuales"] = None
             wizard["paso"] = "hora_fin"
-            lineas_activos = "\n".join(
-                _formatear_item_factura(item["nombre_recurso"], item["auto"]) for item in wizard["carrito"]
-            )
+            lineas_activos = _lineas_carrito(wizard["carrito"])
             mensaje = (
                 "*HORA DE FIN*\n"
                 f"{_DIVISOR_FACTURA}\n"
@@ -1196,17 +1262,51 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
 _DIVISOR_FACTURA = "――――――――――――――――――"
 
 
-def _formatear_item_factura(nombre: str, es_hijo_auto: bool, sufijo: str = "") -> str:
+def _sufijo_cantidad(item: dict) -> str:
+    """" ×3" cuando el ítem lleva varias unidades fijas (ej. las 3 iMac de
+    una sala, ver `_items_de_contenidos`); vacío si es una sola."""
+    cantidad = len(item.get("unidades") or [])
+    return f" ×{cantidad}" if cantidad > 1 else ""
+
+
+def _niveles(items: list[dict]) -> list[int]:
+    """Profundidad de cada ítem dentro de `items` según la cadena de `por`:
+    0 si nadie de la lista lo trajo, 1 si lo trajo otro ítem de la lista
+    (accesorio de un equipo, activo de un lugar), 2 si lo trajo uno de
+    nivel 1 (el brazo del micrófono de una cabina), etc."""
+    por_de = {item["nombre_recurso"]: item.get("por") for item in items}
+    niveles: list[int] = []
+    for item in items:
+        nivel, por, vistos = 0, item.get("por"), set()
+        while por in por_de and por not in vistos:
+            vistos.add(por)
+            nivel += 1
+            por = por_de[por]
+        niveles.append(nivel)
+    return niveles
+
+
+def _formatear_item_factura(item: dict, nivel: int) -> str:
     """Una línea de activo para los mensajes de resumen/confirmación, estilo
-    factura: el activo que el usuario pidió va en negrita al margen; un
-    accesorio que se incluyó solo por venir en bundle (`es_hijo_auto`) va
-    sangrado justo debajo, sin repetir el nombre del padre -- el wizard ya
-    garantiza que un padre y sus accesorios quedan contiguos en el carrito
-    (ver `_mover_item_resuelto_al_carrito` / paso "confirmar_accesorios"),
-    así que la sangría alcanza para que se entienda a cuál pertenecen."""
-    if es_hijo_auto:
-        return f"    • {nombre} _(incluido)_{sufijo}"
-    return f"*{nombre}*{sufijo}"
+    factura: el activo que el usuario pidió va en negrita al margen; lo que
+    vino incluido con él (accesorios en bundle, activos de un lugar y sus
+    hijos) va sangrado debajo, un nivel por generación, sin repetir el
+    nombre del padre -- el wizard ya garantiza que un padre y lo que trae
+    quedan contiguos en el carrito (ver `_mover_item_resuelto_al_carrito`,
+    pasos "confirmar_accesorios" / "confirmar_contenidos_espacio"), así
+    que la sangría alcanza para que se entienda a cuál pertenecen."""
+    nombre = item["nombre_recurso"] + _sufijo_cantidad(item)
+    if nivel == 0:
+        return f"*{nombre}*"
+    vineta = "•" if nivel == 1 else "◦"
+    incluido = " _(incluido)_" if item["auto"] else ""
+    return f"{'    ' * nivel}{vineta} {nombre}{incluido}"
+
+
+def _lineas_carrito(carrito: list[dict]) -> str:
+    return "\n".join(
+        _formatear_item_factura(item, nivel) for item, nivel in zip(carrito, _niveles(carrito))
+    )
 
 
 def _mensaje_resumen(wizard: dict, usuario: Usuario) -> str:
@@ -1214,9 +1314,7 @@ def _mensaje_resumen(wizard: dict, usuario: Usuario) -> str:
     fin_utc = datetime.fromisoformat(wizard["fin"])
     inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
     fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
-    lineas_activos = "\n".join(
-        _formatear_item_factura(item["nombre_recurso"], item["auto"]) for item in wizard["carrito"]
-    )
+    lineas_activos = _lineas_carrito(wizard["carrito"])
     resumen = (
         "*RESUMEN DE RESERVA*\n"
         f"{_DIVISOR_FACTURA}\n"
@@ -1242,12 +1340,17 @@ OPCIONES_NO_DISPONIBLE = [
 ]
 
 
-def _mensaje_no_disponibles(no_disponibles: list[str]) -> str:
+def _mensaje_no_disponibles(no_disponibles: list[dict]) -> str:
     """Le dice al usuario exactamente cuáles activos (padre o hijo, da
     igual) ya no están disponibles en el horario elegido, y le pregunta qué
     hacer -- en vez de decidir en silencio (ver `_resolver_disponibilidad_carrito`
-    y el paso "resolver_disponibilidad" en `_continuar_reserva`)."""
-    lineas = "\n".join(f"    • {n}" for n in no_disponibles)
+    y el paso "resolver_disponibilidad" en `_continuar_reserva`). Si solo
+    parte de las unidades fijas de un ítem está ocupada, dice cuántas."""
+    lineas = "\n".join(
+        f"    • {nd['nombre']}"
+        + (f" ({nd['total'] - len(nd['libres'])} de {nd['total']} unidades)" if nd["total"] > 1 else "")
+        for nd in no_disponibles
+    )
     verbo = "No está disponible" if len(no_disponibles) == 1 else "No están disponibles"
     mensaje = (
         "*DISPONIBILIDAD*\n"
@@ -1259,7 +1362,7 @@ def _mensaje_no_disponibles(no_disponibles: list[str]) -> str:
     return mensaje + "\n\n" + _formatear_menu("¿Qué quieres hacer?", OPCIONES_NO_DISPONIBLE)
 
 
-def _pausar_por_no_disponibles(wizard: dict, sesion: dict, no_disponibles: list[str]) -> tuple[str, dict]:
+def _pausar_por_no_disponibles(wizard: dict, sesion: dict, no_disponibles: list[dict]) -> tuple[str, dict]:
     wizard["no_disponibles"] = no_disponibles
     wizard["opciones_actuales"] = OPCIONES_NO_DISPONIBLE
     wizard["paso"] = "resolver_disponibilidad"
@@ -1306,15 +1409,13 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
 
     inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
     fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
-    lineas = "\n".join(
-        _formatear_item_factura(unidad.nombre, item["auto"])
-        for item, unidad in zip(carrito_final, unidades)
-    )
-    notas_seguro = [_nota_seguro(unidad) for unidad in unidades if unidad.requiere_seguro]
+    # dict.fromkeys: una sola nota por modelo aunque se reserven varias
+    # unidades fijas del mismo (ej. las 3 iMac de una sala).
+    notas_seguro = list(dict.fromkeys(_nota_seguro(unidad) for unidad in unidades if unidad.requiere_seguro))
     mensaje = (
         "*RESERVA CONFIRMADA*\n"
         f"{_DIVISOR_FACTURA}\n"
-        f"{lineas}\n"
+        f"{_lineas_carrito(carrito_final)}\n"
         f"{_DIVISOR_FACTURA}\n"
         f"Reservado por: {usuario.nombre}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
@@ -1800,9 +1901,7 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
         # en `_avanzar_wizard`) -- los índices que el usuario eligió acá son
         # los que quiere QUITAR, uno, varios o ninguno, no una lista de qué
         # incluir (ver `_interpretar_seleccion_multiple`).
-        a_quitar = {incluidos[i] for i in indices}
-        if a_quitar:
-            wizard["carrito"] = [item for item in wizard["carrito"] if item["nombre_recurso"] not in a_quitar]
+        wizard["carrito"] = _quitar_del_carrito(wizard["carrito"], {incluidos[i] for i in indices})
         # No hace falta revisar disponibilidad acá -- ya se revisa en el
         # paso "hora_fin" (o al confirmar, si la hora ya estaba puesta por
         # venir de "agregar otro activo"), ver `_pausar_por_no_disponibles`.
@@ -1813,37 +1912,28 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
         return mensaje, {**sesion, "reserva_wizard": wizard}
 
-    if paso == "elegir_contenidos_espacio":
-        disponibles = wizard.get("contenidos_espacio_disponibles") or []
-        indices = _interpretar_seleccion_multiple(texto_usuario, len(disponibles))
+    if paso == "confirmar_contenidos_espacio":
+        incluidos = [item["nombre_recurso"] for item in wizard.get("contenidos_incluidos") or []]
+        # La pregunta es "¿quieres quitar alguno?": un "sí" a secas no dice
+        # cuáles. `_interpretar_seleccion_multiple` lo tomaría como "todos"
+        # y dejaría solo el lugar, que no es lo que el usuario dijo.
+        if _normalizar(texto_usuario.strip()) == "si":
+            return "Dime cuáles, con sus números.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                **sesion,
+                "reserva_wizard": wizard,
+            }
+        indices = _interpretar_seleccion_multiple(texto_usuario, len(incluidos))
         if indices is None:
             return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
                 **sesion,
                 "reserva_wizard": wizard,
             }
 
-        wizard.pop("contenidos_espacio_disponibles", None)
-        wizard.pop("espacio_padre_pendiente", None)
-        # OJO, semántica invertida respecto a "confirmar_accesorios" arriba:
-        # ahí nada venía incluido y los índices eran qué QUITAR de lo ya
-        # incluido; acá nada viene incluido y los índices son qué AGREGAR
-        # (ver la asimetría explicada en `_contenidos_de_espacio`).
-        a_agregar = [disponibles[i] for i in indices]
-        ya_en_carrito = {item["nombre_recurso"] for item in wizard["carrito"]}
-        for nombre_elegido in a_agregar:
-            if nombre_elegido in ya_en_carrito:
-                continue
-            wizard["carrito"].append({"nombre_recurso": nombre_elegido, "auto": False, "por": None})
-            ya_en_carrito.add(nombre_elegido)
-            # Cada activo del lugar que el usuario decide sumar puede a su
-            # vez tener sus propios hijos por `padre_id` (ej. la Cámara y
-            # sus lentes) -- esos sí se arrastran automáticos, reusando el
-            # mismo mecanismo que los accesorios en bundle normales.
-            for hijo in _accesorios_por_defecto(nombre_elegido):
-                if hijo in ya_en_carrito:
-                    continue
-                wizard["carrito"].append({"nombre_recurso": hijo, "auto": True, "por": nombre_elegido})
-                ya_en_carrito.add(hijo)
+        wizard.pop("contenidos_incluidos", None)
+        # Todo ya estaba en el carrito (ver el fold-in en `_avanzar_wizard`);
+        # los índices son qué QUITAR, igual que en "confirmar_accesorios".
+        # Quitar un activo arrastra lo que va debajo de él (sus hijos).
+        wizard["carrito"] = _quitar_del_carrito(wizard["carrito"], {incluidos[i] for i in indices})
         # No hace falta revisar disponibilidad acá -- ya se revisa en el
         # paso "hora_fin" (o al confirmar), ver `_pausar_por_no_disponibles`.
 
@@ -1869,15 +1959,21 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
                 "Reserva cancelada, no se guardó nada. Si quieres reservar otra cosa, dime qué necesitas."
             ), {**sesion, "reserva_wizard": None}
 
-        # "quitar" -- se quitan los activos no disponibles y, si alguno era
-        # padre de un accesorio incluido por defecto, también ese accesorio
-        # (mismo criterio de arrastre que "Quitar un activo de la reserva",
-        # ver paso "quitar_item_menu").
-        wizard["carrito"] = [
-            item
-            for item in wizard["carrito"]
-            if item["nombre_recurso"] not in no_disponibles and item.get("por") not in no_disponibles
-        ]
+        # "quitar" -- se quitan los activos no disponibles y, en cascada, lo
+        # que colgaba de ellos (mismo criterio de arrastre que "Quitar un
+        # activo de la reserva", ver paso "quitar_item_menu"). Un ítem con
+        # unidades fijas que quedó ocupado solo en parte (ej. 1 de las 3
+        # iMac de la sala) no se quita: se queda con las unidades libres.
+        a_quitar: set[str] = set()
+        for item in wizard["carrito"]:
+            nd = next((nd for nd in no_disponibles if nd["nombre"] == item["nombre_recurso"]), None)
+            if nd is None:
+                continue
+            if nd["libres"]:
+                item["unidades"] = nd["libres"]
+            else:
+                a_quitar.add(item["nombre_recurso"])
+        wizard["carrito"] = _quitar_del_carrito(wizard["carrito"], a_quitar)
         if not wizard["carrito"]:
             wizard["resolviendo_item"] = True
 
@@ -1896,12 +1992,7 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
                 "reserva_wizard": wizard,
             }
 
-        nombre_a_quitar = valor
-        wizard["carrito"] = [
-            item
-            for item in wizard["carrito"]
-            if item["nombre_recurso"] != nombre_a_quitar and item.get("por") != nombre_a_quitar
-        ]
+        wizard["carrito"] = _quitar_del_carrito(wizard["carrito"], {valor})
         if not wizard["carrito"]:
             # Se quitó el único activo -- hay que elegir otro para poder
             # seguir con la reserva.
@@ -1945,19 +2036,18 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     # no se toca.
     # Mismo motivo para "confirmar_accesorios": su opción "No, no los
     # necesito" también empieza por "no", que ahí significa "excluye esos
-    # accesorios", no "cancela toda la reserva". Mismo motivo, en espejo,
-    # para "elegir_contenidos_espacio": ahí su opción "Ninguno" también se
-    # puede responder como "no" (ver `_interpretar_seleccion_multiple`), y
-    # significa "no agregues nada de lo que contiene el lugar", no "cancela
-    # toda la reserva" -- si se olvida acá, "ninguno"/"no" cancelaría todo
-    # el wizard en vez de simplemente seguir a pedir fecha.
+    # accesorios", no "cancela toda la reserva". Mismo motivo para
+    # "confirmar_contenidos_espacio": ahí "no" responde a "¿quieres quitar
+    # alguno?" (ver `_interpretar_seleccion_multiple`) y significa "deja
+    # todo lo del lugar incluido", no "cancela toda la reserva" -- si se
+    # olvida acá, "no" cancelaría todo el wizard en vez de seguir a fecha.
     palabras_cancelar = PALABRAS_CANCELAR
     if wizard is not None and wizard.get("paso") in (
         "confirmar_fecha_interpretada",
         "confirmar_hora_inicio_interpretada",
         "confirmar_hora_fin_interpretada",
         "confirmar_accesorios",
-        "elegir_contenidos_espacio",
+        "confirmar_contenidos_espacio",
     ):
         palabras_cancelar = {"cancelar", "cancela", "cerrar"}
 

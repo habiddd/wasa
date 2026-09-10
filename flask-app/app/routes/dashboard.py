@@ -559,6 +559,10 @@ _CAMPOS_EDITABLES_ACTIVO = {
 # 'no_disponible' quedan fuera del catálogo que ve el bot.
 _ESTADOS_VALIDOS = {"disponible", "en_mantenimiento", "no_disponible"}
 
+# Un padre (padre_id) es siempre un equipo: los accesorios cuelgan de un
+# equipo, y el lugar donde algo está se dice con espacio_id, no con padre_id.
+_ERROR_PADRE_NO_EQUIPO = "El padre debe ser un equipo. Para indicar en qué lugar está, usa Lugar / espacio."
+
 # Traduce violaciones de constraints de Postgres (ver postgres/init/02-schema.sql)
 # a mensajes legibles, en vez de exponer el error crudo de asyncpg/psycopg.
 _MENSAJES_INTEGRIDAD = {
@@ -567,6 +571,7 @@ _MENSAJES_INTEGRIDAD = {
     "recursos_categoria_requerida_equipo": "Los equipos requieren una categoría.",
     "recursos_padre_no_self": "Un activo no puede ser su propio padre.",
     "recursos_espacio_no_self": "Un activo no puede estar dentro de sí mismo.",
+    "recursos_espacio_sin_padre_ni_lugar": "Un lugar no puede estar dentro de otro lugar ni ser hijo de un activo.",
     "idx_recursos_placa_unica": "Ya existe otro activo con esa placa.",
     "recursos_tipo_check": "El tipo debe ser 'equipo' o 'espacio'.",
     "recursos_estado_valido": "El estado debe ser 'disponible', 'en_mantenimiento' o 'no_disponible'.",
@@ -622,18 +627,9 @@ def _validar_espacio(recurso_id: int | None, espacio_id) -> str | None:
     if recurso_id is not None and espacio.id == recurso_id:
         return "Un activo no puede estar dentro de sí mismo."
 
-    # Los espacios pueden anidarse (edificio > piso > sala), así que hay que
-    # chequear ciclos igual que se hace con padre_id: si recurso_id aparece
-    # subiendo por la cadena de espacios del espacio elegido, ese espacio es
-    # en realidad un "contenido" de recurso, y asignarlo lo convertiría en
-    # un ciclo.
-    if recurso_id is not None:
-        actual = espacio
-        while actual is not None:
-            if actual.id == recurso_id:
-                return "Esa relación crearía un ciclo entre espacios."
-            actual = actual.espacio
-
+    # No hace falta buscar ciclos: un espacio no puede tener lugar (CHECK
+    # recursos_espacio_sin_padre_ni_lugar), así que la cadena de lugares
+    # nunca pasa de un nivel.
     return None
 
 
@@ -692,6 +688,8 @@ def api_crear_activo():
         # No hace falta chequear ciclos aquí: un recurso recién creado no
         # tiene descendientes todavía, así que no puede formar uno.
         return jsonify({"error": "El padre indicado no existe."}), 400
+    if padre is not None and padre.tipo != "equipo":
+        return jsonify({"error": _ERROR_PADRE_NO_EQUIPO}), 400
 
     if "espacio_id" in datos:
         espacio_id = datos.get("espacio_id")
@@ -763,6 +761,26 @@ def api_actualizar_activo(recurso_id):
                 "error": f"No puedes cambiar el tipo: hay {cantidad_contenidos} activos ubicados en este espacio."
             }), 400
 
+    if "tipo" in datos and datos["tipo"] == "espacio" and recurso.tipo != "espacio":
+        # Espejo del caso de arriba: si este equipo tiene hijos por
+        # padre_id, pasarlo a espacio los dejaría con un lugar como padre
+        # (ver _ERROR_PADRE_NO_EQUIPO). Hay que desvincularlos primero.
+        cantidad_hijos = Recurso.query.filter_by(padre_id=recurso.id).count()
+        if cantidad_hijos:
+            return jsonify({
+                "error": f"No puedes cambiar el tipo: este activo tiene {cantidad_hijos} hijo{'' if cantidad_hijos == 1 else 's'}."
+            }), 400
+
+    # Misma regla que el CHECK recursos_espacio_sin_padre_ni_lugar, pero
+    # antes de tocar nada: si solo la atrapara el CHECK, el lazy load de
+    # `recurso.hijos` en _propagar_espacio_a_hijos hace autoflush del UPDATE
+    # fuera del try/commit de abajo y el IntegrityError sale como un 500.
+    if datos.get("tipo", recurso.tipo) == "espacio" and (
+        datos.get("padre_id", recurso.padre_id) is not None
+        or datos.get("espacio_id", recurso.espacio_id) is not None
+    ):
+        return jsonify({"error": _MENSAJES_INTEGRIDAD["recursos_espacio_sin_padre_ni_lugar"]}), 400
+
     espacio_anterior = recurso.espacio_id
     espacio_cambia = "espacio_id" in datos and datos["espacio_id"] != espacio_anterior
     if espacio_cambia:
@@ -778,6 +796,8 @@ def api_actualizar_activo(recurso_id):
             padre = Recurso.query.get(nuevo_padre_id)
             if padre is None:
                 return jsonify({"error": "El padre indicado no existe."}), 400
+            if padre.tipo != "equipo":
+                return jsonify({"error": _ERROR_PADRE_NO_EQUIPO}), 400
             # Evita ciclos: si recurso.id aparece en la cadena de padres del
             # nuevo padre, ese nuevo padre es en realidad descendiente de
             # recurso, y asignarlo lo convertiría en un ciclo.
