@@ -1193,7 +1193,7 @@ def _mensaje_confirmar_accesorios(nombre_padre: str, incluidos: list[str]) -> st
         f"*{nombre_padre}*\n"
         "Incluye por defecto:\n"
         f"{lineas}\n"
-        f"{numero_ninguno}. (dejar todos incluidos)\n"
+        f"{numero_ninguno}. Dejar todos incluidos\n"
         f"{_DIVISOR_FACTURA}\n"
         "¿Quieres quitar alguno? Responde con los números separados por "
         f"coma (ej. \"1,2\"), o {numero_ninguno} para no quitar ninguno."
@@ -1214,7 +1214,7 @@ def _mensaje_confirmar_contenidos_espacio(nombre_espacio: str, incluidos: list[d
         for i, (item, nivel) in enumerate(zip(incluidos, niveles), start=1)
     ]
     numero_ninguno = len(incluidos) + 1
-    lineas.append(f"{numero_ninguno}. (dejar todos incluidos)")
+    lineas.append(f"{numero_ninguno}. Dejar todos incluidos")
     aviso_cascada = "\nSi quitas un activo, también se quita lo que va debajo de él." if any(niveles) else ""
     return (
         "*ESTE LUGAR INCLUYE*\n"
@@ -1234,8 +1234,10 @@ def _interpretar_seleccion_multiple(texto: str, cantidad: int) -> list[int] | No
     """Interpreta la respuesta a un menú donde se puede elegir más de una
     opción a la vez por número (ej. qué accesorios por defecto quitar):
     "1", "2", "1,2", "1 y 2" -- devuelve los índices (0-based) elegidos.
-    El número (cantidad + 1) es siempre la última línea del menú ("Ninguno"
-    -- ver `_mensaje_confirmar_accesorios`), así que también se puede
+    El número (cantidad + 1) es siempre la última línea del menú ("Dejar
+    todos incluidos" -- ver `_mensaje_confirmar_accesorios`; antes decía
+    "Ninguno", y se quitó porque confundía: parecía "no quiero ninguno de
+    estos accesorios", lo contrario de lo que hace), así que también se puede
     responder solo con números en vez de tener que escribir la palabra; si
     aparece junto con otros números, gana "ninguno" (no tendría sentido
     combinarlo). "todos"/"ninguno" en texto (y sinónimos, incluido el
@@ -1253,7 +1255,7 @@ def _interpretar_seleccion_multiple(texto: str, cantidad: int) -> list[int] | No
         return None
 
     numeros_int = [int(n) - 1 for n in numeros]
-    if cantidad in numeros_int:  # 0-based: la opción "Ninguno" es cantidad + 1
+    if cantidad in numeros_int:  # 0-based: "Dejar todos incluidos" es cantidad + 1
         return []
 
     indices = []
