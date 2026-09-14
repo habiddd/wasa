@@ -140,7 +140,7 @@ export function ActivoEditForm({
   return (
     <form
       onSubmit={handleSubmit}
-      className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 border-t border-dashed pt-3"
+      className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] items-start gap-3 border-t border-dashed pt-3"
     >
       <div className="col-span-full flex flex-col gap-1">
         <Label>Nombre</Label>
@@ -211,7 +211,7 @@ export function ActivoEditForm({
       </div>
       {!esEspacio && (
         <>
-          <div className="flex flex-col gap-1">
+          <div className="col-span-2 flex flex-col gap-1">
             <Label>Padre (activo del que depende)</Label>
             <Select value={padreId || "__ninguno__"} onValueChange={handlePadreChange}>
               <SelectTrigger>

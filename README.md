@@ -78,7 +78,8 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   vinculación mientras no esté conectado, o el número vinculado una vez lo
   esté (se refresca sola cada 5s).
 - **Métricas**: reservas y mensajes bloqueados por guardrails en los
-  últimos 30 días, y las últimas interacciones registradas en `auditoria_bot`.
+  últimos 30 días, un gráfico de reservas por día del mismo periodo, y las
+  últimas interacciones registradas en `auditoria_bot`.
 - **Calendario**: las reservas de activos y lugares en vistas de **mes,
   semana y día**, vía `GET /dashboard/api/reservas?desde&hasta`. Las
   reservas del mismo usuario y horario se muestran como **un solo evento**

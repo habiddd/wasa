@@ -1019,6 +1019,55 @@ tener presentes antes de tocarlo:
   `DELETE /dashboard/api/reservas/grupo/<grupo_id>`; el toast solo informa
   el resultado posterior.
 
+## Tablas responsivas del dashboard: lista en tarjetas + columna que absorbe el espacio
+
+Las cuatro pestañas con tabla (Reservas, Usuarios, Sesiones, Métricas)
+comparten el mismo patrón, nacido en `ReservasPanel.tsx` y extendido a las
+demás en `docs/SESION_2026-09-14.md`. Antes de tocar cualquiera de estas
+tablas, o de agregar una nueva, conviene seguir el mismo esquema en vez de
+inventar uno distinto:
+
+- **`@container` en la raíz del panel**, no `@media`: así se adapta al
+  espacio real disponible (sidebar retraído/expandido, panel dentro de una
+  tarjeta como "Por usuario" en Sesiones), no al ancho de la ventana.
+- **Lista en tarjetas por debajo de `@2xl`, tabla desde ahí.** Dos
+  componentes (`ListaX` / `TablaX`), alternados con `@2xl:hidden` /
+  `hidden @2xl:block`. La lista no necesita columnas: cada tarjeta apila
+  el dato principal, un subtexto con lo que en la tabla sería una columna
+  aparte, y el estado/badge.
+- **Columnas menos críticas se ocultan progresivamente**
+  (`hidden @Nxl:table-cell`) y su contenido baja como subtexto de la
+  primera columna mientras están ocultas (`@Nxl:hidden` en un `<p>`
+  adentro de esa celda) -- nunca desaparece del todo, solo cambia de
+  lugar.
+- **Una sola columna absorbe el espacio sobrante** (`w-full` en su
+  `<th>` + `whitespace-normal` en su celda), la de contenido más
+  largo/variable de esa tabla (`Activos` en Reservas, `Nombre` en
+  Usuarios, `Recurso` en Sesiones, `Motivo bloqueo` en Métricas). Sin
+  esto, como `Table` (`components/ui/table.tsx`) fija `width: 100%` en el
+  `<table>`, el layout automático reparte el sobrante por igual entre
+  columnas cortas (fechas, "sí"/"no", badges) y cada celda queda con
+  relleno en blanco en vez de que el espacio se note en un solo lugar.
+  **Cuidado:** si otra columna de esa misma tabla también tiene
+  `whitespace-normal` sin una condición de ancho (por ejemplo para
+  envolver un subtexto en pantallas angostas), hay que apagarlo desde el
+  mismo breakpoint en que la columna absorbente aparece
+  (`whitespace-normal @Nxl:whitespace-nowrap`) -- si no, esa otra columna
+  se encoge a su palabra más larga y el texto se parte en varias líneas
+  (pasó con "Usuario" en Sesiones al agregarle `w-full` a "Recurso", ver
+  `docs/SESION_2026-09-14.md` sección 4).
+- **Desde `@6xl` sube el tamaño de letra y el padding de fila**
+  (`@6xl:text-base`, `@6xl:py-3`): en un monitor muy ancho hay espacio de
+  sobra para leer más cómodo, no solo para que la tabla se vea ancha.
+
+Esto solo tiene margen para respirar porque el `<main>` de
+`App.tsx` (el que envuelve las cuatro pestañas) dejó de estar fijo en
+`max-w-6xl`: desde 1800 px de viewport ya no tiene límite
+(`min-[1800px]:max-w-none`, con `max-w-7xl` de paso intermedio entre 1536
+y 1799 px). Por debajo de 1536 px el comportamiento no cambió. Sin este
+cambio, ninguna de las columnas-absorbentes de arriba tiene sobrante que
+absorber.
+
 ## Analítica en tiempo real
 
 Los endpoints en `app/routes/analytics.py` consultan directamente la
