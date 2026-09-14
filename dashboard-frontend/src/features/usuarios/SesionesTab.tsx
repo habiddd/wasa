@@ -59,41 +59,48 @@ function ListaSesiones({ sesiones }: { sesiones: Sesion[] }) {
 /**
  * Desde ~670 px: tabla. Recurso y Uso tienen columna propia solo si hay
  * espacio; si no, van en una línea bajo el usuario. Creada es lo primero
- * que sobra.
+ * que sobra. Recurso absorbe el espacio libre (con whitespace-normal) en
+ * vez de que el navegador lo reparta entre columnas cortas.
+ *
+ * En pantallas muy anchas (@6xl) sube el tamaño de letra y el padding: hay
+ * espacio de sobra para leer más cómodo, no solo para que la tabla se vea
+ * ancha.
  */
 function TablaSesiones({ sesiones }: { sesiones: Sesion[] }) {
   return (
-    <Table>
+    <Table className="@6xl:text-base">
       <TableHeader>
         <TableRow>
-          <TableHead>Usuario</TableHead>
-          <TableHead className="hidden @3xl:table-cell">Recurso</TableHead>
-          <TableHead className="hidden @4xl:table-cell">Uso</TableHead>
-          <TableHead>Horario</TableHead>
-          <TableHead>Estado</TableHead>
-          <TableHead className="hidden @5xl:table-cell">Creada</TableHead>
+          <TableHead className="@6xl:py-3">Usuario</TableHead>
+          <TableHead className="hidden w-full @3xl:table-cell @6xl:py-3">Recurso</TableHead>
+          <TableHead className="hidden @4xl:table-cell @6xl:py-3">Uso</TableHead>
+          <TableHead className="@6xl:py-3">Horario</TableHead>
+          <TableHead className="@6xl:py-3">Estado</TableHead>
+          <TableHead className="hidden @5xl:table-cell @6xl:py-3">Creada</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {sesiones.map((s) => (
           <TableRow key={s.id}>
-            <TableCell className="whitespace-normal">
+            <TableCell className="whitespace-normal @3xl:whitespace-nowrap @6xl:py-3">
               <p>{s.usuario_nombre || s.usuario_telefono}</p>
               <p className="text-xs text-muted-foreground">{s.usuario_rol}</p>
               <p className="mt-0.5 text-xs text-muted-foreground @3xl:hidden">
                 {s.recurso_nombre || "-"} · {usoDe(s)}
               </p>
             </TableCell>
-            <TableCell className="hidden @3xl:table-cell">{s.recurso_nombre || "-"}</TableCell>
-            <TableCell className="hidden @4xl:table-cell">{usoDe(s)}</TableCell>
-            <TableCell>
+            <TableCell className="hidden whitespace-normal @3xl:table-cell @6xl:py-3">
+              {s.recurso_nombre || "-"}
+            </TableCell>
+            <TableCell className="hidden @4xl:table-cell @6xl:py-3">{usoDe(s)}</TableCell>
+            <TableCell className="@6xl:py-3">
               <p>{fecha(s.inicio)}</p>
               <p className="text-xs text-muted-foreground">{fecha(s.fin)}</p>
             </TableCell>
-            <TableCell>
+            <TableCell className="@6xl:py-3">
               <EstadoReservaBadge estado={s.estado} />
             </TableCell>
-            <TableCell className="hidden text-muted-foreground @5xl:table-cell">
+            <TableCell className="hidden text-muted-foreground @5xl:table-cell @6xl:py-3">
               {fecha(s.creado_en)}
             </TableCell>
           </TableRow>

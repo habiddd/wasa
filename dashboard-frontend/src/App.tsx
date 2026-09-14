@@ -250,7 +250,7 @@ function App() {
                 <ThemeToggle />
               </header>
 
-              <main className="mx-auto w-full max-w-6xl p-6">
+              <main className="mx-auto w-full max-w-6xl p-6 2xl:max-w-7xl min-[1800px]:max-w-none">
                 <activa.Panel />
               </main>
             </SidebarInset>

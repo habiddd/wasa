@@ -66,21 +66,26 @@ function ListaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: Prop
 /**
  * Desde ~670 px: tabla. Código Uninorte y Cédula tienen columna propia solo
  * si hay espacio; si no, van en una línea bajo el usuario. Registrado es lo
- * primero que sobra.
+ * primero que sobra. Nombre absorbe el espacio libre (con whitespace-normal)
+ * en vez de que el navegador lo reparta entre columnas cortas.
+ *
+ * En pantallas muy anchas (@6xl) sube el tamaño de letra y el padding: hay
+ * espacio de sobra para leer más cómodo, no solo para que la tabla se vea
+ * ancha.
  */
 function TablaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: PropsVista) {
   return (
     <div className="rounded-md border">
-      <Table>
+      <Table className="@6xl:text-base">
         <TableHeader>
           <TableRow>
-            <TableHead>Nombre</TableHead>
-            <TableHead>Teléfono</TableHead>
-            <TableHead className="hidden @4xl:table-cell">Código Uninorte</TableHead>
-            <TableHead className="hidden @4xl:table-cell">Cédula</TableHead>
-            <TableHead>Rol</TableHead>
-            <TableHead>Activo</TableHead>
-            <TableHead className="hidden @5xl:table-cell">Registrado</TableHead>
+            <TableHead className="w-full @6xl:py-3">Nombre</TableHead>
+            <TableHead className="@6xl:py-3">Teléfono</TableHead>
+            <TableHead className="hidden @4xl:table-cell @6xl:py-3">Código Uninorte</TableHead>
+            <TableHead className="hidden @4xl:table-cell @6xl:py-3">Cédula</TableHead>
+            <TableHead className="@6xl:py-3">Rol</TableHead>
+            <TableHead className="@6xl:py-3">Activo</TableHead>
+            <TableHead className="hidden @5xl:table-cell @6xl:py-3">Registrado</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>
@@ -88,7 +93,7 @@ function TablaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: Prop
           {usuarios.map((u) => (
             <>
               <TableRow key={u.id}>
-                <TableCell className="whitespace-normal">
+                <TableCell className="whitespace-normal @6xl:py-3">
                   {u.nombre || "-"}
                   {codigoYCedula(u) && (
                     <p className="mt-0.5 text-xs text-muted-foreground @4xl:hidden">
@@ -96,15 +101,19 @@ function TablaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: Prop
                     </p>
                   )}
                 </TableCell>
-                <TableCell>{u.telefono_wa}</TableCell>
-                <TableCell className="hidden @4xl:table-cell">{u.codigo_uninorte || "-"}</TableCell>
-                <TableCell className="hidden @4xl:table-cell">{u.cedula || "-"}</TableCell>
-                <TableCell>{u.rol}</TableCell>
-                <TableCell>{u.activo ? "sí" : "no"}</TableCell>
-                <TableCell className="hidden text-muted-foreground @5xl:table-cell">
+                <TableCell className="@6xl:py-3">{u.telefono_wa}</TableCell>
+                <TableCell className="hidden @4xl:table-cell @6xl:py-3">
+                  {u.codigo_uninorte || "-"}
+                </TableCell>
+                <TableCell className="hidden @4xl:table-cell @6xl:py-3">
+                  {u.cedula || "-"}
+                </TableCell>
+                <TableCell className="@6xl:py-3">{u.rol}</TableCell>
+                <TableCell className="@6xl:py-3">{u.activo ? "sí" : "no"}</TableCell>
+                <TableCell className="hidden text-muted-foreground @5xl:table-cell @6xl:py-3">
                   {formatearFechaHoraCPA(u.creado_en)}
                 </TableCell>
-                <TableCell>
+                <TableCell className="@6xl:py-3">
                   <Button size="sm" variant="outline" onClick={() => onToggleEditar(u.id)}>
                     Editar
                   </Button>
