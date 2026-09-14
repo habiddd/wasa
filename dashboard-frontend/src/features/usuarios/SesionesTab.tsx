@@ -30,43 +30,97 @@ function fecha(valor: string | null) {
   return formatearFechaHoraCPA(valor)
 }
 
-function SesionesTabla({ sesiones }: { sesiones: Sesion[] }) {
+function usoDe(s: Sesion) {
+  return s.tipo_uso === "asignatura" ? `NRC ${s.nrc}` : "Particular"
+}
+
+/** Pantallas angostas: una tarjeta por sesión, sin columnas. */
+function ListaSesiones({ sesiones }: { sesiones: Sesion[] }) {
+  return (
+    <ul className="divide-y rounded-md border">
+      {sesiones.map((s) => (
+        <li key={s.id} className="space-y-1 px-3 py-2.5 text-sm">
+          <span className="flex items-start justify-between gap-2">
+            <span className="font-medium">{s.usuario_nombre || s.usuario_telefono}</span>
+            <EstadoReservaBadge estado={s.estado} />
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            {s.usuario_rol} · {s.recurso_nombre || "-"} · {usoDe(s)}
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            {fecha(s.inicio)} – {fecha(s.fin)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/**
+ * Desde ~670 px: tabla. Recurso y Uso tienen columna propia solo si hay
+ * espacio; si no, van en una línea bajo el usuario. Creada es lo primero
+ * que sobra.
+ */
+function TablaSesiones({ sesiones }: { sesiones: Sesion[] }) {
   return (
     <Table>
       <TableHeader>
         <TableRow>
           <TableHead>Usuario</TableHead>
-          <TableHead>Categoría</TableHead>
-          <TableHead>Recurso</TableHead>
-          <TableHead>Uso</TableHead>
-          <TableHead>Inicio</TableHead>
-          <TableHead>Fin</TableHead>
+          <TableHead className="hidden @3xl:table-cell">Recurso</TableHead>
+          <TableHead className="hidden @4xl:table-cell">Uso</TableHead>
+          <TableHead>Horario</TableHead>
           <TableHead>Estado</TableHead>
-          <TableHead>Creada</TableHead>
+          <TableHead className="hidden @5xl:table-cell">Creada</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {sesiones.length === 0 && (
-          <TableRow>
-            <TableCell colSpan={8}>No hay sesiones para este filtro.</TableCell>
-          </TableRow>
-        )}
         {sesiones.map((s) => (
           <TableRow key={s.id}>
-            <TableCell>{s.usuario_nombre || s.usuario_telefono}</TableCell>
-            <TableCell>{s.usuario_rol}</TableCell>
-            <TableCell>{s.recurso_nombre || "-"}</TableCell>
-            <TableCell>{s.tipo_uso === "asignatura" ? `${s.nrc}` : "Particular"}</TableCell>
-            <TableCell>{fecha(s.inicio)}</TableCell>
-            <TableCell>{fecha(s.fin)}</TableCell>
+            <TableCell className="whitespace-normal">
+              <p>{s.usuario_nombre || s.usuario_telefono}</p>
+              <p className="text-xs text-muted-foreground">{s.usuario_rol}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground @3xl:hidden">
+                {s.recurso_nombre || "-"} · {usoDe(s)}
+              </p>
+            </TableCell>
+            <TableCell className="hidden @3xl:table-cell">{s.recurso_nombre || "-"}</TableCell>
+            <TableCell className="hidden @4xl:table-cell">{usoDe(s)}</TableCell>
+            <TableCell>
+              <p>{fecha(s.inicio)}</p>
+              <p className="text-xs text-muted-foreground">{fecha(s.fin)}</p>
+            </TableCell>
             <TableCell>
               <EstadoReservaBadge estado={s.estado} />
             </TableCell>
-            <TableCell>{fecha(s.creado_en)}</TableCell>
+            <TableCell className="hidden text-muted-foreground @5xl:table-cell">
+              {fecha(s.creado_en)}
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
+  )
+}
+
+/** Alterna entre lista y tabla según el ancho disponible, como ReservasPanel. */
+function VistaSesiones({ sesiones }: { sesiones: Sesion[] }) {
+  if (sesiones.length === 0) {
+    return (
+      <p className="rounded-md border p-4 text-sm text-muted-foreground">
+        No hay sesiones para este filtro.
+      </p>
+    )
+  }
+  return (
+    <div className="@container">
+      <div className="@2xl:hidden">
+        <ListaSesiones sesiones={sesiones} />
+      </div>
+      <div className="hidden rounded-md border @2xl:block">
+        <TablaSesiones sesiones={sesiones} />
+      </div>
+    </div>
   )
 }
 
@@ -103,7 +157,7 @@ function SesionesPorUsuario({ sesiones }: { sesiones: Sesion[] }) {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <SesionesTabla sesiones={grupo.sesiones} />
+            <VistaSesiones sesiones={grupo.sesiones} />
           </CardContent>
         </Card>
       ))}
@@ -178,9 +232,7 @@ export function SesionesTab() {
         (orden === "usuario" ? (
           <SesionesPorUsuario sesiones={sesionesFiltradas} />
         ) : (
-          <div className="rounded-md border">
-            <SesionesTabla sesiones={sesionesFiltradas} />
-          </div>
+          <VistaSesiones sesiones={sesionesFiltradas} />
         ))}
     </div>
   )
