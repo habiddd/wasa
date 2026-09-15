@@ -33,6 +33,14 @@ def usuario_esta_completo(usuario: Usuario) -> bool:
     return usuario.registro_completo
 
 
+def validar_codigo_uninorte(valor: str) -> str | None:
+    """Código/ID de estudiante de Uninorte, limpio y válido, o None. Se usa
+    tanto en el registro (campo del titular) como en el wizard de reservas
+    (los ID de los demás integrantes del grupo, ver recursos_service.py)."""
+    valor = valor.strip()
+    return valor if 3 <= len(valor) <= 30 else None
+
+
 def _validar(campo: str, valor: str) -> str | None:
     """Devuelve el valor limpio y válido, o None si hay que pedirlo de nuevo."""
     valor = valor.strip()
@@ -48,7 +56,7 @@ def _validar(campo: str, valor: str) -> str | None:
         return solo_digitos if solo_digitos.isdigit() and 5 <= len(solo_digitos) <= 15 else None
 
     if campo == "codigo_uninorte":
-        return valor if 3 <= len(valor) <= 30 else None
+        return validar_codigo_uninorte(valor)
 
     return valor
 

@@ -23,9 +23,9 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app import estado_bot, guardrails, recursos_service, whatsapp_client
+from app import estado_bot, guardrails, recursos_service, registro_service, whatsapp_client
 from app.extensions import db, redis_client
-from app.models import AuditoriaBot, Recurso, Reserva, ReservaGrupo, Usuario
+from app.models import AuditoriaBot, Recurso, Reserva, ReservaGrupo, ReservaGrupoIntegrante, Usuario
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 
@@ -271,6 +271,12 @@ def _serializar_reserva(r: Reserva) -> dict:
         "grupo_id": r.grupo_id,
         "tipo_uso": r.grupo.tipo_uso if r.grupo else "particular",
         "nrc": r.grupo.nrc if r.grupo else None,
+        "modalidad": r.grupo.modalidad if r.grupo else "individual",
+        "tamano_grupo": r.grupo.tamano_grupo if r.grupo else None,
+        # r.grupo.integrantes ya viene ordenado por `orden` (ver
+        # ReservaGrupo.integrantes en models.py) -- integrantes[0] es
+        # siempre quien reserva.
+        "integrantes": [i.codigo_uninorte for i in r.grupo.integrantes] if r.grupo else [],
         "inicio": r.inicio.isoformat() if r.inicio else None,
         "fin": r.fin.isoformat() if r.fin else None,
         "estado": r.estado,
@@ -313,7 +319,8 @@ def api_reservas():
         return jsonify({"error": "Los parámetros 'desde' y 'hasta' deben ser fechas ISO-8601."}), 400
 
     consulta = Reserva.query.options(
-        joinedload(Reserva.usuario), joinedload(Reserva.recurso), joinedload(Reserva.grupo)
+        joinedload(Reserva.usuario), joinedload(Reserva.recurso),
+        joinedload(Reserva.grupo).joinedload(ReservaGrupo.integrantes),
     )
 
     if desde or hasta:
@@ -423,12 +430,21 @@ def api_actualizar_reserva_grupo(grupo_id):
     tipo_uso_nuevo = datos.pop("tipo_uso", None)
     tiene_nrc = "nrc" in datos
     nrc_nuevo = datos.pop("nrc", None)
+    tiene_modalidad = "modalidad" in datos
+    modalidad_nueva = datos.pop("modalidad", None)
+    tiene_tamano_grupo = "tamano_grupo" in datos
+    tamano_grupo_nuevo = datos.pop("tamano_grupo", None)
+    tiene_integrantes = "integrantes" in datos
+    integrantes_nuevos = datos.pop("integrantes", None)
     cambios, error = _preparar_cambios_reserva(datos, _CAMPOS_EDITABLES_RESERVA)
     if error:
         return jsonify({"error": error}), 400
 
     if tiene_tipo_uso and tipo_uso_nuevo not in ("particular", "asignatura"):
         return jsonify({"error": "El uso debe ser 'particular' o 'asignatura'."}), 400
+
+    if tiene_modalidad and modalidad_nueva not in ("individual", "grupo"):
+        return jsonify({"error": "La modalidad debe ser 'individual' o 'grupo'."}), 400
 
     if recurso_ids is not None:
         if (
@@ -460,6 +476,48 @@ def api_actualizar_reserva_grupo(grupo_id):
         else:
             grupo.tipo_uso = "particular"
             grupo.nrc = None
+
+    # Mismo criterio que tipo_uso/nrc arriba: si solo llega uno de los tres
+    # campos, los otros se completan con lo que ya tenía el grupo. El
+    # reemplazo de integrantes es completo (no un PATCH por fila): se limpia
+    # la lista y se reinserta 1..N -- `cascade="all, delete-orphan"` en
+    # ReservaGrupo.integrantes (models.py) hace el DELETE de las filas viejas.
+    if tiene_modalidad or tiene_tamano_grupo or tiene_integrantes:
+        modalidad_efectiva = modalidad_nueva if tiene_modalidad else grupo.modalidad
+        if modalidad_efectiva == "grupo":
+            integrantes_efectivos = (
+                integrantes_nuevos if tiene_integrantes
+                else [i.codigo_uninorte for i in grupo.integrantes]
+            )
+            if not isinstance(integrantes_efectivos, list) or not (
+                recursos_service.TAMANO_GRUPO_MIN <= len(integrantes_efectivos) <= recursos_service.TAMANO_GRUPO_MAX
+            ):
+                return jsonify({
+                    "error": f"El grupo debe tener entre {recursos_service.TAMANO_GRUPO_MIN} y "
+                             f"{recursos_service.TAMANO_GRUPO_MAX} integrantes."
+                }), 400
+
+            codigos_validados = []
+            for codigo in integrantes_efectivos:
+                codigo_valido = registro_service.validar_codigo_uninorte(codigo) if isinstance(codigo, str) else None
+                if codigo_valido is None:
+                    return jsonify({"error": f"El ID uninorte '{codigo}' no es válido."}), 400
+                codigos_validados.append(codigo_valido)
+            if len(codigos_validados) != len(set(codigos_validados)):
+                return jsonify({"error": "No puede haber integrantes repetidos."}), 400
+            if tiene_tamano_grupo and tamano_grupo_nuevo != len(codigos_validados):
+                return jsonify({"error": "El tamaño del grupo no coincide con la cantidad de integrantes."}), 400
+
+            grupo.modalidad = "grupo"
+            grupo.tamano_grupo = len(codigos_validados)
+            grupo.integrantes = [
+                ReservaGrupoIntegrante(codigo_uninorte=codigo, orden=orden)
+                for orden, codigo in enumerate(codigos_validados, start=1)
+            ]
+        else:
+            grupo.modalidad = "individual"
+            grupo.tamano_grupo = None
+            grupo.integrantes = []
 
     for reserva in reservas:
         error = _aplicar_cambios_reserva(reserva, cambios)
@@ -575,7 +633,8 @@ def api_decidir_reserva(reserva_id, decision):
 def _reservas_del_grupo(grupo_id: int) -> list[Reserva]:
     return (
         Reserva.query.options(
-            joinedload(Reserva.usuario), joinedload(Reserva.recurso), joinedload(Reserva.grupo)
+            joinedload(Reserva.usuario), joinedload(Reserva.recurso),
+            joinedload(Reserva.grupo).joinedload(ReservaGrupo.integrantes),
         )
         .filter_by(grupo_id=grupo_id)
         .order_by(Reserva.id)

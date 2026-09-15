@@ -120,6 +120,9 @@ export type EstadoReserva =
 // NRC (identificador de la asignatura que cursa el estudiante).
 export type TipoUso = "particular" | "asignatura"
 
+// Independiente de TipoUso: un grupo puede ser particular o de asignatura.
+export type Modalidad = "individual" | "grupo"
+
 export type Sesion = {
   id: number
   usuario_id: number
@@ -137,6 +140,13 @@ export type Sesion = {
   // asignatura (null si es particular).
   tipo_uso: TipoUso
   nrc: string | null
+  // La reserva es individual o de un grupo de personas. `tamano_grupo`
+  // INCLUYE a quien reserva (null si es individual); `integrantes` son sus
+  // códigos uninorte en el orden en que se capturaron -- integrantes[0] es
+  // siempre quien reserva.
+  modalidad: Modalidad
+  tamano_grupo: number | null
+  integrantes: string[]
   inicio: string | null
   fin: string | null
   estado: EstadoReserva
@@ -170,7 +180,14 @@ export function actualizarReserva(id: number, cambios: CambiosReserva) {
 
 export function actualizarReservaGrupo(
   grupoId: number,
-  cambios: CambiosReserva & { recurso_ids?: number[]; tipo_uso?: TipoUso; nrc?: string | null }
+  cambios: CambiosReserva & {
+    recurso_ids?: number[]
+    tipo_uso?: TipoUso
+    nrc?: string | null
+    modalidad?: Modalidad
+    tamano_grupo?: number | null
+    integrantes?: string[]
+  }
 ) {
   return request<Sesion[]>(`/reservas/grupo/${grupoId}`, {
     method: "PATCH",

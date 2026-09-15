@@ -361,8 +361,21 @@ Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
 `gestionar_reserva` (intent `reservar`) no le pide todo al usuario en un
 solo mensaje libre -- va preguntando un dato a la vez con menús numerados
 (o mensajes tipo factura, ver más abajo), guardando el progreso en
-`sesion["reserva_wizard"]` (ver "Memoria de conversación"). Progresión
-para un ítem (`_siguiente_paso_wizard`):
+`sesion["reserva_wizard"]` (ver "Memoria de conversación"). Antes de tocar
+ningún activo, `_avanzar_wizard` resuelve un puñado de preguntas que son de
+la reserva completa, no de un ítem en particular:
+
+```
+tipo_uso → [nrc] → modalidad → [tamano_grupo → integrante_id ×(N-1) → confirmar_grupo]
+  → elegir_activo → ... → listo
+```
+
+`modalidad` se pregunta **siempre** (particular o de asignatura, da igual)
+-- es independiente de `tipo_uso`: un grupo puede ser particular o de
+asignatura, y una reserva particular puede ser en grupo. Ver "Modalidad de
+la reserva: individual o en grupo" más abajo para el detalle de esos
+sub-pasos. Progresión para un ítem, una vez resueltas esas preguntas
+(`_siguiente_paso_wizard`):
 
 ```
 elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
@@ -662,6 +675,38 @@ cámara y sus lentes comparten número). `reservas.grupo_id` es `NOT NULL`
 desde la migración de `docs/SESION_2026-09-09.md` (sección 7), que además
 le asignó grupo a las filas anteriores al carrito; así ninguna reserva
 puede quedar sin número, ni las que crea el bot ni las de `seed.py`.
+
+### Modalidad de la reserva: individual o en grupo
+
+`ReservaGrupo.modalidad` ('individual' o 'grupo') es **independiente** de
+`tipo_uso`: un grupo puede ser particular o de asignatura, y viceversa --
+por eso se pregunta en un paso aparte, siempre, sin importar lo que se
+haya respondido en `tipo_uso`/`nrc`. `tamano_grupo` **incluye** a quien
+hace la reserva; sus integrantes van en `reserva_grupo_integrantes` (un
+código uninorte por fila, columna `orden`, `orden=1` es siempre el
+titular) -- no son una FK a `usuarios`, es texto libre: un integrante no
+tiene por qué estar registrado en el bot.
+
+El sub-flujo, solo cuando `modalidad='grupo'`:
+
+```
+tamano_grupo → integrante_id ×(N-1) → confirmar_grupo
+```
+
+`tamano_grupo` pide un número entre `TAMANO_GRUPO_MIN` (2) y
+`TAMANO_GRUPO_MAX` (10). Al aceptarlo, el titular se prellena como
+integrante 1 con su propio `codigo_uninorte` (ya lo tiene del registro,
+`registro_completo` lo exige) y el wizard pide uno por uno los `N-1`
+restantes (`integrante_id`, validados con
+`registro_service.validar_codigo_uninorte` -- el mismo criterio que se le
+exigió al titular al registrarse), rechazando un ID repetido dentro del
+mismo grupo. Con la lista completa, `confirmar_grupo` muestra un resumen
+tipo factura (`_lineas_grupo`) y deja corregir los integrantes desde cero,
+o volver a "reservo solo" sin perder el resto del wizard. Desde el menú
+final de confirmación, "Cambiar grupo / integrantes" reabre este mismo
+sub-flujo. `crear_reservas_grupo` inserta los `ReservaGrupoIntegrante` en
+la misma transacción que el `ReservaGrupo` y las reservas -- un choque de
+disponibilidad al confirmar revierte también la lista de integrantes.
 
 ### Cancelar una reserva ya confirmada
 

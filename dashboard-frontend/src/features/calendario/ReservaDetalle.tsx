@@ -31,6 +31,7 @@ import {
   eliminarReservaGrupo,
   type CambiosReserva,
   type EstadoReserva,
+  type Modalidad,
   type Recurso,
   type Sesion,
   type TipoUso,
@@ -56,6 +57,11 @@ const ESTADOS: EstadoReserva[] = [
   "denegada",
   "no_show",
 ]
+
+// Mismo rango que TAMANO_GRUPO_MIN/MAX en recursos_service.py y el CHECK
+// reserva_grupos_tamano_rango de postgres/init/02-schema.sql.
+const TAMANO_GRUPO_MIN = 2
+const TAMANO_GRUPO_MAX = 10
 
 /** Activos de la reserva que esperan la confirmación de la CPA, sin repetir modelo. */
 function nombresPendientes(evento: EventoCalendario) {
@@ -210,6 +216,23 @@ function Detalle({
             ? `Asignatura · NRC ${evento.reservas[0].nrc}`
             : "Particular"}
         </Dato>
+        <Dato etiqueta="Grupo">
+          {evento.reservas[0].modalidad === "grupo" ? (
+            <>
+              <p>Grupo de {evento.reservas[0].tamano_grupo}</p>
+              <ul className="text-muted-foreground">
+                {evento.reservas[0].integrantes.map((codigo, i) => (
+                  <li key={i}>
+                    {codigo}
+                    {i === 0 && " (quien reserva)"}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            "Individual"
+          )}
+        </Dato>
       </div>
 
       <Dato
@@ -259,6 +282,10 @@ function FormularioEdicion({
   )
   const [tipoUso, setTipoUso] = useState<TipoUso>(primera.tipo_uso)
   const [nrc, setNrc] = useState(primera.nrc ?? "")
+  const [modalidad, setModalidad] = useState<Modalidad>(primera.modalidad)
+  const [integrantes, setIntegrantes] = useState<string[]>(
+    primera.modalidad === "grupo" ? primera.integrantes : []
+  )
   const [guardando, setGuardando] = useState(false)
   const [agregandoActivo, setAgregandoActivo] = useState(false)
   const [activosParaAgregar, setActivosParaAgregar] = useState<number[]>([])
@@ -363,6 +390,28 @@ function FormularioEdicion({
     setActivosParaAgregar([])
   }
 
+  // Al pasar a "Grupo" desde "Individual" la fila 1 arranca con el código
+  // del titular (ya lo tenemos, es el mismo dato que llenó al registrarse) y
+  // queda editable por si el dashboard necesita corregirlo.
+  function cambiarModalidad(valor: Modalidad) {
+    setModalidad(valor)
+    if (valor === "grupo" && integrantes.length === 0) {
+      setIntegrantes([primera.usuario_codigo_uninorte ?? ""])
+    }
+  }
+
+  function actualizarIntegrante(indice: number, valor: string) {
+    setIntegrantes((anteriores) => anteriores.map((codigo, i) => (i === indice ? valor : codigo)))
+  }
+
+  function quitarIntegrante(indice: number) {
+    setIntegrantes((anteriores) => anteriores.filter((_, i) => i !== indice))
+  }
+
+  function agregarIntegrante() {
+    setIntegrantes((anteriores) => [...anteriores, ""])
+  }
+
   async function guardar(evt: FormEvent) {
     evt.preventDefault()
 
@@ -379,7 +428,13 @@ function FormularioEdicion({
 
     // Solo se envía lo que cambió: así una edición de estado no reescribe el
     // horario y no choca con el EXCLUDE de solapamiento de Postgres.
-    const cambios: CambiosReserva & { recurso_ids?: number[]; tipo_uso?: TipoUso; nrc?: string | null } = {}
+    const cambios: CambiosReserva & {
+      recurso_ids?: number[]
+      tipo_uso?: TipoUso
+      nrc?: string | null
+      modalidad?: Modalidad
+      integrantes?: string[]
+    } = {}
     if (nuevoInicio.getTime() !== evento.inicio.getTime()) cambios.inicio = nuevoInicio.toISOString()
     if (nuevoFin.getTime() !== evento.fin.getTime()) cambios.fin = nuevoFin.toISOString()
     if (estado && (estado !== evento.estado || evento.estadosMixtos)) cambios.estado = estado
@@ -405,6 +460,38 @@ function FormularioEdicion({
       if (tipoUso !== primera.tipo_uso || (tipoUso === "asignatura" && nrc !== nrcOriginal)) {
         cambios.tipo_uso = tipoUso
         cambios.nrc = tipoUso === "asignatura" ? nrc : null
+      }
+
+      // Modalidad (individual/grupo), igual de independiente de tipo_uso acá
+      // que en el wizard del bot.
+      if (modalidad === "grupo") {
+        const limpios = integrantes.map((codigo) => codigo.trim())
+        if (
+          limpios.length < TAMANO_GRUPO_MIN ||
+          limpios.length > TAMANO_GRUPO_MAX ||
+          limpios.some((codigo) => !codigo)
+        ) {
+          toast.error(
+            `El grupo debe tener entre ${TAMANO_GRUPO_MIN} y ${TAMANO_GRUPO_MAX} integrantes, todos con ID.`
+          )
+          return
+        }
+        if (new Set(limpios).size !== limpios.length) {
+          toast.error("No puede haber integrantes repetidos.")
+          return
+        }
+        const integrantesOriginales = primera.modalidad === "grupo" ? primera.integrantes : []
+        const cambiaronIntegrantes =
+          modalidad !== primera.modalidad ||
+          limpios.length !== integrantesOriginales.length ||
+          limpios.some((codigo, i) => codigo !== integrantesOriginales[i])
+        if (cambiaronIntegrantes) {
+          cambios.modalidad = "grupo"
+          cambios.integrantes = limpios
+        }
+      } else if (modalidad !== primera.modalidad) {
+        cambios.modalidad = "individual"
+        cambios.integrantes = []
       }
     }
 
@@ -556,6 +643,63 @@ function FormularioEdicion({
             </div>
           )}
         </div>
+      )}
+
+      {evento.numeros.length === 1 && (
+        <div className="space-y-1.5">
+          <Label htmlFor="reserva-modalidad">Grupo</Label>
+          <Select value={modalidad} onValueChange={(v) => cambiarModalidad(v as Modalidad)}>
+            <SelectTrigger id="reserva-modalidad" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="individual">Individual</SelectItem>
+              <SelectItem value="grupo">Grupo</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {evento.numeros.length === 1 && modalidad === "grupo" && (
+        <fieldset className="space-y-1.5">
+          <legend className="text-sm font-medium">
+            Integrantes ({integrantes.length})
+          </legend>
+          <div className="space-y-2">
+            {integrantes.map((codigo, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Input
+                  aria-label={i === 0 ? "ID uninorte de quien reserva" : `ID uninorte del integrante ${i + 1}`}
+                  placeholder={i === 0 ? "ID de quien reserva" : `ID del integrante ${i + 1}`}
+                  value={codigo}
+                  onChange={(e) => actualizarIntegrante(i, e.target.value)}
+                  disabled={guardando}
+                />
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={`Quitar integrante ${i + 1}`}
+                  title={`Quitar integrante ${i + 1}`}
+                  onClick={() => quitarIntegrante(i)}
+                  disabled={guardando || integrantes.length <= TAMANO_GRUPO_MIN}
+                >
+                  <Trash2 />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={agregarIntegrante}
+            disabled={guardando || integrantes.length >= TAMANO_GRUPO_MAX}
+          >
+            <Plus />
+            Agregar integrante
+          </Button>
+        </fieldset>
       )}
 
       <p className="text-xs text-muted-foreground">

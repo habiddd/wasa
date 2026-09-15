@@ -13,9 +13,9 @@ from zoneinfo import ZoneInfo
 from flask import current_app
 from sqlalchemy.exc import IntegrityError
 
-from app import llm_client
+from app import llm_client, registro_service
 from app.extensions import db
-from app.models import Recurso, Reserva, ReservaGrupo, Usuario
+from app.models import Recurso, Reserva, ReservaGrupo, ReservaGrupoIntegrante, Usuario
 from app.textutils import normalizar as _normalizar
 
 LONGITUD_MINIMA_PALABRA_CLAVE = 4
@@ -759,6 +759,9 @@ def crear_reservas_grupo(
     fin: datetime,
     tipo_uso: str = "particular",
     nrc: str | None = None,
+    modalidad: str = "individual",
+    tamano_grupo: int | None = None,
+    integrantes: list[str] | None = None,
 ) -> tuple[list[Reserva] | None, str | None]:
     """Inserta una reserva por cada recurso en `recursos`, todas ligadas al
     mismo ReservaGrupo y en una sola transacción -- si alguna choca al
@@ -775,10 +778,27 @@ def crear_reservas_grupo(
 
     `tipo_uso`/`nrc` van en el grupo, no en cada reserva por separado: es un
     dato de la reserva completa (particular o de una asignatura), no de
-    cada activo dentro de ella."""
-    grupo = ReservaGrupo(usuario_id=usuario_id, tipo_uso=tipo_uso, nrc=nrc if tipo_uso == "asignatura" else None)
+    cada activo dentro de ella. `modalidad`/`tamano_grupo`/`integrantes`
+    son análogos para si la reserva es individual o de un grupo de personas
+    (independiente de `tipo_uso`): cuando `modalidad='grupo'`, se agrega un
+    ReservaGrupoIntegrante por cada código de `integrantes`, en el mismo
+    orden en que se capturaron (orden=1 es quien reserva) -- dentro de la
+    MISMA transacción, después del flush que asigna `grupo.id` y antes del
+    commit, para que un choque de disponibilidad revierta también la lista
+    de integrantes."""
+    grupo = ReservaGrupo(
+        usuario_id=usuario_id,
+        tipo_uso=tipo_uso, nrc=nrc if tipo_uso == "asignatura" else None,
+        modalidad=modalidad, tamano_grupo=tamano_grupo if modalidad == "grupo" else None,
+    )
     db.session.add(grupo)
     db.session.flush()  # asigna grupo.id sin cerrar la transacción
+
+    if modalidad == "grupo":
+        db.session.add_all(
+            ReservaGrupoIntegrante(grupo_id=grupo.id, codigo_uninorte=codigo, orden=orden)
+            for orden, codigo in enumerate(integrantes or [], start=1)
+        )
 
     reservas = [
         Reserva(
@@ -1466,6 +1486,7 @@ OPCIONES_CONFIRMAR = [
     ("cambiar_fecha", "Cambiar fecha"),
     ("cambiar_hora", "Cambiar hora"),
     ("cambiar_uso", "Cambiar particular / asignatura (NRC)"),
+    ("cambiar_grupo", "Cambiar grupo / integrantes"),
     ("cancelar", "Cancelar"),
 ]
 
@@ -1496,6 +1517,31 @@ _MENSAJE_NRC_INVALIDO = (
     "No reconocí ese NRC. Son 4 dígitos, ej. 1234. Si no es para una "
     "asignatura, escribe *particular*."
 )
+
+# Modalidad de la reserva: se pregunta SIEMPRE, sea particular o de
+# asignatura -- es independiente de tipo_uso (ver postgres/init/02-schema.sql
+# y ReservaGrupo.modalidad). "grupo" INCLUYE a quien reserva en el conteo:
+# si el usuario dice 4, se piden los otros 3 ID uninorte.
+OPCIONES_MODALIDAD = [
+    ("individual", "Solo yo"),
+    ("grupo", "En grupo"),
+]
+OPCIONES_CONFIRMAR_GRUPO = [
+    ("confirmar", "Sí, así está el grupo"),
+    ("corregir", "Corregir los integrantes"),
+    ("solo", "En realidad reservo solo"),
+]
+TAMANO_GRUPO_MIN, TAMANO_GRUPO_MAX = 2, 10
+
+_MENSAJE_TAMANO_INVALIDO = (
+    f"No reconocí ese número. El grupo debe ser de {TAMANO_GRUPO_MIN} a "
+    f"{TAMANO_GRUPO_MAX} personas, contándote a ti. ¿Cuántos son?"
+)
+_MENSAJE_ID_INVALIDO = (
+    "No reconocí ese ID uninorte. Debe tener entre 3 y 30 caracteres. "
+    "¿Cuál es?"
+)
+_MENSAJE_ID_REPETIDO = "Ese ID ya está en el grupo. Dame el de otro integrante."
 
 OPCIONES_CONFIRMAR_FECHA = [
     ("si", "Sí, esa fecha está bien"),
@@ -1577,6 +1623,67 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             wizard["paso"] = "nrc"
             wizard["_mensaje_menu_actual"] = _MENSAJE_PEDIR_NRC
             return _con_avisos(avisos, _MENSAJE_PEDIR_NRC), wizard, False
+
+        # Modalidad: se pregunta SIEMPRE (particular o de asignatura, da
+        # igual), justo después de tipo_uso/nrc y antes de tocar el activo --
+        # es un dato de la reserva completa, no de qué se está reservando.
+        if not wizard.get("modalidad"):
+            wizard["opciones_actuales"] = OPCIONES_MODALIDAD
+            wizard["paso"] = "modalidad"
+            mensaje = _formatear_menu("¿Vas a usar la reserva solo o en grupo?", OPCIONES_MODALIDAD)
+            wizard["_mensaje_menu_actual"] = mensaje
+            return _con_avisos(avisos, mensaje), wizard, False
+
+        if wizard["modalidad"] == "grupo" and not wizard.get("grupo_confirmado"):
+            if not wizard.get("tamano_grupo"):
+                wizard["opciones_actuales"] = None
+                wizard["paso"] = "tamano_grupo"
+                mensaje = (
+                    "*GRUPO DE LA RESERVA*\n"
+                    f"{_DIVISOR_FACTURA}\n"
+                    f"Reservado por: {usuario.nombre}\n"
+                    f"{_linea_tipo_uso(wizard)}\n"
+                    f"{_DIVISOR_FACTURA}\n"
+                    "¿De cuántas personas es el grupo, contándote a ti?\n"
+                    f"Responde con un número entre {TAMANO_GRUPO_MIN} y {TAMANO_GRUPO_MAX}."
+                )
+                wizard["_mensaje_menu_actual"] = mensaje
+                return _con_avisos(avisos, mensaje), wizard, False
+
+            if len(wizard.get("integrantes") or []) < wizard["tamano_grupo"]:
+                wizard["opciones_actuales"] = None
+                wizard["paso"] = "integrante_id"
+                n = wizard["tamano_grupo"]
+                k = len(wizard["integrantes"]) + 1
+                lineas_integrantes = "\n".join(
+                    f"{i}. {codigo}" + (" (tú)" if i == 1 else "")
+                    for i, codigo in enumerate(wizard["integrantes"], start=1)
+                )
+                mensaje = (
+                    "*INTEGRANTES DEL GRUPO*\n"
+                    f"{_DIVISOR_FACTURA}\n"
+                    f"Grupo de {n} personas\n"
+                    f"{lineas_integrantes}\n"
+                    f"{_DIVISOR_FACTURA}\n"
+                    f"¿Cuál es el ID uninorte del integrante {k} de {n}?"
+                )
+                wizard["_mensaje_menu_actual"] = mensaje
+                return _con_avisos(avisos, mensaje), wizard, False
+
+            opciones = OPCIONES_CONFIRMAR_GRUPO
+            wizard["opciones_actuales"] = opciones
+            wizard["paso"] = "confirmar_grupo"
+            resumen_grupo = (
+                "*CONFIRMAR GRUPO*\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"Reservado por: {usuario.nombre}\n"
+                f"{_linea_tipo_uso(wizard)}\n"
+                f"{_lineas_grupo(wizard)}\n"
+                f"{_DIVISOR_FACTURA}"
+            )
+            mensaje = resumen_grupo + "\n\n" + _formatear_menu("¿Está correcto el grupo?", opciones)
+            wizard["_mensaje_menu_actual"] = mensaje
+            return _con_avisos(avisos, mensaje), wizard, False
 
         if wizard.get("resolviendo_item") and wizard.get("nombre_recurso"):
             nombre = _mover_item_resuelto_al_carrito(wizard)
@@ -1778,6 +1885,20 @@ def _linea_tipo_uso(wizard: dict) -> str:
     return "Uso: Particular"
 
 
+def _lineas_grupo(wizard: dict) -> str:
+    """"Modalidad: Individual" o el bloque "Grupo de N" con un integrante por
+    línea, marcando cuál es quien reserva -- reutilizado por el resumen, la
+    confirmación del grupo y la factura final (mismo rol que
+    `_linea_tipo_uso`, ver `_mensaje_resumen` y `_crear_reserva_desde_wizard`)."""
+    if wizard.get("modalidad") != "grupo":
+        return "Modalidad: Individual"
+    integrantes = wizard.get("integrantes") or []
+    lineas = "\n".join(
+        f"    • {codigo}" + (" (tú)" if i == 0 else "") for i, codigo in enumerate(integrantes)
+    )
+    return f"Grupo de {wizard.get('tamano_grupo')} personas\n{lineas}"
+
+
 def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, str]]) -> str:
     inicio_utc = datetime.fromisoformat(wizard["inicio"])
     fin_utc = datetime.fromisoformat(wizard["fin"])
@@ -1791,6 +1912,7 @@ def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, s
         f"{_DIVISOR_FACTURA}\n"
         f"Reservado por: {usuario.nombre}\n"
         f"{_linea_tipo_uso(wizard)}\n"
+        f"{_lineas_grupo(wizard)}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
@@ -1953,6 +2075,8 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     reservas, error = crear_reservas_grupo(
         usuario.id, unidades, inicio_utc, fin_utc,
         tipo_uso=wizard.get("tipo_uso") or "particular", nrc=wizard.get("nrc"),
+        modalidad=wizard.get("modalidad") or "individual",
+        tamano_grupo=wizard.get("tamano_grupo"), integrantes=wizard.get("integrantes"),
     )
     if error is not None:
         return (
@@ -1972,6 +2096,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         f"N.º de reserva: {reservas[0].grupo_id}\n"
         f"Reservado por: {usuario.nombre}\n"
         f"{_linea_tipo_uso(wizard)}\n"
+        f"{_lineas_grupo(wizard)}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
@@ -2105,6 +2230,18 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         "resolviendo_item": True,
         "tipo_uso": None,
         "nrc": None,
+        # Modalidad (individual/grupo), independiente de tipo_uso. `integrantes`
+        # guarda los códigos uninorte ya capturados, en orden (el [0] es quien
+        # reserva); `grupo_confirmado` marca que el usuario ya vio la lista
+        # completa y la aprobó (paso "confirmar_grupo", ver _avanzar_wizard).
+        # Toda lectura usa wizard.get(...) con default: una sesión vieja en
+        # Redis, de un wizard a medio camino antes de este cambio, no trae
+        # estos campos -- el bucle de abajo simplemente le hace la pregunta
+        # de modalidad en el punto en que vaya y sigue de ahí.
+        "modalidad": None,
+        "tamano_grupo": None,
+        "integrantes": [],
+        "grupo_confirmado": False,
         "fecha": None,
         "fecha_fin": None,
         "inicio": None,
@@ -2183,6 +2320,75 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             if nrc is None:
                 return _MENSAJE_NRC_INVALIDO, {**sesion, "reserva_wizard": wizard}
             wizard["nrc"] = nrc
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "modalidad":
+        valor = _interpretar_opcion(texto_usuario, OPCIONES_MODALIDAD)
+        if valor is None:
+            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                **sesion,
+                "reserva_wizard": wizard,
+            }
+        wizard["modalidad"] = valor
+        if valor == "individual":
+            wizard["tamano_grupo"] = None
+            wizard["integrantes"] = []
+            wizard["grupo_confirmado"] = False
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "tamano_grupo":
+        coincidencia = re.search(r"\d+", texto_usuario)
+        tamano = int(coincidencia.group()) if coincidencia else None
+        if tamano is None or not (TAMANO_GRUPO_MIN <= tamano <= TAMANO_GRUPO_MAX):
+            return _MENSAJE_TAMANO_INVALIDO, {**sesion, "reserva_wizard": wizard}
+        wizard["tamano_grupo"] = tamano
+        # El titular ya está registrado (registro_completo lo exige, ver
+        # registro_service.py) -- se prellena como integrante 1 y de ahí en
+        # adelante el wizard pide del 2 al N. Si por lo que sea no tiene
+        # código guardado, se arranca en [] y se pide también el suyo
+        # (defensivo, no debería pasar en la práctica).
+        wizard["integrantes"] = [usuario.codigo_uninorte] if usuario.codigo_uninorte else []
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "integrante_id":
+        codigo = registro_service.validar_codigo_uninorte(texto_usuario)
+        if codigo is None:
+            return _MENSAJE_ID_INVALIDO, {**sesion, "reserva_wizard": wizard}
+        if codigo in wizard["integrantes"]:
+            return _MENSAJE_ID_REPETIDO, {**sesion, "reserva_wizard": wizard}
+        wizard["integrantes"].append(codigo)
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "confirmar_grupo":
+        valor = _interpretar_opcion(texto_usuario, OPCIONES_CONFIRMAR_GRUPO)
+        if valor is None:
+            return "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or ""), {
+                **sesion,
+                "reserva_wizard": wizard,
+            }
+        if valor == "confirmar":
+            wizard["grupo_confirmado"] = True
+        elif valor == "corregir":
+            wizard["tamano_grupo"] = None
+            wizard["integrantes"] = []
+        else:  # "solo": el usuario se arrepintió, reserva individual
+            wizard["modalidad"] = "individual"
+            wizard["tamano_grupo"] = None
+            wizard["integrantes"] = []
+        wizard["opciones_actuales"] = None
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
         if listo:
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
@@ -2493,6 +2699,8 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             wizard.update(inicio=None, fin=None, alternativas_para=[])
         elif valor == "cambiar_uso":
             wizard.update(tipo_uso=None, nrc=None)
+        elif valor == "cambiar_grupo":
+            wizard.update(modalidad=None, tamano_grupo=None, integrantes=[], grupo_confirmado=False)
 
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
         if listo:

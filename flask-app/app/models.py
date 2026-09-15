@@ -83,6 +83,36 @@ class ReservaGrupo(db.Model):
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
     tipo_uso = db.Column(db.String(20), nullable=False, default="particular")  # 'particular' | 'asignatura'
     nrc = db.Column(db.String(4))  # 4 dígitos, solo si tipo_uso='asignatura'
+    # Modalidad de la reserva: solo o en grupo, independiente de tipo_uso (un
+    # grupo puede ser particular o de asignatura). `tamano_grupo` INCLUYE a
+    # quien reserva -- ver recursos_service.crear_reservas_grupo.
+    modalidad = db.Column(db.String(20), nullable=False, default="individual")  # 'individual' | 'grupo'
+    tamano_grupo = db.Column(db.SmallInteger)  # solo si modalidad='grupo', entre 2 y 10
+
+    # order_by: los integrantes se listan siempre en el orden en que se
+    # capturaron (orden=1 es quien reserva). cascade="all, delete-orphan": al
+    # borrar el ReservaGrupo (api_eliminar_reserva_grupo) o al reemplazar la
+    # lista completa desde el dashboard, Postgres hace el DELETE solo -- no
+    # choca con la FK NOT NULL de reserva_grupo_integrantes.grupo_id.
+    integrantes = db.relationship(
+        "ReservaGrupoIntegrante",
+        backref="grupo",
+        cascade="all, delete-orphan",
+        order_by="ReservaGrupoIntegrante.orden",
+    )
+
+
+class ReservaGrupoIntegrante(db.Model):
+    __tablename__ = "reserva_grupo_integrantes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    grupo_id = db.Column(db.Integer, db.ForeignKey("reserva_grupos.id"), nullable=False)
+    # Código de estudiante Uninorte, texto libre -- no es una FK a usuarios:
+    # un integrante puede no estar registrado en el bot (fuera de alcance
+    # crearle una fila). Se valida igual que el del titular en el registro
+    # (ver registro_service.validar_codigo_uninorte).
+    codigo_uninorte = db.Column(db.String(30), nullable=False)
+    orden = db.Column(db.SmallInteger, nullable=False)  # 1 = quien reserva
 
 
 class Reserva(db.Model):

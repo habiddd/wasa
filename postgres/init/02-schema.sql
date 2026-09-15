@@ -457,6 +457,41 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- Modalidad de la reserva: el estudiante reserva solo o en grupo. Es
+-- independiente de tipo_uso (un grupo puede ser particular o de asignatura).
+-- `tamano_grupo` INCLUYE a quien reserva; sus integrantes (por código
+-- uninorte, el mismo dato que se pide en el registro) van en
+-- reserva_grupo_integrantes -- ver recursos_service.crear_reservas_grupo.
+ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS modalidad VARCHAR(20) NOT NULL DEFAULT 'individual';
+ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS tamano_grupo SMALLINT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reserva_grupos_modalidad_valida') THEN
+    ALTER TABLE reserva_grupos ADD CONSTRAINT reserva_grupos_modalidad_valida
+      CHECK (modalidad IN ('individual', 'grupo'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reserva_grupos_tamano_segun_modalidad') THEN
+    ALTER TABLE reserva_grupos ADD CONSTRAINT reserva_grupos_tamano_segun_modalidad
+      CHECK ((modalidad = 'grupo') = (tamano_grupo IS NOT NULL));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reserva_grupos_tamano_rango') THEN
+    ALTER TABLE reserva_grupos ADD CONSTRAINT reserva_grupos_tamano_rango
+      CHECK (tamano_grupo IS NULL OR tamano_grupo BETWEEN 2 AND 10);
+  END IF;
+END $$;
+
+-- Un integrante por fila, en el orden en que se capturaron: orden = 1 es
+-- siempre quien hace la reserva (su código ya está en usuarios). ON DELETE
+-- CASCADE porque el dashboard borra la fila de reserva_grupos directamente
+-- (ver api_eliminar_reserva_grupo).
+CREATE TABLE IF NOT EXISTS reserva_grupo_integrantes (
+    id               SERIAL PRIMARY KEY,
+    grupo_id         INTEGER NOT NULL REFERENCES reserva_grupos(id) ON DELETE CASCADE,
+    codigo_uninorte  VARCHAR(30) NOT NULL,
+    orden            SMALLINT NOT NULL,
+    CONSTRAINT reserva_grupo_integrantes_orden_unico UNIQUE (grupo_id, orden)
+);
+CREATE INDEX IF NOT EXISTS idx_reserva_grupo_integrantes_grupo ON reserva_grupo_integrantes (grupo_id);
+
 CREATE INDEX IF NOT EXISTS idx_auditoria_telefono_fecha ON auditoria_bot (telefono_wa, creado_en);
 CREATE INDEX IF NOT EXISTS idx_auditoria_mensaje_id ON auditoria_bot (mensaje_id);
 
