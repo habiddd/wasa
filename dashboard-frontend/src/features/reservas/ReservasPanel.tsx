@@ -2,6 +2,15 @@ import { useEffect, useMemo, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -11,7 +20,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useActivosContext } from "@/features/activos/activos-context"
 import {
   ZONA_CPA,
@@ -54,6 +62,17 @@ function filtroInicial(): FiltroEstado {
     // localStorage no disponible
   }
   return "todas"
+}
+
+const SEGURO_STORAGE_KEY = "dashboard-cpa-reservas-seguro"
+
+function seguroInicial(): boolean {
+  try {
+    return localStorage.getItem(SEGURO_STORAGE_KEY) === "1"
+  } catch {
+    // localStorage no disponible
+  }
+  return false
 }
 
 // Más recientes arriba: las próximas y las de hoy son las que se consultan.
@@ -112,9 +131,14 @@ function Activos({ evento }: { evento: EventoCalendario }) {
   )
 }
 
+/** Misma condición que el badge "Sale de Barranquilla · seguro". El dato es del grupo. */
+function necesitaSeguro(evento: EventoCalendario) {
+  return evento.reservas[0].sale_de_barranquilla === true
+}
+
 /** Aviso de que la reserva requiere trámite de seguro (ver ReservaDetalle). */
 function SaleDeBarranquilla({ evento, className }: { evento: EventoCalendario; className?: string }) {
-  if (!evento.reservas[0].sale_de_barranquilla) return null
+  if (!necesitaSeguro(evento)) return null
   return (
     <Badge
       variant="warning"
@@ -241,6 +265,7 @@ export function ReservasPanel() {
   const { activos, reload: recargarActivos } = useActivosContext()
   const { data, error, loading, reload } = usePolling(fetchSesiones, 30000)
   const [filtro, setFiltro] = useState<FiltroEstado>(filtroInicial)
+  const [soloSeguro, setSoloSeguro] = useState<boolean>(seguroInicial)
   const [idSeleccionado, setIdSeleccionado] = useState<number | null>(null)
 
   // El modal de edición necesita el catálogo para elegir activos; el
@@ -273,7 +298,17 @@ export function ReservasPanel() {
     return porFiltro
   }, [ubicadas])
 
-  const eventos = eventosPorFiltro.get(filtro) ?? []
+  // El checkbox "Necesita seguro" combina con AND sobre el filtro de estado
+  // ya calculado; se recalcula aparte para no rehacer el agrupamiento.
+  const eventosVisibles = useMemo(() => {
+    if (!soloSeguro) return eventosPorFiltro
+    return new Map<FiltroEstado, EventoCalendario[]>(
+      [...eventosPorFiltro].map(([k, lista]) => [k, lista.filter(necesitaSeguro)])
+    )
+  }, [eventosPorFiltro, soloSeguro])
+
+  const eventos = eventosVisibles.get(filtro) ?? []
+  const pendientes = eventosVisibles.get("por_confirmar")?.length ?? 0
 
   // El modal se alimenta de la reserva completa, no de la filtrada: así
   // sigue abierto si una edición cambia el estado y la saca del filtro, y el
@@ -295,6 +330,15 @@ export function ReservasPanel() {
     }
   }
 
+  function cambiarSeguro(nuevo: boolean) {
+    setSoloSeguro(nuevo)
+    try {
+      localStorage.setItem(SEGURO_STORAGE_KEY, nuevo ? "1" : "0")
+    } catch {
+      // localStorage no disponible
+    }
+  }
+
   function seleccionar(evento: EventoCalendario) {
     setIdSeleccionado(evento.reservas[0].id)
   }
@@ -310,31 +354,52 @@ export function ReservasPanel() {
         </Button>
       </div>
 
-      <Tabs value={filtro} onValueChange={(v) => cambiarFiltro(v as FiltroEstado)}>
-        {/* h-auto! porque TabsList fija h-8 con una variante de grupo que le
-            gana a un h-auto normal, y al envolverse en pantallas angostas la
-            segunda fila de filtros se salía encima de la lista. */}
-        <TabsList className="h-auto! max-w-full flex-wrap justify-start">
-          {FILTROS.map(({ valor, etiqueta }) => {
-            const cantidad = eventosPorFiltro.get(valor)?.length ?? 0
-            // Las que esperan a la CPA resaltan para que no se queden sin atender.
-            const resaltar = valor === "por_confirmar" && cantidad > 0
-            return (
-              <TabsTrigger key={valor} value={valor} className="flex-none px-2.5">
-                {etiqueta}
-                <span
-                  className={cn(
-                    "text-xs tabular-nums",
-                    resaltar ? "font-semibold text-warning" : "text-muted-foreground"
-                  )}
-                >
-                  {data ? cantidad : "–"}
-                </span>
-              </TabsTrigger>
-            )
-          })}
-        </TabsList>
-      </Tabs>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Select value={filtro} onValueChange={(v) => cambiarFiltro(v as FiltroEstado)}>
+          <SelectTrigger size="sm" className="min-w-44" aria-label="Filtrar por estado">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FILTROS.map(({ valor, etiqueta }) => {
+              const cantidad = eventosVisibles.get(valor)?.length ?? 0
+              // Las que esperan a la CPA resaltan para que no se queden sin atender.
+              const resaltar = valor === "por_confirmar" && cantidad > 0
+              return (
+                <SelectItem key={valor} value={valor}>
+                  {etiqueta}
+                  <span
+                    className={cn(
+                      "text-xs tabular-nums",
+                      resaltar ? "font-semibold text-warning" : "text-muted-foreground"
+                    )}
+                  >
+                    {data ? cantidad : "–"}
+                  </span>
+                </SelectItem>
+              )
+            })}
+          </SelectContent>
+        </Select>
+
+        {/* Si el filtro activo no es "por confirmar", que las pendientes no
+            se pierdan de vista igual. */}
+        {filtro !== "por_confirmar" && pendientes > 0 && (
+          <p className="text-xs text-warning">
+            {pendientes} por confirmar
+          </p>
+        )}
+
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="reservas-solo-seguro"
+            checked={soloSeguro}
+            onCheckedChange={(v) => cambiarSeguro(v === true)}
+          />
+          <Label htmlFor="reservas-solo-seguro" className="cursor-pointer">
+            Necesita seguro
+          </Label>
+        </div>
+      </div>
 
       {loading && !data && (
         <div className="space-y-2">
@@ -350,9 +415,11 @@ export function ReservasPanel() {
 
       {data && eventos.length === 0 && (
         <p className="rounded-md border p-4 text-sm text-muted-foreground">
-          {filtro === "por_confirmar"
+          {filtro === "por_confirmar" && !soloSeguro
             ? "No hay reservas pendientes de confirmación."
-            : "No hay reservas para este filtro."}
+            : soloSeguro
+              ? "No hay reservas que requieran seguro para este filtro."
+              : "No hay reservas para este filtro."}
         </p>
       )}
 

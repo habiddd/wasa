@@ -861,11 +861,15 @@ sus líneas:
   `reservas_no_solapamiento` y todas las consultas de ocupación
   (`_reserva_solapada`, `_reserva_en_curso`, `_proxima_reserva`, las de
   cancelación) usan `ESTADOS_QUE_OCUPAN = ('confirmada', 'pendiente')`.
-- **La CPA confirma desde el dashboard**, en la pestaña Reservas: el filtro
-  "Por confirmar" junta las reservas con alguna línea pendiente (la más
-  próxima primero) y en el modal de detalle cada activo pendiente tiene
-  sus botones (ver el punto siguiente). "Confirmar todo" aparece solo si
-  hay más de un activo pendiente.
+- **La CPA confirma desde el dashboard**, en la pestaña Reservas: un
+  desplegable de estado (con el conteo de cada uno) reemplaza a las
+  pestañas de antes, y la opción "Por confirmar" junta las reservas con
+  alguna línea pendiente (la más próxima primero); un checkbox aparte
+  "Necesita seguro" filtra (con AND sobre el estado elegido) las que salen
+  de Barranquilla, la misma condición del badge "Sale de Barranquilla ·
+  seguro". En el modal de detalle cada activo pendiente tiene sus botones
+  (ver el punto siguiente). "Confirmar todo" aparece solo si hay más de un
+  activo pendiente.
   `POST /dashboard/api/reservas/grupo/<id>/confirmar` pasa las líneas
   pendientes a `confirmada`, hace commit y **después** le escribe al
   estudiante (`recursos_service.mensaje_reserva_confirmada`, con el número
