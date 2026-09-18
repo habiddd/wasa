@@ -150,7 +150,12 @@ async function connectToWhatsApp() {
 
     if (!texto) return;
 
-    console.log(`📨 Mensaje de ${numero}: ${texto}`);
+    // Cuando el chat llega con JID "@lid" (identificador anónimo de
+    // WhatsApp), `numero` NO es el teléfono: el número real viene aparte en
+    // `key.senderPn` ("57300...@s.whatsapp.net"), si WhatsApp lo comparte.
+    const senderPn = messageInfo.key.senderPn || null;
+
+    console.log(`📨 Mensaje de ${numero}${senderPn ? ` (pn ${senderPn.split("@")[0]})` : ""}: ${texto}`);
 
     // Enviar al webhook de Flask
     try {
@@ -162,6 +167,7 @@ async function connectToWhatsApp() {
           data: {
             key: {
               remoteJid: remoteJid,
+              senderPn: senderPn,
               fromMe: false,
             },
             message: messageInfo.message,

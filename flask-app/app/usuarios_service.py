@@ -18,6 +18,14 @@ def obtener_o_crear_usuario(telefono_wa: str, jid_wa: str | None = None) -> Usua
     actualiza si cambió) para poder escribirle después sin un mensaje suyo
     al que responder -- ver Usuario.jid_wa."""
     usuario = Usuario.query.filter_by(telefono_wa=telefono_wa).first()
+    if not usuario and jid_wa and jid_wa.endswith("@lid"):
+        # Usuario dado de alta antes de que llegara `senderPn`: quedó con el
+        # LID como telefono_wa. Se le corrige al número real en vez de
+        # crearle una cuenta nueva.
+        usuario = Usuario.query.filter_by(jid_wa=jid_wa).first()
+        if usuario:
+            usuario.telefono_wa = telefono_wa
+            db.session.commit()
     if usuario:
         if jid_wa and usuario.jid_wa != jid_wa:
             usuario.jid_wa = jid_wa

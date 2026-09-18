@@ -74,6 +74,12 @@ def _extraer_mensaje(payload: dict) -> tuple[str | None, str | None, str | None]
 
     remote_jid = key.get("remoteJid", "")
     numero = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+    # Con JID "@lid" lo de antes de la "@" es un identificador anónimo, no
+    # el teléfono; el número real llega en `senderPn` (ver baileys-bot).
+    # Si WhatsApp no lo compartió, se sigue usando el LID.
+    sender_pn = key.get("senderPn") or ""
+    if remote_jid.endswith("@lid") and sender_pn:
+        numero = sender_pn.split("@")[0]
 
     mensaje = data.get("message", {})
     texto = mensaje.get("conversation") or mensaje.get("extendedTextMessage", {}).get("text")
