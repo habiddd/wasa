@@ -113,9 +113,9 @@ export function eliminarUsuario(id: number) {
 
 // --- Sesiones (reservas) -----------------------------------------------
 
-// "pendiente": el activo requiere confirmación y la CPA todavía no la da.
+// "pendiente": el activo requiere confirmación y la LACS todavía no la da.
 // Una reserva con activos confirmados y pendientes a la vez es "parcial"
-// (ver calendario-utils, EventoCalendario.parcial). "denegada": la CPA no
+// (ver calendario-utils, EventoCalendario.parcial). "denegada": la LACS no
 // aprobó ese activo y quedó libre.
 export type EstadoReserva =
   | "confirmada"
@@ -224,7 +224,7 @@ export function eliminarReservaGrupo(grupoId: number) {
   return request<void>(`/reservas/grupo/${grupoId}`, { method: "DELETE" })
 }
 
-// La CPA aprueba los activos pendientes y el backend le avisa al estudiante
+// La LACS aprueba los activos pendientes y el backend le avisa al estudiante
 // por WhatsApp. `notificado` es false si el mensaje no salió: la reserva
 // queda confirmada igual.
 export function confirmarReservaGrupo(grupoId: number) {
@@ -390,7 +390,7 @@ export function actualizarActivo(
 }
 
 // --- Excepciones (lista negra de fechas) -------------------------------------
-// Días en que el bot no acepta reservas. Fechas civiles "YYYY-MM-DD" (hora CPA).
+// Días en que el bot no acepta reservas. Fechas civiles "YYYY-MM-DD" (hora LACS).
 // dia_semana / dias_semana: 0 = lunes ... 6 = domingo (igual que diaDeSemana()).
 
 export type OrigenExcepcion = "dia_semana" | "festivo" | "manual" | "desbloqueada"

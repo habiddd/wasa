@@ -1,18 +1,18 @@
 import type { EstadoReserva, Rol, Sesion, TipoRecurso } from "@/lib/api"
 
 // Las reservas se guardan en UTC (ver models.Reserva) pero el negocio opera en
-// hora local de la CPA, igual que el bot (recursos_service.ZONA_HORARIA_CPA).
+// hora local de la LACS, igual que el bot (recursos_service.ZONA_HORARIA_LACS).
 // El calendario agrupa por día en esta zona a propósito: así muestra lo mismo
 // aunque quien abra el dashboard tenga el navegador en otra zona horaria.
-export const ZONA_CPA = "America/Bogota"
+export const ZONA_LACS = "America/Bogota"
 
 export type Vista = "mes" | "semana" | "dia"
 
-/** Fecha de calendario (sin hora) en la zona de la CPA. `mes` es 1-12. */
+/** Fecha de calendario (sin hora) en la zona de la LACS. `mes` es 1-12. */
 export type DiaCivil = { anio: number; mes: number; dia: number }
 
 const PARTES = new Intl.DateTimeFormat("en-CA", {
-  timeZone: ZONA_CPA,
+  timeZone: ZONA_LACS,
   year: "numeric",
   month: "2-digit",
   day: "2-digit",
@@ -71,14 +71,14 @@ export function sumarMeses(dia: DiaCivil, n: number): DiaCivil {
   return { anio, mes: mesNormalizado + 1, dia: Math.min(dia.dia, diasDelMes) }
 }
 
-/** 0 = lunes ... 6 = domingo (la semana de la CPA empieza el lunes). */
+/** 0 = lunes ... 6 = domingo (la semana de la LACS empieza el lunes). */
 export function diaDeSemana(dia: DiaCivil) {
   const domingoPrimero = new Date(Date.UTC(dia.anio, dia.mes - 1, dia.dia)).getUTCDay()
   return (domingoPrimero + 6) % 7
 }
 
 /**
- * Instante UTC que corresponde a una hora de pared en la zona de la CPA.
+ * Instante UTC que corresponde a una hora de pared en la zona de la LACS.
  * Colombia no tiene horario de verano, pero el ajuste se hace en dos pasadas
  * para no depender de eso.
  */
@@ -173,7 +173,7 @@ export type EventoCalendario = {
   /** Estado con el que se pinta el evento; ver PRIORIDAD_ESTADO. */
   estado: EstadoReserva
   estadosMixtos: boolean
-  /** Alguna línea espera la confirmación de la CPA (estado "pendiente"). */
+  /** Alguna línea espera la confirmación de la LACS (estado "pendiente"). */
   porConfirmar: boolean
   /** Reserva parcial: mezcla activos confirmados y pendientes. */
   parcial: boolean
@@ -183,7 +183,7 @@ export type EventoCalendario = {
 
 // Con qué estado se pinta un evento cuyas líneas no coinciden: manda el más
 // vigente, porque es el que le importa a quien mira el calendario. Pendiente
-// va primero: una reserva parcial es algo que la CPA todavía tiene que atender.
+// va primero: una reserva parcial es algo que la LACS todavía tiene que atender.
 const PRIORIDAD_ESTADO: EstadoReserva[] = [
   "pendiente",
   "confirmada",
@@ -348,14 +348,14 @@ export function bloquesDelDia<T extends ConRango>(items: T[], dia: DiaCivil): Bl
 // --- Formato ----------------------------------------------------------------
 
 const HORA = new Intl.DateTimeFormat("es-CO", {
-  timeZone: ZONA_CPA,
+  timeZone: ZONA_LACS,
   hour: "numeric",
   minute: "2-digit",
   hour12: true,
 })
 
 const FECHA_LARGA = new Intl.DateTimeFormat("es-CO", {
-  timeZone: ZONA_CPA,
+  timeZone: ZONA_LACS,
   weekday: "long",
   day: "numeric",
   month: "long",
@@ -363,13 +363,13 @@ const FECHA_LARGA = new Intl.DateTimeFormat("es-CO", {
 })
 
 const FECHA_CORTA = new Intl.DateTimeFormat("es-CO", {
-  timeZone: ZONA_CPA,
+  timeZone: ZONA_LACS,
   day: "numeric",
   month: "short",
 })
 
 const MES_ANIO = new Intl.DateTimeFormat("es-CO", {
-  timeZone: ZONA_CPA,
+  timeZone: ZONA_LACS,
   month: "long",
   year: "numeric",
 })
@@ -384,7 +384,7 @@ export function hora(fecha: Date) {
 
 /**
  * Valor para un <input type="datetime-local">: el navegador lo interpreta en
- * la zona del equipo, así que se escribe y se lee en hora de la CPA para que
+ * la zona del equipo, así que se escribe y se lee en hora de la LACS para que
  * el formulario muestre lo mismo que el calendario.
  */
 export function aInputLocal(fecha: Date) {
@@ -392,7 +392,7 @@ export function aInputLocal(fecha: Date) {
   return `${anio}-${dosDigitos(mes)}-${dosDigitos(dia)}T${dosDigitos(hora)}:${dosDigitos(minuto)}`
 }
 
-/** Inversa de aInputLocal: "2026-09-02T15:00" en hora CPA -> instante UTC. */
+/** Inversa de aInputLocal: "2026-09-02T15:00" en hora LACS -> instante UTC. */
 export function desdeInputLocal(valor: string): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(valor)
   if (!m) return null

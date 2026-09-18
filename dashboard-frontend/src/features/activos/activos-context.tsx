@@ -14,8 +14,8 @@ import {
   type Recurso,
 } from "@/lib/api"
 
-const SUBTAB_STORAGE_KEY = "dashboard-cpa-activos-subtab"
-const SUBSUBTAB_STORAGE_KEY = "dashboard-cpa-activos-subcategoria"
+const SUBTAB_STORAGE_KEY = "dashboard-lacs-activos-subtab"
+const SUBSUBTAB_STORAGE_KEY = "dashboard-lacs-activos-subcategoria"
 
 type ActivosContextValue = {
   activos: Recurso[]

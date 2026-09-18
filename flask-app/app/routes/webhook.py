@@ -51,7 +51,7 @@ def _extraer_mensaje(payload: dict) -> tuple[str | None, str | None, str | None]
     'messages.upsert'. Estructura típica:
     {
       "event": "messages.upsert",
-      "instance": "cpa-uninorte",
+      "instance": "lacs-uninorte",
       "data": {
         "key": {"remoteJid": "573001234567@s.whatsapp.net", "fromMe": false},
         "message": {"conversation": "hola"}

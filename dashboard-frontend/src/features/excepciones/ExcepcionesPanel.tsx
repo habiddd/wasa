@@ -12,7 +12,7 @@ import { ReglasCard } from "./ReglasCard"
 import { VistaCalendarioExcepciones } from "./VistaCalendarioExcepciones"
 import { VistaListaExcepciones } from "./VistaListaExcepciones"
 
-const VISTA_STORAGE_KEY = "dashboard-cpa-excepciones-vista"
+const VISTA_STORAGE_KEY = "dashboard-lacs-excepciones-vista"
 
 function vistaInicial(): "calendario" | "lista" {
   try {
@@ -100,7 +100,7 @@ export function ExcepcionesPanel() {
         <LeyendaColor clase={ESTILO_ORIGEN.manual.celda} etiqueta="Bloqueo manual" />
         <LeyendaColor clase={ESTILO_ORIGEN.desbloqueada.celda} etiqueta="Desbloqueada" />
         <span className="ml-auto">
-          Fechas en hora de la CPA. El bot rechaza reservas que empiecen o terminen en un día
+          Fechas en hora de la LACS. El bot rechaza reservas que empiecen o terminen en un día
           bloqueado; el dashboard no bloquea ediciones.
         </span>
       </div>

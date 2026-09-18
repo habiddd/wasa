@@ -38,9 +38,9 @@ iMac y MacBook).
 
 | Lugar | id | Dentro de | Contiene |
 |---|---|---|---|
-| Edificio CPA | 40 | — | las dos salas de abajo |
-| Sala de postproducción 4 | 41 | Edificio CPA | 3 × iMac 24 M3, 2 × MacBook Pro 14 M3 |
-| Cabina de audio 2 | 42 | Edificio CPA | Micrófono Shure SM7B (+ su brazo), Interfaz Focusrite |
+| Edificio LACS | 40 | — | las dos salas de abajo |
+| Sala de postproducción 4 | 41 | Edificio LACS | 3 × iMac 24 M3, 2 × MacBook Pro 14 M3 |
+| Cabina de audio 2 | 42 | Edificio LACS | Micrófono Shure SM7B (+ su brazo), Interfaz Focusrite |
 
 | Activo | ids | Lugar | Notas |
 |---|---|---|---|
@@ -125,7 +125,7 @@ Incluye por defecto:
 ```
 
 Al confirmar agregó, correctamente, el aviso de seguro:
-*"⚠ Micrófono Shure SM7B requiere seguro — el equipo de la CPA te
+*"⚠ Micrófono Shure SM7B requiere seguro — el equipo de la LACS te
 contactará para completar ese trámite."*
 Quedaron las dos filas (48 y 50) bajo el número de reserva 22.
 
@@ -215,7 +215,7 @@ return f"libre ahora, pero reservado del {proxima.inicio.strftime('%d/%m %H:%M')
 
 La columna es `DateTime(timezone=True)` y vuelve en UTC. El resto del bot
 nunca hace esto: usa `_formatear_hora(dt_local)` sobre un valor ya pasado
-por `.astimezone(ZONA_HORARIA_CPA)`, y por eso el wizard y las
+por `.astimezone(ZONA_HORARIA_LACS)`, y por eso el wizard y las
 confirmaciones sí muestran "2:00 p.m.". Son tres puntos de formateo, los
 tres en las mismas dos funciones.
 

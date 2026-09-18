@@ -1,6 +1,6 @@
-# CPA Reservas Bot — Punto de partida
+# LACS Reservas Bot — Punto de partida
 
-Scaffold inicial para el bot de reservas de equipos/espacios de la CPA
+Scaffold inicial para el bot de reservas de equipos/espacios de la LACS
 (Uninorte) por WhatsApp, con IA local y back-office de analítica.
 
 **Diseño clave:** el canal de WhatsApp corre sobre **Baileys** (WhatsApp Web
@@ -94,7 +94,7 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   `PATCH /dashboard/api/reservas/<id>` o
   `PATCH /dashboard/api/reservas/bloque`, que mueve todas las líneas de la
   reserva en una sola transacción. Todos los horarios se muestran en hora
-  local de la CPA (`America/Bogota`), sin importar la zona del equipo desde
+  local de la LACS (`America/Bogota`), sin importar la zona del equipo desde
   el que se abra el dashboard. Se refresca solo cada 60s.
 - **Usuarios**: submenú desplegable de dos entradas, mismo patrón que
   "Servicios". "Usuarios" lista los usuarios que completaron el registro
@@ -188,7 +188,7 @@ Si en el futuro quieres migrar a la API oficial de Meta:
 - Lógica real de reservas por intent (hoy hay un `TODO` en
   `app/routes/webhook.py`): validar disponibilidad, crear/cancelar
   reserva, activar secuencia de confirmación.
-- Migración de tu data actual de la CPA al esquema de `recursos`/`usuarios`.
+- Migración de tu data actual de la LACS al esquema de `recursos`/`usuarios`.
 - Autenticación para los endpoints de analítica (hoy están abiertos;
   el dashboard en `/dashboard` sí tiene autenticación básica, pero
   `/api/analytics/*` sigue sin protección).
@@ -200,7 +200,7 @@ Si en el futuro quieres migrar a la API oficial de Meta:
 ## Estructura del proyecto
 
 ```
-cpa-reservas-bot/
+lacs-reservas-bot/
 ├── docker-compose.yml       # Postgres + Redis + Baileys + Flask + dashboard-frontend
 ├── .env.example
 ├── postgres/init/           # esquema inicial (se ejecuta 1 sola vez)

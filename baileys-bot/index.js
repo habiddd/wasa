@@ -42,7 +42,7 @@ async function connectToWhatsApp() {
   sock = makeWASocket({
     version,
     auth: state,
-    browser: ["CPA Reservas Bot", "Chrome", "1.0.0"],
+    browser: ["LACS Reservas Bot", "Chrome", "1.0.0"],
   });
 
   // Guardar credenciales cuando cambien
@@ -163,7 +163,7 @@ async function connectToWhatsApp() {
         FLASK_WEBHOOK_URL,
         {
           event: "messages.upsert",
-          instance: "cpa-uninorte",
+          instance: "lacs-uninorte",
           data: {
             key: {
               remoteJid: remoteJid,

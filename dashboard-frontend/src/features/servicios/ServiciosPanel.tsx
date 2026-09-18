@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { usePolling } from "@/hooks/use-polling"
 import { fetchQr, fetchStatus, type EstadoServicio } from "@/lib/api"
-import { formatearHoraCPA } from "@/lib/fechas"
+import { formatearHoraLACS } from "@/lib/fechas"
 
 const NOMBRES: Record<string, string> = {
   postgres: "Postgres",
@@ -68,7 +68,7 @@ export function EstadoServiciosPanel() {
       {error && <p className="text-sm text-destructive">No se pudo consultar el estado.</p>}
       {data && (
         <p className="text-xs text-muted-foreground">
-          Última actualización: {formatearHoraCPA(data.chequeado_en)}
+          Última actualización: {formatearHoraLACS(data.chequeado_en)}
         </p>
       )}
     </div>

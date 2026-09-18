@@ -1,5 +1,5 @@
 -- Esquema inicial de la app de reservas.
--- Ajusta los campos a tu modelo de datos actual de la CPA antes de migrar
+-- Ajusta los campos a tu modelo de datos actual de la LACS antes de migrar
 -- la información real (la idea es que este esquema pueda recibir esos datos
 -- sin perder información).
 
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
     telefono_wa       VARCHAR(20) UNIQUE NOT NULL,   -- número de WhatsApp (con código país)
     -- JID completo con el que escribe (ej. '573001234567@s.whatsapp.net' o
     -- '144186850431118@lid'). Hace falta para escribirle sin que haya un
-    -- mensaje suyo al que responder (ej. avisarle que la CPA confirmó su
+    -- mensaje suyo al que responder (ej. avisarle que la LACS confirmó su
     -- reserva): rearmarlo como telefono_wa + '@s.whatsapp.net' no llega a
     -- las cuentas '@lid'. Se actualiza con cada mensaje entrante.
     jid_wa            VARCHAR(64),
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS recursos (
     marca           VARCHAR(100),
     modelo          VARCHAR(100),
     identificador   VARCHAR(100),                     -- número de serie o IMEI (alfanumérico), si lo tiene
-    requiere_confirmacion BOOLEAN NOT NULL DEFAULT FALSE,  -- el equipo de la CPA debe confirmar el préstamo de este activo (ver recursos_service._nota_requiere_confirmacion)
+    requiere_confirmacion BOOLEAN NOT NULL DEFAULT FALSE,  -- el equipo de la LACS debe confirmar el préstamo de este activo (ver recursos_service._nota_requiere_confirmacion)
     -- Estado de inventario del recurso -- no confundir con el estado de
     -- agenda que calcula recursos_service._estado_recurso() a partir de
     -- `reservas` ("en uso ahora mismo", "libre hasta tal hora"): este es
@@ -136,8 +136,8 @@ CREATE TABLE IF NOT EXISTS reservas (
     fin             TIMESTAMPTZ NOT NULL,
     -- confirmada | pendiente | denegada | cancelada | completada | no_show.
     -- 'pendiente' es un activo con recursos.requiere_confirmacion que espera
-    -- a que la CPA lo apruebe desde el dashboard; ocupa el activo igual que
-    -- una confirmada (ver reservas_no_solapamiento). 'denegada': la CPA no lo
+    -- a que la LACS lo apruebe desde el dashboard; ocupa el activo igual que
+    -- una confirmada (ver reservas_no_solapamiento). 'denegada': la LACS no lo
     -- aprobó; no ocupa el activo.
     estado          VARCHAR(20) NOT NULL DEFAULT 'confirmada',
     canal_origen    VARCHAR(20) NOT NULL DEFAULT 'whatsapp',
@@ -160,8 +160,8 @@ CREATE INDEX IF NOT EXISTS idx_reservas_recurso_rango ON reservas (recurso_id, i
 -- o dos requests concurrentes pasen el chequeo de la aplicación a la vez.
 -- Postgres rechaza el INSERT/UPDATE con un error de exclusión si detecta
 -- solapamiento; recursos_service.crear_reserva() atrapa ese error.
--- Una reserva 'pendiente' (espera la confirmación de la CPA) también aparta
--- el activo: si no, otro estudiante podría reservarlo mientras la CPA decide.
+-- Una reserva 'pendiente' (espera la confirmación de la LACS) también aparta
+-- el activo: si no, otro estudiante podría reservarlo mientras la LACS decide.
 -- La primera versión solo cubría 'confirmada'; se recrea si todavía es esa.
 DO $$
 BEGIN
@@ -184,7 +184,7 @@ BEGIN
 END $$;
 
 -- Antes se llamaba `secuencias_seguro` (no es un seguro sino una
--- confirmación de la CPA). El renombre va aquí, antes del CREATE TABLE IF
+-- confirmación de la LACS). El renombre va aquí, antes del CREATE TABLE IF
 -- NOT EXISTS de abajo y no con las demás migraciones del final: si corriera
 -- después, en una base viva el CREATE ya habría creado una tabla
 -- `secuencias_confirmacion` nueva y vacía, y el RENAME de la vieja chocaría
@@ -268,7 +268,7 @@ ALTER TABLE recursos ADD COLUMN IF NOT EXISTS espacio_id INTEGER REFERENCES recu
 ALTER TABLE recursos DROP COLUMN IF EXISTS incluido_por_defecto;
 
 -- Renombre: la columna se llamaba "seguro" pero nunca fue un seguro, es una
--- confirmación que da el equipo de la CPA antes de prestar el activo. Solo
+-- confirmación que da el equipo de la LACS antes de prestar el activo. Solo
 -- corre si la base todavía tiene el nombre viejo (una base recién creada ya
 -- nace con `requiere_confirmacion` por el CREATE TABLE de arriba). El RENAME
 -- conserva los valores existentes.
@@ -339,7 +339,7 @@ BEGIN
 END $$;
 
 -- Un lugar no va dentro de otro lugar ni es hijo (padre_id) de nada: no es
--- un caso de uso de la CPA (decisión del 10/09/2026, ver
+-- un caso de uso de la LACS (decisión del 10/09/2026, ver
 -- docs/SESION_2026-09-10.md). Antes se permitía anidar espacios (edificio >
 -- piso > sala); las filas que lo usaban se desvinculan justo antes de crear
 -- el CHECK, dentro del mismo IF, para que re-ejecutar el script no toque

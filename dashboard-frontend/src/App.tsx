@@ -51,7 +51,7 @@ import { EstadoServiciosPanel, QrWhatsappPanel } from "@/features/servicios/Serv
 import { SesionesTab } from "@/features/usuarios/SesionesTab"
 import { ListaUsuariosPanel } from "@/features/usuarios/UsuariosPanel"
 
-const TAB_STORAGE_KEY = "dashboard-cpa-tab-activa"
+const TAB_STORAGE_KEY = "dashboard-lacs-tab-activa"
 
 type ItemMenu = {
   value: string
@@ -227,7 +227,7 @@ function App() {
               <SidebarHeader>
                 <div className="px-2 py-1.5 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:text-center">
                   <p className="text-sm font-semibold group-data-[collapsible=icon]:hidden">
-                    CPA Reservas Bot
+                    LACS Reservas Bot
                   </p>
                   <p className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
                     Panel de monitoreo
@@ -244,7 +244,7 @@ function App() {
                 <div className="flex items-start gap-3">
                   <SidebarTrigger className="mt-1" />
                   <div>
-                    <h1 className="text-lg font-semibold">Dashboard — CPA Reservas Bot</h1>
+                    <h1 className="text-lg font-semibold">Dashboard — LACS Reservas Bot</h1>
                     <p className="text-sm text-muted-foreground">
                       Estado de servicios, vinculación de WhatsApp y métricas de uso.
                     </p>

@@ -24,7 +24,7 @@ CAMPOS_REGISTRO = [
 ]
 
 MENSAJE_BIENVENIDA = (
-    "¡Hola! Soy el asistente de reservas de la CPA. Antes de ayudarte, necesito "
+    "¡Hola! Soy el asistente de reservas de la LACS. Antes de ayudarte, necesito "
     "registrarte -- son solo 3 datos rápidos."
 )
 

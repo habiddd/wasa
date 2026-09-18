@@ -12,7 +12,7 @@ import { claveDe, diaDe, DIAS_MINIMOS_SEGURO, fechaCivilLarga } from "./calendar
 /**
  * Avisos "blandos" de fecha (plazo del seguro e inicio en un día de la lista
  * negra) para un formulario de reserva -- ni el bloqueo ni el guardado los
- * usa: son solo texto de advertencia, la CPA tiene la última palabra (ver
+ * usa: son solo texto de advertencia, la LACS tiene la última palabra (ver
  * docs/ARQUITECTURA.md, secciones "Cláusula de seguro" y "Excepciones").
  * Extraído de ReservaDetalle.tsx para reusarlo también en la creación de
  * reservas desde el dashboard (NuevaReservaDialog).

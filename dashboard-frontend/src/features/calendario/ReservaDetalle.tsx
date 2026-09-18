@@ -64,7 +64,7 @@ const ESTADOS: EstadoReserva[] = [
   "no_show",
 ]
 
-/** Activos de la reserva que esperan la confirmación de la CPA, sin repetir modelo. */
+/** Activos de la reserva que esperan la confirmación de la LACS, sin repetir modelo. */
 function nombresPendientes(evento: EventoCalendario) {
   return [
     ...new Set(evento.reservas.filter((r) => r.estado === "pendiente").map(etiquetaReserva)),
@@ -94,7 +94,7 @@ function textoDecision(evento: EventoCalendario, { reserva, accion }: Decision) 
   }
   return {
     titulo: `¿Denegar ${nombre}?`,
-    descripcion: `Sale de la reserva ${numero}, queda libre en ese horario para otra persona y se le enviará un WhatsApp a ${evento.usuarioNombre} avisándole que la CPA no aprobó el préstamo.`,
+    descripcion: `Sale de la reserva ${numero}, queda libre en ese horario para otra persona y se le enviará un WhatsApp a ${evento.usuarioNombre} avisándole que la LACS no aprobó el préstamo.`,
   }
 }
 
@@ -207,7 +207,7 @@ function Detalle({
 
       {evento.porConfirmar && (
         <p className="rounded-md border border-dashed border-warning bg-warning/5 px-3 py-2 text-sm">
-          {evento.parcial && "Reserva parcial. "}Esperan la confirmación de la CPA:{" "}
+          {evento.parcial && "Reserva parcial. "}Esperan la confirmación de la LACS:{" "}
           {nombresPendientes(evento).join(", ")}. Confirma o deniega cada uno en la lista de
           abajo; el estudiante recibe un WhatsApp con cada decisión.
         </p>
@@ -734,7 +734,7 @@ function FormularioEdicion({
       )}
 
       <p className="text-xs text-muted-foreground">
-        Horarios en hora local de la CPA (America/Bogota). Dos reservas confirmadas o pendientes del mismo activo no pueden cruzarse.
+        Horarios en hora local de la LACS (America/Bogota). Dos reservas confirmadas o pendientes del mismo activo no pueden cruzarse.
       </p>
 
       <DialogFooter>

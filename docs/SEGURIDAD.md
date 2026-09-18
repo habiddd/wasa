@@ -63,7 +63,7 @@
       de confirmación con sus ids reales) — en ambos casos, cero filas
       modificadas (ver `docs/SESION_2026-08-31.md`)
 
-## Pendiente antes de producción con datos reales de la CPA
+## Pendiente antes de producción con datos reales de la LACS
 
 ### Infraestructura
 - [ ] Exponer Evolution API y Flask solo dentro de tu red (Tailscale),
@@ -77,7 +77,7 @@
       (`"3000:3000"`, a diferencia de postgres/flask que usan
       `127.0.0.1:...`), y su endpoint `POST /send` no valida ningún API key
       pese a que Flask sí lo envía. Cualquiera con acceso de red a ese
-      puerto puede hacer que el número de la CPA envíe mensajes arbitrarios.
+      puerto puede hacer que el número de la LACS envíe mensajes arbitrarios.
       Corregir: bindear a `127.0.0.1` y validar `x-api-key` en `/send`
       dentro de `baileys-bot/index.js`.
 - [ ] `/webhook/whatsapp` y `/webhook/qr` en Flask reciben el header
@@ -92,7 +92,7 @@
       correr más de un worker de Gunicorn (con memoria, cada worker tiene
       su propio contador y el límite real se vuelve inconsistente).
 - [ ] Hoy el registro es auto-servicio (cualquier número que escribe se
-      auto-registra dando sus datos) — decide si para la CPA real hace
+      auto-registra dando sus datos) — decide si para la LACS real hace
       falta validar esos datos contra algún padrón de Uninorte (ej. que el
       código de estudiante exista de verdad) en vez de aceptar lo que sea
       que el usuario escriba.

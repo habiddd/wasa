@@ -1,6 +1,6 @@
 """
 Datos dummy para poder probar el flujo de disponibilidad end-to-end antes de
-tener el catálogo real de la CPA cargado. Se ejecuta con:
+tener el catálogo real de la LACS cargado. Se ejecuta con:
 
     flask --app wsgi.py seed-recursos
 
@@ -39,9 +39,9 @@ RECURSOS_DUMMY = [
          placa="10000060", categoria="grabación audiovisual", subcategoria="dron", marca="DJI", modelo="Mavic 3", identificador="IMEI-864012345678901",
          requiere_confirmacion=True),
     dict(tipo="espacio", nombre="Estudio de grabación A", descripcion="Estudio con croma",
-         ubicacion="Edificio CPA, piso 2"),
+         ubicacion="Edificio LACS, piso 2"),
     dict(tipo="espacio", nombre="Sala de edición 1", descripcion="Estación de edición con monitores calibrados",
-         ubicacion="Edificio CPA, piso 1"),
+         ubicacion="Edificio LACS, piso 1"),
 ]
 
 

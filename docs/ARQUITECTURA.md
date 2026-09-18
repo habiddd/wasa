@@ -2,7 +2,7 @@
 
 ## Flujo de un mensaje entrante
 
-1. Usuario escribe por WhatsApp al número de la CPA.
+1. Usuario escribe por WhatsApp al número de la LACS.
 2. `baileys-bot` (servicio Node.js sobre `@whiskeysockets/baileys`, WhatsApp
    Web no oficial) recibe el mensaje vía `messages.upsert` y lo reenvía a
    `POST /webhook/whatsapp` en Flask, con el `remoteJid` completo tal cual
@@ -89,7 +89,7 @@ Por eso `webhook.py` guarda dos cosas por separado:
   → `baileys-bot` `POST /send` con `{"jid": ...}`).
 
 Para escribirle a alguien **sin un mensaje suyo al que responder** (el
-aviso de que la CPA confirmó su reserva, ver "Confirmación de la CPA"), el
+aviso de que la LACS confirmó su reserva, ver "Confirmación de la LACS"), el
 JID completo se guarda en `usuarios.jid_wa` con cada mensaje entrante
 (`usuarios_service.obtener_o_crear_usuario`) y se lee con
 `whatsapp_client.jid_de`. Solo si no hay uno guardado (usuarios que no han
@@ -282,7 +282,7 @@ pero eso se valida en el dashboard (`flask-app/app/routes/dashboard.py`,
 subqueries, y un trigger daría un error genérico en vez de uno que el
 dashboard pueda traducir a un mensaje legible. Un espacio, en cambio, no
 tiene lugar ni padre -- no se anidan lugares, no es un caso de uso de la
-CPA. Eso sí es un `CHECK` sobre la propia fila
+LACS. Eso sí es un `CHECK` sobre la propia fila
 (`recursos_espacio_sin_padre_ni_lugar`); el dashboard además exige que el
 padre de un activo sea un equipo, y oculta Padre y Lugar en el formulario
 de un espacio. Como un espacio nunca tiene lugar, la cadena de lugares no
@@ -339,14 +339,14 @@ Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
   el catálogo y a escribir el nombre del equipo o espacio. Si está vacía,
   se conserva el listado del estado de todo el inventario.
 - Toda hora se interpreta en `America/Bogota` (zona horaria fija de la
-  CPA) y se guarda en UTC (columnas `TIMESTAMPTZ`).
+  LACS) y se guarda en UTC (columnas `TIMESTAMPTZ`).
 - **La garantía real contra choques de horario es de Postgres, no de la
   app**: `postgres/init/02-schema.sql` agrega la extensión `btree_gist` y
   una restricción `EXCLUDE USING gist (recurso_id WITH =, tstzrange(inicio,
   fin) WITH &&) WHERE (estado IN ('confirmada', 'pendiente'))` sobre
   `reservas`. Postgres rechaza cualquier INSERT/UPDATE que se solape con una
   reserva confirmada o pendiente de confirmación del mismo recurso (la
-  pendiente también aparta el activo mientras la CPA decide, ver
+  pendiente también aparta el activo mientras la LACS decide, ver
   `ESTADOS_QUE_OCUPAN` en `recursos_service.py`), sin importar si la vía es la app, una
   migración, un script manual, o dos requests concurrentes que pasaron el
   chequeo de la aplicación al mismo tiempo. `crear_reservas_grupo` en
@@ -480,21 +480,21 @@ nunca queda un activo/espacio a medio reservar porque nada se escribe en
 ### Cláusula de seguro: salida de Barranquilla
 
 Antes de pedir la fecha, el wizard pregunta si los activos van a salir de
-Barranquilla. Si la respuesta es sí, la CPA tiene que tramitar un seguro y
+Barranquilla. Si la respuesta es sí, la LACS tiene que tramitar un seguro y
 la reserva no puede empezar antes del `DIAS_MINIMOS_TRAMITE_SEGURO`-ésimo
 (5) día **hábil** (lunes a viernes, sin festivos de Colombia -- paquete
 `holidays`, `holidays.country_holidays("CO")`) después de hoy, hora de la
-CPA (`ZONA_HORARIA_CPA`); hoy no cuenta como día hábil transcurrido. Por
+LACS (`ZONA_HORARIA_LACS`); hoy no cuenta como día hábil transcurrido. Por
 ejemplo: viernes 18/09/2026 → viernes 25/09/2026 (fin de semana no cuenta);
 miércoles 07/10/2026 → jueves 15/10/2026 (salta el lunes 12/10, festivo).
 La regla no distingue de qué activo se trate.
 
-Este sí es un seguro de verdad (un trámite de la CPA antes de que los
+Este sí es un seguro de verdad (un trámite de la LACS antes de que los
 activos salgan de la ciudad), y no tiene nada que ver con
 `recursos.requiere_confirmacion`: esa columna se llamaba `requiere_seguro`
 y se renombró justamente porque nunca fue un seguro (ver
 `docs/SESION_2026-09-10.md`). Un activo puede necesitar confirmación de la
-CPA, seguro por salir de Barranquilla, las dos cosas o ninguna.
+LACS, seguro por salir de Barranquilla, las dos cosas o ninguna.
 
 - **Orden:** el paso "sale_de_barranquilla" va justo antes de "fecha"
   (`_siguiente_paso_wizard`), ya con el carrito resuelto (después de
@@ -504,7 +504,7 @@ CPA, seguro por salir de Barranquilla, las dos cosas o ninguna.
 - **`fecha_minima_sale_de_barranquilla(hoy=None)`** (pública, en
   `recursos_service.py`) es la única fuente de la fecha mínima -- toma
   `hoy` como parámetro para poder probarla con distintas fechas; con
-  `None` usa el día de hoy en la CPA. Se apoya en `sumar_dias_habiles`
+  `None` usa el día de hoy en la LACS. Se apoya en `sumar_dias_habiles`
   (`@lru_cache`, cuenta días hábiles uno por uno desde `desde`, sin
   incluirlo) y en `es_dia_habil` (lunes a viernes y no festivo). Ni el bot
   ni el dashboard recalculan el plazo por su cuenta: el dashboard pide la
@@ -556,7 +556,7 @@ CPA, seguro por salir de Barranquilla, las dos cosas o ninguna.
   nueva. `_continuar_reserva` y la exención de `gestionar_reserva` también
   aceptan "area_metropolitana" como alias del nombre del paso, por si una
   sesión de Redis quedó parada ahí justo antes del despliegue.
-- **El dashboard solo advierte:** desde `ReservaDetalle.tsx` la CPA puede
+- **El dashboard solo advierte:** desde `ReservaDetalle.tsx` la LACS puede
   editar la respuesta y el inicio aunque quede antes del plazo del seguro
   -- se le avisa (mismo estilo del aviso de "por confirmar"), pero no se
   bloquea el guardado; la decisión final es suya.
@@ -585,7 +585,7 @@ en la lista negra de la pestaña "Excepciones" (ver más abajo, sección
   "confirmar_fecha_interpretada") -- así el usuario no llega a ver el "¿Es
   correcto?" de una fecha que de todos modos se va a rechazar.
 - **Red de seguridad final:** `_crear_reserva_desde_wizard` repite el
-  chequeo justo antes de escribir en la base (la CPA pudo bloquear el día
+  chequeo justo antes de escribir en la base (la LACS pudo bloquear el día
   entre el resumen y "Confirmar"); si falla, vuelve a llamar
   `_avanzar_wizard` para que la validación central borre la fecha y avise,
   igual que con el plazo del seguro.
@@ -611,7 +611,7 @@ título y aviso dependen de los activos con `requiere_confirmacion`
 todos -> *RESERVA PENDIENTE DE CONFIRMACIÓN*. El aviso va en líneas aparte
 con el nombre de cada activo, no como sufijo pegado a su línea -- si hay
 más de uno en el carrito, hace falta saber cuál espera y cuál no (ver
-"Confirmación de la CPA" más abajo). Los menús numerados *seleccionables* (`OPCIONES_CONFIRMAR`,
+"Confirmación de la LACS" más abajo). Los menús numerados *seleccionables* (`OPCIONES_CONFIRMAR`,
 el menú de quitar un ítem) no llevan este formato: agregarle `*negrita*`
 ahí rompería el reconocimiento de "escribe el nombre de la opción en vez
 del número" (`_interpretar_opcion` compara substrings literales).
@@ -669,7 +669,7 @@ quita lo que no necesite.
 equipos activos del lugar cuyo padre por `padre_id` no está también en el
 lugar, y debajo de cada una van sus hijos por `padre_id` (recursivo). Solo
 equipos: un lugar dentro de otro lugar no se ofrece, a propósito -- no es
-un caso de uso de la CPA.
+un caso de uso de la LACS.
 
 **Unidades concretas, no modelos.** Los accesorios normales se reservan
 por modelo (cualquier unidad libre, `_unidad_libre_en_rango`). Los
@@ -833,7 +833,7 @@ disponibilidad al confirmar revierte también la lista de integrantes.
 Distinto de "cortar el wizard" de arriba (que aborta una reserva que
 **todavía no se escribió** en la base): esto es el intent `cancelar`,
 para anular una reserva que ya quedó `confirmada` (o `pendiente` de la
-CPA; en la lista esas líneas dicen "pendiente de confirmación"). Vive en
+LACS; en la lista esas líneas dicen "pendiente de confirmación"). Vive en
 `gestionar_cancelacion` (`recursos_service.py`), con su propio wizard corto
 en `sesion["cancelacion_wizard"]` que webhook.py trata igual que
 `reserva_wizard` -- mientras esté activo, la respuesta del usuario (un
@@ -878,10 +878,10 @@ un paso `confirmar_cancelacion` explícito de por medio. `PALABRAS_CANCELAR`
 ("cancelar", "cancela", "cerrar") aborta el wizard de cancelación en
 cualquier paso sin tocar la base, igual que en `gestionar_reserva`.
 
-### Confirmación de la CPA: reservas parciales y pendientes
+### Confirmación de la LACS: reservas parciales y pendientes
 
 Un activo con `recursos.requiere_confirmacion` no se presta hasta que el
-equipo de la CPA lo aprueba. El estado vive **por línea** (`reservas.estado`),
+equipo de la LACS lo aprueba. El estado vive **por línea** (`reservas.estado`),
 como el resto: `crear_reservas_grupo` crea esas líneas como `pendiente` y
 las demás como `confirmada`. El estado de la reserva completa se deriva de
 sus líneas:
@@ -893,11 +893,11 @@ sus líneas:
 | todas `pendiente` | pendiente | *RESERVA PENDIENTE DE CONFIRMACIÓN* |
 
 - **Una pendiente aparta el activo.** Si no, otro estudiante podría
-  reservarlo mientras la CPA decide. Por eso el EXCLUDE
+  reservarlo mientras la LACS decide. Por eso el EXCLUDE
   `reservas_no_solapamiento` y todas las consultas de ocupación
   (`_reserva_solapada`, `_reserva_en_curso`, `_proxima_reserva`, las de
   cancelación) usan `ESTADOS_QUE_OCUPAN = ('confirmada', 'pendiente')`.
-- **La CPA confirma desde el dashboard**, en la pestaña Reservas: un
+- **La LACS confirma desde el dashboard**, en la pestaña Reservas: un
   desplegable de estado (con el conteo de cada uno) reemplaza a las
   pestañas de antes, y la opción "Por confirmar" junta las reservas con
   alguna línea pendiente (la más próxima primero); un checkbox aparte
@@ -911,7 +911,7 @@ sus líneas:
   estudiante (`recursos_service.mensaje_reserva_confirmada`, con el número
   de reserva, que también va en la factura de cuando reservó, y la línea
   "Sale de Barranquilla: Sí" si aplica -- ver "Cláusula de seguro"). El envío
-  queda en `auditoria_bot` con intent `confirmacion_cpa`. Si WhatsApp
+  queda en `auditoria_bot` con intent `confirmacion_lacs`. Si WhatsApp
   falla, la reserva queda confirmada igual y la respuesta trae
   `notificado: false`, para que el dashboard avise que hay que contactarlo
   por otro medio.
@@ -920,7 +920,7 @@ sus líneas:
   deja la línea `denegada`, que no está en `ESTADOS_QUE_OCUPAN`: el activo
   queda libre en ese horario, pero la fila se conserva para saber qué se
   negó. Cada decisión le manda al estudiante un WhatsApp
-  (`mensaje_decision_cpa`, intent `confirmacion_cpa` o `denegacion_cpa`)
+  (`mensaje_decision_lacs`, intent `confirmacion_lacs` o `denegacion_lacs`)
   que dice qué se decidió y cómo quedó el resto, para que se entienda solo
   aunque lleguen varios seguidos. Cuando ya no queda nada pendiente, en vez
   de eso va la factura completa de *RESERVA CONFIRMADA*, que aclara lo que
@@ -929,7 +929,7 @@ sus líneas:
 - **Editar no confirma en silencio.** El formulario de edición del modal
   deja el estado sin cambiar cuando la reserva tiene estados mixtos (antes
   lo aplanaba a uno solo al guardar cualquier otro cambio), y un activo que
-  la CPA agrega desde el dashboard nace `confirmada` aunque la reserva siga
+  la LACS agrega desde el dashboard nace `confirmada` aunque la reserva siga
   pendiente: lo agregó ella misma. Poner "confirmada" a mano en el
   formulario sí confirma, pero sin avisarle al estudiante; el formulario lo
   advierte.
@@ -1162,7 +1162,7 @@ tener presentes antes de tocarlo:
   que consume el panel "Sesiones".
 - **Los días se calculan en `America/Bogota`, nunca en la zona del
   navegador.** Las reservas se guardan en UTC pero el negocio opera en hora
-  local de la CPA (`recursos_service.ZONA_HORARIA_CPA`); si el calendario
+  local de la LACS (`recursos_service.ZONA_HORARIA_LACS`); si el calendario
   agrupara por día con la zona del equipo, el mismo dashboard mostraría
   cosas distintas según quién lo abre. Todo pasa por `Intl.DateTimeFormat`
   con `timeZone` fijo en `calendario-utils.ts`, incluidos los
@@ -1193,7 +1193,7 @@ tener presentes antes de tocarlo:
 ### Crear reservas desde el dashboard
 
 `POST /dashboard/api/reservas` (`api_crear_reserva`, `app/routes/dashboard.py`)
-le permite a la CPA crear una reserva completa sin pasar por WhatsApp --
+le permite a la LACS crear una reserva completa sin pasar por WhatsApp --
 mismos campos que el wizard del bot (cliente, activos, uso/NRC,
 modalidad/integrantes, si sale de Barranquilla, horario), reusando las
 validaciones de forma que ya tenía `api_actualizar_reserva_grupo`
@@ -1207,12 +1207,12 @@ validaciones de forma que ya tenía `api_actualizar_reserva_grupo`
   y no crean nada. En cambio, fecha bloqueada, plazo del seguro incumplido e
   inicio ya pasado solo van en `advertencias` de la respuesta (200/201) --
   mismo criterio que "el dashboard solo advierte" del calendario y de
-  Excepciones: quien crea la reserva acá ya es la CPA.
+  Excepciones: quien crea la reserva acá ya es la LACS.
 - **Nace `confirmada` y con `canal_origen='dashboard'`.** `crear_reservas_grupo`
   gana los parámetros `canal_origen` (por defecto `"whatsapp"`, sin tocar al
-  bot) y `aprobada_por_cpa` (por defecto `False`): con `aprobada_por_cpa=True`
+  bot) y `aprobada_por_lacs` (por defecto `False`): con `aprobada_por_lacs=True`
   todas las líneas nacen `confirmada` sin importar `requiere_confirmacion` --
-  no tiene sentido que la CPA se autoconfirme algo que acaba de crear ella
+  no tiene sentido que la LACS se autoconfirme algo que acaba de crear ella
   misma. `canal_origen` no tiene CHECK en Postgres, así que `'dashboard'` es
   un valor válido sin migración.
 - **Cliente existente o nuevo.** `usuario_id` reusa un `Usuario`; `cliente_nuevo`
@@ -1292,7 +1292,7 @@ y una vista lista.
   fecha o un rango `desde..hasta`) y `DELETE /excepciones/fechas/<fecha>`
   (quita la excepción; el día vuelve a seguir las reglas).
 - **El bot solo valida el día de inicio y el de fin** (entrega y
-  devolución, cuando la CPA tiene que estar abierta) de cada reserva -- los
+  devolución, cuando la LACS tiene que estar abierta) de cada reserva -- los
   días intermedios de un préstamo de varios días sí pueden caer en domingo
   o festivo (un préstamo viernes → lunes es válido). Ver la sección "Lista
   negra de fechas en el wizard" más arriba para los puntos de enganche.
@@ -1359,7 +1359,7 @@ absorber.
 ## Analítica en tiempo real
 
 Los endpoints en `app/routes/analytics.py` consultan directamente la
-tabla `reservas`. Para volumen bajo (el caso típico de una CPA
+tabla `reservas`. Para volumen bajo (el caso típico de una LACS
 universitaria) esto es suficiente sin necesidad de un pipeline de datos
 aparte. Si más adelante el volumen crece, considera:
 - Vistas materializadas en Postgres para los agregados más pedidos.

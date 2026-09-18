@@ -31,7 +31,7 @@ import { ReservaDetalle } from "./ReservaDetalle"
 import { VistaMes } from "./VistaMes"
 import { VistaTiempo } from "./VistaTiempo"
 
-const PREFIJO_STORAGE = "dashboard-cpa-calendario-"
+const PREFIJO_STORAGE = "dashboard-lacs-calendario-"
 const REFRESCO_MS = 60000
 
 type FiltroEstado = "vigentes" | "todas" | EstadoReserva
@@ -342,7 +342,7 @@ export function CalendarioPanel() {
             {estado}
           </span>
         ))}
-        <span className="ml-auto">Horarios en hora local de la CPA (America/Bogota).</span>
+        <span className="ml-auto">Horarios en hora local de la LACS (America/Bogota).</span>
       </div>
 
       <ReservaDetalle

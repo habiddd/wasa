@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/table"
 import { useActivosContext } from "@/features/activos/activos-context"
 import {
-  ZONA_CPA,
+  ZONA_LACS,
   agruparEnEventos,
   diaDe,
   etiquetaEvento,
@@ -41,10 +41,10 @@ import { cn } from "@/lib/utils"
 
 import { NuevaReservaDialog } from "./NuevaReservaDialog"
 
-const FILTRO_STORAGE_KEY = "dashboard-cpa-reservas-estado"
+const FILTRO_STORAGE_KEY = "dashboard-lacs-reservas-estado"
 
 // "por_confirmar" no es un estado de línea: junta las reservas que tienen
-// algún activo pendiente de la CPA (parciales o pendientes del todo).
+// algún activo pendiente de la LACS (parciales o pendientes del todo).
 type FiltroEstado = "todas" | "por_confirmar" | EstadoReserva
 
 const FILTROS: { valor: FiltroEstado; etiqueta: string }[] = [
@@ -67,7 +67,7 @@ function filtroInicial(): FiltroEstado {
   return "todas"
 }
 
-const SEGURO_STORAGE_KEY = "dashboard-cpa-reservas-seguro"
+const SEGURO_STORAGE_KEY = "dashboard-lacs-reservas-seguro"
 
 function seguroInicial(): boolean {
   try {
@@ -92,7 +92,7 @@ function porInicioAsc(a: EventoCalendario, b: EventoCalendario) {
 // ("22 sept 2026", "9am") en vez de las largas del modal.
 
 const FECHA = new Intl.DateTimeFormat("es-CO", {
-  timeZone: ZONA_CPA,
+  timeZone: ZONA_LACS,
   day: "numeric",
   month: "short",
   year: "numeric",
@@ -372,7 +372,7 @@ export function ReservasPanel() {
           <SelectContent>
             {FILTROS.map(({ valor, etiqueta }) => {
               const cantidad = eventosVisibles.get(valor)?.length ?? 0
-              // Las que esperan a la CPA resaltan para que no se queden sin atender.
+              // Las que esperan a la LACS resaltan para que no se queden sin atender.
               const resaltar = valor === "por_confirmar" && cantidad > 0
               return (
                 <SelectItem key={valor} value={valor}>
@@ -451,7 +451,7 @@ export function ReservasPanel() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Horarios en hora local de la CPA (America/Bogota). Haz clic en una reserva para ver el
+        Horarios en hora local de la LACS (America/Bogota). Haz clic en una reserva para ver el
         detalle o editarla, o usa «Nueva reserva» para crear una desde acá.
       </p>
 

@@ -1,7 +1,7 @@
 {
-  "name": "cpa-baileys-bot",
+  "name": "lacs-baileys-bot",
   "version": "1.0.0",
-  "description": "Servicio de WhatsApp con Baileys para el bot de reservas de la CPA",
+  "description": "Servicio de WhatsApp con Baileys para el bot de reservas de la LACS",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

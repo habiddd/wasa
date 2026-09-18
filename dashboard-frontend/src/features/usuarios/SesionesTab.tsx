@@ -22,12 +22,12 @@ import {
 import { EstadoReservaBadge } from "@/features/calendario/EstadoBadge"
 import { usePolling } from "@/hooks/use-polling"
 import { fetchSesiones, type Sesion } from "@/lib/api"
-import { formatearFechaHoraCPA } from "@/lib/fechas"
+import { formatearFechaHoraLACS } from "@/lib/fechas"
 
 type Orden = "reciente" | "usuario"
 
 function fecha(valor: string | null) {
-  return formatearFechaHoraCPA(valor)
+  return formatearFechaHoraLACS(valor)
 }
 
 function usoDe(s: Sesion) {

@@ -23,7 +23,7 @@ from flask import current_app
 
 from app.textutils import normalizar
 
-SYSTEM_PROMPT = """Eres el asistente de reservas de la CPA (Centro de Producción
+SYSTEM_PROMPT = """Eres el asistente de reservas de la LACS (Centro de Producción
 Audiovisual) de Uninorte. SOLO puedes ayudar con: reservar equipos/espacios,
 consultar disponibilidad, cancelar una reserva, o dar ayuda sobre cómo usar
 este chat. Si el mensaje pide cualquier otra cosa, responde amablemente que
@@ -32,7 +32,7 @@ disponibilidad: si no tienes el dato, dilo explícitamente. Sé breve y claro,
 como si hablaras por WhatsApp. No uses markdown ni listas con viñetas."""
 
 
-PROMPT_CHARLA = """Eres el asistente de reservas de la CPA (Centro de
+PROMPT_CHARLA = """Eres el asistente de reservas de la LACS (Centro de
 Producción Audiovisual) de Uninorte, hablando por WhatsApp. El usuario te
 escribió algo conversacional: un saludo, una cortesía, una despedida o una
 pregunta sobre ti. Respóndele de forma natural y cálida, en 2 o 3 líneas
@@ -49,7 +49,7 @@ INTENTS_VALIDOS = ("reservar", "consultar_disponibilidad", "cancelar", "ayuda", 
 
 PROMPT_CLASIFICACION = """Eres un clasificador de intents, no un asistente
 conversacional. Dado un mensaje de WhatsApp dirigido al bot de reservas de
-la CPA (Centro de Producción Audiovisual) de Uninorte, clasifícalo en
+la LACS (Centro de Producción Audiovisual) de Uninorte, clasifícalo en
 EXACTAMENTE una de estas categorías y responde SOLO con la palabra de la
 categoría (sin comillas, sin explicación, sin markdown, sin texto extra):
 
@@ -66,7 +66,7 @@ categoría (sin comillas, sin explicación, sin markdown, sin texto extra):
 - saludo: conversación social, sin ningún pedido concreto detrás: saludos,
   despedidas, agradecimientos, cortesías, o preguntas sobre el bot mismo
   (ej. "hola", "buenos días", "cómo estás", "gracias", "quién eres").
-- otro: cualquier otra cosa (temas que no tienen nada que ver con la CPA,
+- otro: cualquier otra cosa (temas que no tienen nada que ver con la LACS,
   texto sin sentido).
 
 Responde solo la palabra de la categoría."""
@@ -79,7 +79,7 @@ Responde solo la palabra de la categoría."""
 #                      clasifica SIN llamar al LLM (`_clasificar_sin_llm`).
 #   2. PALABRAS_*      vocabulario más amplio y menos preciso, para el
 #                      heurístico de respaldo cuando el LLM no responde.
-#   3. SENALES_DOMINIO "esto habla del mundo de la CPA". No clasifica nada
+#   3. SENALES_DOMINIO "esto habla del mundo de la LACS". No clasifica nada
 #                      por sí solo: solo decide si una respuesta de acción
 #                      del LLM se toma en serio (`_validar_intent_de_accion`).
 #
@@ -124,7 +124,7 @@ PALABRAS_RESERVAR = MARCADORES_RESERVAR + ("necesito", "quiero", "quisiera", "me
 PALABRAS_DISPONIBILIDAD = MARCADORES_DISPONIBILIDAD + ("libre", "horario", "ocupad")
 PALABRAS_AYUDA = MARCADORES_AYUDA
 
-# Cosas que solo se dicen si el mensaje tiene algo que ver con la CPA:
+# Cosas que solo se dicen si el mensaje tiene algo que ver con la LACS:
 # verbos de reserva, vocabulario de equipos y espacios, y referencias
 # temporales. Se complementa en runtime con los nombres reales del catálogo
 # que `webhook.py` le pasa a `clasificar_intent` (ver `terminos_catalogo`).
@@ -249,7 +249,7 @@ def _es_charla_social(texto_usuario: str) -> bool:
 
 
 def _tiene_senal_de_dominio(texto_usuario: str, terminos_catalogo: list[str] | None) -> bool:
-    """True si el mensaje menciona algo del mundo de la CPA: un verbo de
+    """True si el mensaje menciona algo del mundo de la LACS: un verbo de
     reserva, un tipo de equipo o espacio, una referencia temporal, o un
     nombre/categoría real del catálogo. Es deliberadamente generoso: su
     trabajo no es clasificar, sino separar "esto va del bot" de "esto no
@@ -347,7 +347,7 @@ def _validar_intent_de_accion(
     "otro", donde el 1.2b decía "reservar"), así que ahora se le cree al
     modelo salvo que el mensaje no tenga NINGUNA relación con el dominio.
     Ya no se exige la palabra clave exacta de la categoría, solo que el
-    mensaje hable de la CPA: un verbo de reserva, un equipo, un espacio,
+    mensaje hable de la LACS: un verbo de reserva, un equipo, un espacio,
     una fecha, o un nombre del catálogo. Si no hay nada de eso, el mensaje
     no puede haber sido una petición de reserva por más que el LLM lo diga,
     y se enruta a "saludo" (si era conversación) o a "otro" (y de ahí al
@@ -541,13 +541,13 @@ def generar_respuesta(texto_usuario: str) -> str:
 
 
 RESPUESTAS_SALUDO = (
-    "¡Hola! 👋 Soy el asistente de reservas de la CPA. Puedo apartarte un "
+    "¡Hola! 👋 Soy el asistente de reservas de la LACS. Puedo apartarte un "
     "equipo o un espacio, decirte si algo está libre, o cancelar una "
     "reserva tuya. ¿Qué necesitas?",
-    "¡Hola! Aquí estoy 🙂 Te ayudo a reservar equipos o espacios de la CPA, "
+    "¡Hola! Aquí estoy 🙂 Te ayudo a reservar equipos o espacios de la LACS, "
     "a consultar si algo está disponible, o a cancelar una reserva. "
     "Cuéntame qué necesitas.",
-    "¡Hey! 👋 Soy el bot de reservas de la CPA. Dime qué equipo o espacio te "
+    "¡Hey! 👋 Soy el bot de reservas de la LACS. Dime qué equipo o espacio te "
     "interesa y lo miramos; también puedo contarte qué hay libre, o "
     "cancelar una reserva tuya.",
 )
@@ -575,7 +575,7 @@ def responder_charla(texto_usuario: str) -> str:
 _DIAS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
 PROMPT_EXTRACCION = """Eres un extractor de datos, no un asistente conversacional.
-Dado un mensaje de un usuario que quiere reservar un activo de la CPA
+Dado un mensaje de un usuario que quiere reservar un activo de la LACS
 (Centro de Producción Audiovisual), devuelve SOLO un objeto JSON (sin
 markdown, sin explicación, sin texto antes o después) con estas claves:
 

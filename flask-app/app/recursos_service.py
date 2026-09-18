@@ -58,22 +58,22 @@ PALABRAS_VACIAS_DESCRIPCION = frozenset({
     "equipo", "equipos", "activo", "activos", "cosa", "cosas",
     "gran", "buen", "buena", "bueno",
 })
-ZONA_HORARIA_CPA = ZoneInfo("America/Bogota")
+ZONA_HORARIA_LACS = ZoneInfo("America/Bogota")
 # Único estado de `recursos.estado` que se puede reservar -- 'en_mantenimiento'
 # y 'no_disponible' quedan fuera del catálogo que ve el bot, igual que antes
 # se hacía con `activo=False` (ver models.py y postgres/init/02-schema.sql).
 ESTADO_DISPONIBLE = "disponible"
 MARGEN_INICIO_PASADO = timedelta(minutes=5)
 # Estado de `reservas.estado` de un activo con `requiere_confirmacion` que
-# la CPA todavía no aprueba (lo hace desde el dashboard, ver
+# la LACS todavía no aprueba (lo hace desde el dashboard, ver
 # routes/dashboard.api_confirmar_reserva_grupo). Una reserva con activos
 # confirmados y pendientes a la vez es una "reserva parcial".
 ESTADO_PENDIENTE = "pendiente"
 # Estados que apartan el activo en su horario. El pendiente también, si no
-# otro estudiante podría reservarlo mientras la CPA decide. Debe coincidir
+# otro estudiante podría reservarlo mientras la LACS decide. Debe coincidir
 # con el WHERE del EXCLUDE reservas_no_solapamiento (postgres/init/02-schema.sql).
 ESTADOS_QUE_OCUPAN = ("confirmada", ESTADO_PENDIENTE)
-# La CPA le negó ese activo al estudiante (ver
+# La LACS le negó ese activo al estudiante (ver
 # routes/dashboard.api_decidir_reserva). No ocupa el activo: queda libre
 # para otra reserva en ese horario.
 ESTADO_DENEGADA = "denegada"
@@ -328,7 +328,7 @@ def _contenidos_de_espacio(nombre_espacio: str) -> list[dict]:
     igual.
 
     Solo equipos (`tipo='equipo'`): un lugar dentro de otro lugar no se
-    ofrece, y es a propósito -- no es un caso de uso de la CPA (decisión
+    ofrece, y es a propósito -- no es un caso de uso de la LACS (decisión
     del 10/09/2026, ver docs/SESION_2026-09-10.md)."""
     ids_espacio = [u.id for u in _grupo(nombre_espacio)]
     if not ids_espacio:
@@ -414,7 +414,7 @@ def listar_terminos_catalogo() -> list[str]:
     # `llm_client._validar_intent_de_accion` también reconoce un pedido que
     # solo usa vocabulario de la descripción ("¿tienen un mac para editar?").
     # Sin esto, aunque el LLM lo clasifique bien, el guard no ve ninguna
-    # palabra "de la CPA" y lo manda al menú de fallback. Solo las de
+    # palabra "de la LACS" y lo manda al menú de fallback. Solo las de
     # LONGITUD_MINIMA_PALABRA_CLAVE+ letras: `llm_client` descarta las más
     # cortas de todos modos. Van normalizadas, que es como las compara.
     for descripcion in _descripciones_por_nombre().values():
@@ -499,13 +499,13 @@ def _estado_recurso(recurso: Recurso, ahora: datetime) -> str:
     # cruda de la base (ej. 19:00 UTC en vez de 2:00 p.m. Colombia).
     en_curso = _reserva_en_curso(recurso.id, ahora)
     if en_curso:
-        fin_local = en_curso.fin.astimezone(ZONA_HORARIA_CPA)
+        fin_local = en_curso.fin.astimezone(ZONA_HORARIA_LACS)
         return f"en uso ahora mismo, libre a las {_formatear_hora(fin_local)}"
 
     proxima = _proxima_reserva(recurso.id, ahora)
     if proxima:
-        inicio_local = proxima.inicio.astimezone(ZONA_HORARIA_CPA)
-        fin_local = proxima.fin.astimezone(ZONA_HORARIA_CPA)
+        inicio_local = proxima.inicio.astimezone(ZONA_HORARIA_LACS)
+        fin_local = proxima.fin.astimezone(ZONA_HORARIA_LACS)
         inicio = f"{inicio_local.strftime('%d/%m')} {_formatear_hora(inicio_local)}"
         fin = _formatear_hora(fin_local)
         return f"libre ahora, pero reservado del {inicio} a las {fin}"
@@ -530,7 +530,7 @@ def _estado_grupo(nombre: str, ahora: datetime) -> str:
     # Igual que en `_estado_recurso`: `.fin` viene de la base en UTC, se
     # convierte a hora de Bogotá antes de mostrarla.
     fin_mas_cercano = min(_reserva_en_curso(u.id, ahora).fin for u in unidades)
-    fin_local = fin_mas_cercano.astimezone(ZONA_HORARIA_CPA)
+    fin_local = fin_mas_cercano.astimezone(ZONA_HORARIA_LACS)
     return (
         f"las {len(unidades)} unidades están en uso ahora mismo, "
         f"la primera se libera a las {_formatear_hora(fin_local)}"
@@ -547,7 +547,7 @@ def _mensaje_catalogo(catalogo_url: str) -> str:
     que el mensaje cierra con dos salidas claras: decir un nombre, o
     responder "sí" para arrancar una reserva."""
     return (
-        "Te comparto el *catálogo completo* de equipos y espacios de la CPA, "
+        "Te comparto el *catálogo completo* de equipos y espacios de la LACS, "
         "ahí puedes ver todo lo que tenemos:\n"
         f"{catalogo_url}\n\n"
         "Si ya sabes cuál te interesa, escríbeme su nombre (ej. \"cámara Sony\" "
@@ -602,7 +602,7 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
 
     grupos = _grupos_activos()
     if not grupos:
-        return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA."
+        return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la LACS."
 
     catalogo_url = (current_app.config.get("CATALOGO_URL") or "").strip()
     if catalogo_url:
@@ -780,7 +780,7 @@ def crear_reservas_grupo(
     integrantes: list[str] | None = None,
     sale_de_barranquilla: bool | None = None,
     canal_origen: str = "whatsapp",
-    aprobada_por_cpa: bool = False,
+    aprobada_por_lacs: bool = False,
 ) -> tuple[list[Reserva] | None, str | None]:
     """Inserta una reserva por cada recurso en `recursos`, todas ligadas al
     mismo ReservaGrupo y en una sola transacción -- si alguna choca al
@@ -790,8 +790,8 @@ def crear_reservas_grupo(
 
     Cada activo con `requiere_confirmacion` nace 'pendiente' y el resto
     'confirmada': si el carrito mezcla ambos, la reserva queda parcial hasta
-    que la CPA la confirme desde el dashboard. `aprobada_por_cpa=True` (solo
-    para reservas creadas por la CPA desde el dashboard, no el bot) se salta
+    que la LACS la confirme desde el dashboard. `aprobada_por_lacs=True` (solo
+    para reservas creadas por la LACS desde el dashboard, no el bot) se salta
     ese paso: todo nace 'confirmada', porque quien la está creando ya es
     quien aprobaría el pendiente.
     El chequeo de disponibilidad antes de llamar a esta función (ver
@@ -838,7 +838,7 @@ def crear_reservas_grupo(
             inicio=inicio,
             fin=fin,
             estado=(
-                "confirmada" if aprobada_por_cpa
+                "confirmada" if aprobada_por_lacs
                 else (ESTADO_PENDIENTE if recurso.requiere_confirmacion else "confirmada")
             ),
             canal_origen=canal_origen,
@@ -914,7 +914,7 @@ def _resolver_recurso_para_reserva(
 
 def _estado_de_reserva_creada(unidades: list[Recurso]) -> tuple[str, str]:
     """(título, aviso) de la factura final según cuántos activos esperan la
-    confirmación de la CPA (`requiere_confirmacion`, ver
+    confirmación de la LACS (`requiere_confirmacion`, ver
     `crear_reservas_grupo`): ninguno -> confirmada; algunos -> parcial;
     todos -> pendiente. El aviso va en líneas aparte y nombra los activos
     (una vez por modelo, aunque se reserven varias unidades del mismo): con
@@ -923,21 +923,21 @@ def _estado_de_reserva_creada(unidades: list[Recurso]) -> tuple[str, str]:
     if not pendientes:
         return "RESERVA CONFIRMADA", ""
 
-    cierre = "Te escribiré por aquí apenas la CPA la confirme."
+    cierre = "Te escribiré por aquí apenas la LACS la confirme."
     confirmados = list(dict.fromkeys(u.nombre for u in unidades if not u.requiere_confirmacion))
     if confirmados:
         return "RESERVA PARCIAL", (
             f"✅ Confirmado: {', '.join(confirmados)}\n"
             f"⏳ Pendiente de confirmación: {', '.join(pendientes)}\n"
-            f"El equipo de la CPA debe aprobar el préstamo de lo pendiente. {cierre}"
+            f"El equipo de la LACS debe aprobar el préstamo de lo pendiente. {cierre}"
         )
     return "RESERVA PENDIENTE DE CONFIRMACIÓN", (
-        f"⏳ El equipo de la CPA debe aprobar el préstamo de: {', '.join(pendientes)}. {cierre}"
+        f"⏳ El equipo de la LACS debe aprobar el préstamo de: {', '.join(pendientes)}. {cierre}"
     )
 
 
 def mensaje_reserva_confirmada(reservas: list[Reserva]) -> str:
-    """WhatsApp para el estudiante cuando la CPA confirma desde el dashboard
+    """WhatsApp para el estudiante cuando la LACS confirma desde el dashboard
     lo que tenía pendiente (ver routes/dashboard.api_confirmar_reserva_grupo).
     Mismo formato de factura que `_crear_reserva_desde_wizard`, con el número
     de reserva para que la relacione con la que le quedó parcial o pendiente.
@@ -951,8 +951,8 @@ def mensaje_reserva_confirmada(reservas: list[Reserva]) -> str:
         for nombre, cantidad in cantidades.items()
     )
     primera = vigentes[0]
-    inicio_local = primera.inicio.astimezone(ZONA_HORARIA_CPA)
-    fin_local = primera.fin.astimezone(ZONA_HORARIA_CPA)
+    inicio_local = primera.inicio.astimezone(ZONA_HORARIA_LACS)
+    fin_local = primera.fin.astimezone(ZONA_HORARIA_LACS)
     linea_area = (
         f"Sale de Barranquilla: Sí (requiere seguro, mínimo {DIAS_MINIMOS_TRAMITE_SEGURO} días hábiles)\n"
         if primera.grupo and primera.grupo.sale_de_barranquilla else ""
@@ -974,9 +974,9 @@ def mensaje_reserva_confirmada(reservas: list[Reserva]) -> str:
 def _cierre_confirmacion(reservas: list[Reserva]) -> str:
     denegadas = [r for r in reservas if r.estado == ESTADO_DENEGADA]
     if not denegadas:
-        return "✅ El equipo de la CPA confirmó tu reserva completa."
+        return "✅ El equipo de la LACS confirmó tu reserva completa."
     return (
-        "✅ El equipo de la CPA confirmó tu reserva. No incluye "
+        "✅ El equipo de la LACS confirmó tu reserva. No incluye "
         f"{_nombres_con_cantidad(denegadas)}, que no se aprobó."
     )
 
@@ -992,8 +992,8 @@ def _nombres_con_cantidad(reservas: list[Reserva]) -> str:
     )
 
 
-def mensaje_decision_cpa(decidida: Reserva, reservas: list[Reserva]) -> str:
-    """WhatsApp para el estudiante cuando la CPA confirma o deniega UN activo
+def mensaje_decision_lacs(decidida: Reserva, reservas: list[Reserva]) -> str:
+    """WhatsApp para el estudiante cuando la LACS confirma o deniega UN activo
     pendiente desde el dashboard (ver routes/dashboard.api_decidir_reserva).
     `decidida` es esa línea, ya con su estado nuevo; `reservas`, todas las del
     mismo número de reserva. Dice qué se decidió y cómo quedó el resto, para
@@ -1007,13 +1007,13 @@ def mensaje_decision_cpa(decidida: Reserva, reservas: list[Reserva]) -> str:
     if decidida.estado == "confirmada" and not pendientes:
         return mensaje_reserva_confirmada(reservas)
 
-    inicio_local = decidida.inicio.astimezone(ZONA_HORARIA_CPA)
+    inicio_local = decidida.inicio.astimezone(ZONA_HORARIA_LACS)
     referencia = f"de tu reserva N.º {decidida.grupo_id} ({_formatear_fecha_hora(inicio_local)})"
     if decidida.estado == "confirmada":
-        lineas = [f"✅ La CPA confirmó el préstamo de *{decidida.recurso.nombre}* {referencia}."]
+        lineas = [f"✅ La LACS confirmó el préstamo de *{decidida.recurso.nombre}* {referencia}."]
     else:
         lineas = [
-            f"❌ La CPA no aprobó el préstamo de *{decidida.recurso.nombre}* {referencia}, "
+            f"❌ La LACS no aprobó el préstamo de *{decidida.recurso.nombre}* {referencia}, "
             "así que no hace parte de la reserva."
         ]
 
@@ -1029,7 +1029,7 @@ def mensaje_decision_cpa(decidida: Reserva, reservas: list[Reserva]) -> str:
     if pendientes:
         lineas.append(
             f"⏳ Aún falta la confirmación de: {_nombres_con_cantidad(pendientes)}. "
-            "Te escribiré cuando la CPA decida."
+            "Te escribiré cuando la LACS decida."
         )
     return "\n".join(lineas)
 
@@ -1066,8 +1066,8 @@ def _parsear_fecha_hora(
         return None, None, None
 
     try:
-        inicio_local = datetime.strptime(inicio_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA_CPA)
-        fin_local = datetime.strptime(fin_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA_CPA)
+        inicio_local = datetime.strptime(inicio_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA_LACS)
+        fin_local = datetime.strptime(fin_str, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA_LACS)
     except ValueError:
         return None, None, (
             "No logré entender la fecha/hora que diste. ¿Puedes escribirla de forma más clara? "
@@ -1585,7 +1585,7 @@ _MENSAJE_ID_INVALIDO = (
 _MENSAJE_ID_REPETIDO = "Ese ID ya está en el grupo. Dame el de otro integrante."
 
 # --- Cláusula de seguro: salida de Barranquilla ------------------------------
-# Si los activos salen de Barranquilla, la CPA tramita un seguro y la reserva
+# Si los activos salen de Barranquilla, la LACS tramita un seguro y la reserva
 # no puede empezar antes del DIAS_MINIMOS_TRAMITE_SEGURO-ésimo día HÁBIL
 # (lunes a viernes, sin festivos de Colombia) después de hoy. Hoy no cuenta.
 DIAS_MINIMOS_TRAMITE_SEGURO = 5
@@ -1612,14 +1612,14 @@ def sumar_dias_habiles(desde: date, n: int) -> date:
     return d
 
 
-def _hoy_cpa() -> date:
-    return datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA).date()
+def _hoy_LACS() -> date:
+    return datetime.now(timezone.utc).astimezone(ZONA_HORARIA_LACS).date()
 
 
 def fecha_minima_sale_de_barranquilla(hoy: date | None = None) -> date:
     """Primer día en que puede empezar una reserva cuyos activos salen de
-    Barranquilla. `hoy` es parámetro para poder probarla; None = hoy en la CPA."""
-    return sumar_dias_habiles(hoy or _hoy_cpa(), DIAS_MINIMOS_TRAMITE_SEGURO)
+    Barranquilla. `hoy` es parámetro para poder probarla; None = hoy en la LACS."""
+    return sumar_dias_habiles(hoy or _hoy_LACS(), DIAS_MINIMOS_TRAMITE_SEGURO)
 
 
 _TEXTO_PLAZO = f"mínimo {DIAS_MINIMOS_TRAMITE_SEGURO} días hábiles (lunes a viernes, sin contar festivos)"
@@ -1697,7 +1697,7 @@ def _error_plazo_seguro(wizard: dict, fecha_inicio: date) -> str | None:
 def _error_fecha_bloqueada(wizard: dict, fecha_inicio: date, fecha_fin: date | None = None) -> str | None:
     """None si ni el día de inicio ni el de fin están en la lista negra (pestaña
     "Excepciones", ver fechas_bloqueadas_service). Solo se validan esos dos días
-    -- entrega y devolución, cuando la CPA tiene que estar abierta --; los días
+    -- entrega y devolución, cuando la LACS tiene que estar abierta --; los días
     intermedios de un préstamo de varios días sí pueden caer en domingo o
     festivo. Si incumple, devuelve el mensaje de rechazo con la siguiente fecha
     disponible (respetando el plazo del seguro si sale de Barranquilla)."""
@@ -1722,11 +1722,11 @@ def _error_fecha_bloqueada(wizard: dict, fecha_inicio: date, fecha_fin: date | N
 def advertencias_fechas(inicio_utc: datetime, fin_utc: datetime, sale_de_barranquilla: bool | None) -> list[str]:
     """Igual que las validaciones del wizard del bot (inicio no pasado,
     plazo del seguro, fecha bloqueada), pero como avisos en vez de bloqueos
-    -- para el dashboard, donde la CPA puede saltárselas a propósito (ver
+    -- para el dashboard, donde la LACS puede saltárselas a propósito (ver
     docs/ARQUITECTURA.md, sección "Crear reservas desde el dashboard")."""
     wizard = {"sale_de_barranquilla": sale_de_barranquilla}
-    f_ini = inicio_utc.astimezone(ZONA_HORARIA_CPA).date()
-    f_fin = fin_utc.astimezone(ZONA_HORARIA_CPA).date()
+    f_ini = inicio_utc.astimezone(ZONA_HORARIA_LACS).date()
+    f_fin = fin_utc.astimezone(ZONA_HORARIA_LACS).date()
 
     avisos = []
     if inicio_utc < datetime.now(timezone.utc) - MARGEN_INICIO_PASADO:
@@ -1974,7 +1974,7 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
         if paso == "elegir_activo":
             opciones = _menu_paso_activo()
             if not opciones:
-                return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA.", wizard, True
+                return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la LACS.", wizard, True
             wizard["opciones_actuales"] = opciones
             wizard["paso"] = "elegir_activo"
             mensaje = _formatear_menu_activo(opciones)
@@ -2028,7 +2028,7 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             return _con_avisos(avisos, mensaje), wizard, False
 
         if paso == "fecha":
-            ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
+            ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_LACS)
             wizard["opciones_actuales"] = None
             wizard["paso"] = "fecha"
             lineas_activos = _lineas_carrito(wizard["carrito"])
@@ -2076,7 +2076,7 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
 
         if paso == "hora_fin":
             fecha_fin = date.fromisoformat(wizard["fecha_fin"])
-            inicio_local = datetime.fromisoformat(wizard["inicio"]).astimezone(ZONA_HORARIA_CPA)
+            inicio_local = datetime.fromisoformat(wizard["inicio"]).astimezone(ZONA_HORARIA_LACS)
             wizard["opciones_actuales"] = None
             wizard["paso"] = "hora_fin"
             lineas_activos = _lineas_carrito(wizard["carrito"])
@@ -2178,8 +2178,8 @@ def _lineas_grupo(wizard: dict) -> str:
 def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, str]]) -> str:
     inicio_utc = datetime.fromisoformat(wizard["inicio"])
     fin_utc = datetime.fromisoformat(wizard["fin"])
-    inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
-    fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
+    inicio_local = inicio_utc.astimezone(ZONA_HORARIA_LACS)
+    fin_local = fin_utc.astimezone(ZONA_HORARIA_LACS)
     lineas_activos = _lineas_carrito(wizard["carrito"])
     resumen = (
         "*RESUMEN DE RESERVA*\n"
@@ -2265,8 +2265,8 @@ def _pausar_por_no_disponibles(wizard: dict, sesion: dict, no_disponibles: list[
 
 
 def _mensaje_alternativas(nombre_quitado: str, wizard: dict, opciones: list[tuple[str, str]]) -> str:
-    inicio_local = datetime.fromisoformat(wizard["inicio"]).astimezone(ZONA_HORARIA_CPA)
-    fin_local = datetime.fromisoformat(wizard["fin"]).astimezone(ZONA_HORARIA_CPA)
+    inicio_local = datetime.fromisoformat(wizard["inicio"]).astimezone(ZONA_HORARIA_LACS)
+    fin_local = datetime.fromisoformat(wizard["fin"]).astimezone(ZONA_HORARIA_LACS)
     mensaje = (
         "*ALTERNATIVAS DISPONIBLES*\n"
         f"{_DIVISOR_FACTURA}\n"
@@ -2341,12 +2341,12 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     # normal (cambiar la fecha o el "sale de Barranquilla" desde el
     # resumen); esto es la red de seguridad final antes de escribir en la
     # base.
-    if _error_plazo_seguro(wizard, inicio_utc.astimezone(ZONA_HORARIA_CPA).date()):
+    if _error_plazo_seguro(wizard, inicio_utc.astimezone(ZONA_HORARIA_LACS).date()):
         wizard["confirmado"] = False
         mensaje, wizard, _ = _avanzar_wizard(wizard, usuario)  # la validación de arriba borra la fecha y avisa
         return mensaje, {**sesion, "reserva_wizard": wizard}
 
-    # Lista negra: la CPA pudo bloquear el día entre el resumen y "Confirmar".
+    # Lista negra: la LACS pudo bloquear el día entre el resumen y "Confirmar".
     if wizard.get("fecha") and _error_fecha_bloqueada(
         wizard, date.fromisoformat(wizard["fecha"]),
         date.fromisoformat(wizard.get("fecha_fin") or wizard["fecha"]),
@@ -2383,11 +2383,11 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
             "Uno de los activos se acaba de reservar justo mientras confirmabas. Intenta reservar de nuevo."
         ), sesion_limpia
 
-    inicio_local = inicio_utc.astimezone(ZONA_HORARIA_CPA)
-    fin_local = fin_utc.astimezone(ZONA_HORARIA_CPA)
+    inicio_local = inicio_utc.astimezone(ZONA_HORARIA_LACS)
+    fin_local = fin_utc.astimezone(ZONA_HORARIA_LACS)
     titulo, aviso_confirmacion = _estado_de_reserva_creada(unidades)
     # El número va en la factura para que el estudiante relacione con esta
-    # reserva el aviso que le llega cuando la CPA confirma lo pendiente.
+    # reserva el aviso que le llega cuando la LACS confirma lo pendiente.
     mensaje = (
         f"*{titulo}*\n"
         f"{_DIVISOR_FACTURA}\n"
@@ -2405,7 +2405,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     if aviso_confirmacion:
         mensaje += "\n" + aviso_confirmacion
     if wizard.get("sale_de_barranquilla"):
-        mensaje += ("\n🛡️ Como los activos salen de Barranquilla, la CPA debe tramitar su seguro antes de la entrega: "
+        mensaje += ("\n🛡️ Como los activos salen de Barranquilla, la LACS debe tramitar su seguro antes de la entrega: "
                     f"plazo de {_TEXTO_PLAZO} (fecha mínima de inicio: {_fecha_legible(fecha_minima_sale_de_barranquilla())}).")
     return mensaje, sesion_limpia
 
@@ -2437,7 +2437,7 @@ def _aplicar_hora_inicio_valida(wizard: dict, usuario: Usuario, sesion: dict, ho
     "hora_inicio" para que el usuario reintente."""
     h, m = hora
     inicio_local = datetime.strptime(f"{wizard['fecha']} {h:02d}:{m:02d}", "%Y-%m-%d %H:%M").replace(
-        tzinfo=ZONA_HORARIA_CPA
+        tzinfo=ZONA_HORARIA_LACS
     )
     inicio_utc = inicio_local.astimezone(timezone.utc)
 
@@ -2462,7 +2462,7 @@ def _aplicar_hora_fin_valida(wizard: dict, usuario: Usuario, sesion: dict, hora:
     un paso de confirmación muerto."""
     h, m = hora
     fin_local = datetime.strptime(f"{wizard['fecha_fin']} {h:02d}:{m:02d}", "%Y-%m-%d %H:%M").replace(
-        tzinfo=ZONA_HORARIA_CPA
+        tzinfo=ZONA_HORARIA_LACS
     )
     fin_utc = fin_local.astimezone(timezone.utc)
     inicio_utc = datetime.fromisoformat(wizard["inicio"])
@@ -2522,7 +2522,7 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
     nombres = listar_nombres_disponibles()
 
     if not nombres:
-        return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la CPA.", sesion
+        return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la LACS.", sesion
 
     recurso, candidatos, _ = _resolver_recurso_para_reserva(texto_usuario, {})
 
@@ -2734,7 +2734,7 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
         return mensaje, {**sesion, "reserva_wizard": wizard}
 
     if paso == "fecha":
-        ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
+        ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_LACS)
         texto = texto_usuario.strip()
 
         # Reserva de varios días: "dd/mm/aaaa a dd/mm/aaaa" -- se prueba
@@ -2822,7 +2822,7 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             # vuelve a pedir confirmar -- nunca se acepta sin pasar por
             # este menú.
             texto = texto_usuario.strip()
-            ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
+            ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_LACS)
             nueva_inicio, nueva_fin = None, None
 
             r_inicio, r_fin, r_error = _parsear_rango_fecha_dd_mm_aaaa(texto, ahora_local)
@@ -3314,7 +3314,7 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
 
 
 def _reservas_cancelables_de(usuario_id: int) -> list[list[Reserva]]:
-    """Reservas vigentes (confirmadas o pendientes de la CPA) y no terminadas
+    """Reservas vigentes (confirmadas o pendientes de la LACS) y no terminadas
     (en curso o futuras) del usuario dado, agrupadas por `grupo_id` -- un
     padre y sus accesorios se cancelan juntos, como se reservaron juntos.
     Una reserva de antes de que existiera el carrito (`grupo_id IS NULL`) se
@@ -3362,8 +3362,8 @@ def _mensaje_elegir_reserva_a_cancelar(bundles: list[list[Reserva]]) -> str:
     bloques = []
     for i, bundle in enumerate(bundles, start=1):
         nombres = "\n".join(_linea_reserva_cancelable(r) for r in bundle)
-        inicio_local = bundle[0].inicio.astimezone(ZONA_HORARIA_CPA)
-        fin_local = bundle[0].fin.astimezone(ZONA_HORARIA_CPA)
+        inicio_local = bundle[0].inicio.astimezone(ZONA_HORARIA_LACS)
+        fin_local = bundle[0].fin.astimezone(ZONA_HORARIA_LACS)
         bloques.append(
             f"*{i}.*\n{nombres}\n"
             f"    Inicio: {_formatear_fecha_hora(inicio_local)}\n"
@@ -3391,8 +3391,8 @@ def _mensaje_confirmar_cancelacion(bundles: list[list[Reserva]]) -> str:
     bloques = []
     for bundle in bundles:
         nombres = "\n".join(_linea_reserva_cancelable(r) for r in bundle)
-        inicio_local = bundle[0].inicio.astimezone(ZONA_HORARIA_CPA)
-        fin_local = bundle[0].fin.astimezone(ZONA_HORARIA_CPA)
+        inicio_local = bundle[0].inicio.astimezone(ZONA_HORARIA_LACS)
+        fin_local = bundle[0].fin.astimezone(ZONA_HORARIA_LACS)
         bloques.append(
             f"{nombres}\n"
             f"    Inicio: {_formatear_fecha_hora(inicio_local)}\n"

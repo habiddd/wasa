@@ -18,7 +18,7 @@ def _headers():
 
 def jid_de(usuario) -> str:
     """JID para escribirle a un usuario sin un mensaje suyo al que responder
-    (ej. el aviso de que la CPA confirmó su reserva). Usa el del último
+    (ej. el aviso de que la LACS confirmó su reserva). Usa el del último
     mensaje que mandó (Usuario.jid_wa). Si no hay, porque no ha escrito
     desde que existe esa columna, lo rearma con el número: sirve para las
     cuentas "@s.whatsapp.net" pero no para las "@lid" (ver

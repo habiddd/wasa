@@ -132,8 +132,8 @@ class Reserva(db.Model):
     inicio = db.Column(db.DateTime(timezone=True), nullable=False)
     fin = db.Column(db.DateTime(timezone=True), nullable=False)
     # 'confirmada' | 'pendiente' | 'denegada' | 'cancelada' | 'completada' |
-    # 'no_show'. 'pendiente': el activo requiere confirmación y la CPA aún no
-    # la da (ver recursos_service.ESTADOS_QUE_OCUPAN); 'denegada': la CPA no
+    # 'no_show'. 'pendiente': el activo requiere confirmación y la LACS aún no
+    # la da (ver recursos_service.ESTADOS_QUE_OCUPAN); 'denegada': la LACS no
     # lo aprobó y el activo quedó libre.
     estado = db.Column(db.String(20), nullable=False, default="confirmada")
     canal_origen = db.Column(db.String(20), nullable=False, default="whatsapp")

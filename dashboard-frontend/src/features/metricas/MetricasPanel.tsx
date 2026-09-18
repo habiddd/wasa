@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/table"
 import { usePolling } from "@/hooks/use-polling"
 import { fetchMetricas, type Interaccion } from "@/lib/api"
-import { formatearFechaHoraCPA } from "@/lib/fechas"
+import { formatearFechaHoraLACS } from "@/lib/fechas"
 
 const ESTADO_ENVIO_INFO: Record<
   string,
@@ -35,7 +35,7 @@ function PillEstadoEnvio({ estado }: { estado: string }) {
 
 // "dia" viene del backend como fecha sin hora (func.date() en SQL, ver
 // dashboard.py) -- se formatea en UTC para no correr el día al convertir a
-// la zona de la CPA.
+// la zona de la LACS.
 const ETIQUETA_DIA = new Intl.DateTimeFormat("es-CO", {
   timeZone: "UTC",
   day: "numeric",
@@ -113,7 +113,7 @@ function ListaInteracciones({ interacciones }: { interacciones: Interaccion[] })
             <span className="block text-xs text-muted-foreground">{i.motivo_bloqueo}</span>
           )}
           <span className="block text-xs text-muted-foreground">
-            {formatearFechaHoraCPA(i.creado_en)}
+            {formatearFechaHoraLACS(i.creado_en)}
           </span>
         </li>
       ))}
@@ -148,7 +148,7 @@ function TablaInteracciones({ interacciones }: { interacciones: Interaccion[] })
         <TableBody>
           {interacciones.map((i, idx) => (
             <TableRow key={idx}>
-              <TableCell className="@6xl:py-3">{formatearFechaHoraCPA(i.creado_en)}</TableCell>
+              <TableCell className="@6xl:py-3">{formatearFechaHoraLACS(i.creado_en)}</TableCell>
               <TableCell className="whitespace-normal @6xl:py-3">
                 {i.telefono_wa || "-"}
                 <p className="mt-0.5 text-xs text-muted-foreground @3xl:hidden">

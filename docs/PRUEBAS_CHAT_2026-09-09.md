@@ -182,7 +182,7 @@ pruebas `000000000000`, revisando Redis y `auditoria_bot` entre paso y paso.
 
 | Mensaje | `status` | `intent` auditado | Respuesta |
 |---|---|---|---|
-| `hola` | ok | `saludo` | *"¡Hola! Aquí estoy 🙂 Te ayudo a reservar equipos o espacios de la CPA, a consultar si algo está disponible, o a cancelar una reserva. Cuéntame qué necesitas."* |
+| `hola` | ok | `saludo` | *"¡Hola! Aquí estoy 🙂 Te ayudo a reservar equipos o espacios de la LACS, a consultar si algo está disponible, o a cancelar una reserva. Cuéntame qué necesitas."* |
 | `cual es la capital de mongolia` | `menu_fallback` | `menu_fallback` | El menú de tres opciones |
 | `3` (dentro del menú) | ok | `cancelar` | Lista de reservas activas del usuario |
 | `cerrar` | ok | `cancelar` | *"No cancelé ninguna reserva."* |

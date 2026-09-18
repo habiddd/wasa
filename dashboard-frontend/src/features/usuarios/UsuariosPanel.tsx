@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/table"
 import { usePolling } from "@/hooks/use-polling"
 import { actualizarUsuario, eliminarUsuario, fetchUsuarios, type CambiosUsuario, type Usuario } from "@/lib/api"
-import { formatearFechaHoraCPA } from "@/lib/fechas"
+import { formatearFechaHoraLACS } from "@/lib/fechas"
 
 import { UsuarioEditForm } from "./UsuarioEditForm"
 
@@ -46,7 +46,7 @@ function ListaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar, onElim
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            {u.rol} · {u.activo ? "activo" : "inactivo"} · {formatearFechaHoraCPA(u.creado_en)}
+            {u.rol} · {u.activo ? "activo" : "inactivo"} · {formatearFechaHoraLACS(u.creado_en)}
           </p>
           {codigoYCedula(u) && (
             <p className="text-xs text-muted-foreground">{codigoYCedula(u)}</p>
@@ -113,7 +113,7 @@ function TablaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar, onElim
                 <TableCell className="@6xl:py-3">{u.rol}</TableCell>
                 <TableCell className="@6xl:py-3">{u.activo ? "sí" : "no"}</TableCell>
                 <TableCell className="hidden text-muted-foreground @5xl:table-cell @6xl:py-3">
-                  {formatearFechaHoraCPA(u.creado_en)}
+                  {formatearFechaHoraLACS(u.creado_en)}
                 </TableCell>
                 <TableCell className="@6xl:py-3">
                   <Button size="sm" variant="outline" onClick={() => onToggleEditar(u.id)}>

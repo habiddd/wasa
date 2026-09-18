@@ -1,5 +1,5 @@
 """
-API del dashboard interno de monitoreo para el equipo de la CPA: estado de
+API del dashboard interno de monitoreo para el equipo de la LACS: estado de
 los servicios (Postgres, Redis, Baileys/WhatsApp, LLM local), código QR de
 vinculación y métricas básicas de uso. Protegido con autenticación básica
 (DASHBOARD_USER / DASHBOARD_PASSWORD) porque expone el QR de vinculación
@@ -64,7 +64,7 @@ def _requiere_auth():
         return Response(
             "Autenticación requerida.",
             401,
-            {"WWW-Authenticate": 'Basic realm="Dashboard CPA"'},
+            {"WWW-Authenticate": 'Basic realm="Dashboard LACS"'},
         )
 
 
@@ -141,7 +141,7 @@ def api_fecha_minima_seguro():
     """Fecha mínima de inicio HOY para una reserva que sale de Barranquilla
     (5.º día hábil, festivos de Colombia) -- la usa el formulario de edición
     del dashboard (ver ReservaDetalle.tsx) para advertir sin bloquear."""
-    hoy = datetime.now(timezone.utc).astimezone(recursos_service.ZONA_HORARIA_CPA).date()
+    hoy = datetime.now(timezone.utc).astimezone(recursos_service.ZONA_HORARIA_LACS).date()
     return jsonify({
         "dias_habiles": recursos_service.DIAS_MINIMOS_TRAMITE_SEGURO,
         "hoy": hoy.isoformat(),
@@ -161,8 +161,8 @@ def _fecha_civil(crudo) -> date:
 @bp.route("/api/excepciones")
 def api_excepciones():
     """Días relevantes (reglas, festivos, excepciones) entre ?desde y ?hasta
-    (YYYY-MM-DD, incluidos). Sin parámetros: el año en curso (hora CPA)."""
-    hoy = datetime.now(timezone.utc).astimezone(recursos_service.ZONA_HORARIA_CPA).date()
+    (YYYY-MM-DD, incluidos). Sin parámetros: el año en curso (hora LACS)."""
+    hoy = datetime.now(timezone.utc).astimezone(recursos_service.ZONA_HORARIA_LACS).date()
     try:
         desde = _fecha_civil(request.args.get("desde") or f"{hoy.year}-01-01")
         hasta = _fecha_civil(request.args.get("hasta") or f"{hoy.year}-12-31")
@@ -443,7 +443,7 @@ def _serializar_reserva(r: Reserva) -> dict:
         "fecha_minima_seguro": (
             recursos_service.fecha_minima_sale_de_barranquilla(
                 (r.creado_en if r.creado_en.tzinfo else r.creado_en.replace(tzinfo=timezone.utc))
-                .astimezone(recursos_service.ZONA_HORARIA_CPA).date()
+                .astimezone(recursos_service.ZONA_HORARIA_LACS).date()
             ).isoformat()
             if r.grupo and r.grupo.sale_de_barranquilla and r.creado_en else None
         ),
@@ -533,9 +533,9 @@ def api_crear_reserva():
     recursos_service._avanzar_wizard), pero sin sus bloqueos "blandos":
     fecha bloqueada, plazo del seguro e inicio ya pasado solo se avisan acá
     (`advertencias` en la respuesta), no impiden crear la reserva -- quien
-    la crea ya es la CPA (ver docs/ARQUITECTURA.md, sección "Crear reservas
+    la crea ya es la LACS (ver docs/ARQUITECTURA.md, sección "Crear reservas
     desde el dashboard"). Nace 'confirmada' con `canal_origen='dashboard'`
-    sin importar `requiere_confirmacion`: no tiene sentido que la CPA se
+    sin importar `requiere_confirmacion`: no tiene sentido que la LACS se
     autoconfirme algo que acaba de crear ella misma."""
     datos = request.get_json(silent=True) or {}
 
@@ -632,7 +632,7 @@ def api_crear_reserva():
         integrantes=codigos_validados,
         sale_de_barranquilla=sale_de_barranquilla,
         canal_origen="dashboard",
-        aprobada_por_cpa=True,
+        aprobada_por_lacs=True,
     )
     if error:
         return jsonify(
@@ -866,7 +866,7 @@ def api_actualizar_reserva_grupo(grupo_id):
             grupo.integrantes = []
 
     # Sin validar el plazo de 5 días hábiles del seguro: el dashboard solo
-    # advierte (ver ReservaDetalle.tsx); la CPA tiene la última palabra.
+    # advierte (ver ReservaDetalle.tsx); la LACS tiene la última palabra.
     if tiene_sale_area:
         grupo.sale_de_barranquilla = sale_area_nuevo
 
@@ -883,7 +883,7 @@ def api_actualizar_reserva_grupo(grupo_id):
                 db.session.delete(reserva)
 
         reserva_base = reservas[0]
-        # Un activo que agrega la CPA desde aquí ya lo aprobó ella misma: no
+        # Un activo que agrega la LACS desde aquí ya lo aprobó ella misma: no
         # nace pendiente aunque la línea que se toma de base lo esté.
         estado_nuevo = cambios.get("estado")
         if estado_nuevo is None:
@@ -919,7 +919,7 @@ def api_actualizar_reserva_grupo(grupo_id):
 
 @bp.route("/api/reservas/grupo/<int:grupo_id>/confirmar", methods=["POST"])
 def api_confirmar_reserva_grupo(grupo_id):
-    """La CPA aprueba los activos de una reserva que esperaban su
+    """La LACS aprueba los activos de una reserva que esperaban su
     confirmación (estado 'pendiente') y se le avisa al estudiante por
     WhatsApp.
 
@@ -942,7 +942,7 @@ def api_confirmar_reserva_grupo(grupo_id):
         return jsonify({"error": _error_integridad_reserva(exc)}), 400
 
     texto = recursos_service.mensaje_reserva_confirmada(reservas)
-    enviado = _avisar_estudiante(reservas[0].usuario, texto, "confirmacion_cpa")
+    enviado = _avisar_estudiante(reservas[0].usuario, texto, "confirmacion_lacs")
     return jsonify({
         "reservas": [_serializar_reserva(r) for r in reservas],
         "notificado": enviado,
@@ -952,8 +952,8 @@ def api_confirmar_reserva_grupo(grupo_id):
 @bp.route("/api/reservas/<int:reserva_id>/<any(confirmar, denegar):decision>", methods=["POST"])
 def api_decidir_reserva(reserva_id, decision):
     """Confirma o deniega un solo activo pendiente de una reserva (un botón
-    por activo en el modal) y le avisa al estudiante qué decidió la CPA y
-    cómo quedó el resto (recursos_service.mensaje_decision_cpa).
+    por activo en el modal) y le avisa al estudiante qué decidió la LACS y
+    cómo quedó el resto (recursos_service.mensaje_decision_lacs).
 
     Denegar deja la línea 'denegada': el activo queda libre en ese horario y
     deja de contar como parte de la reserva, pero la fila se conserva para
@@ -972,8 +972,8 @@ def api_decidir_reserva(reserva_id, decision):
 
     reservas = _reservas_del_grupo(reserva.grupo_id)
     decidida = next(r for r in reservas if r.id == reserva.id)
-    texto = recursos_service.mensaje_decision_cpa(decidida, reservas)
-    intent = "confirmacion_cpa" if decision == "confirmar" else "denegacion_cpa"
+    texto = recursos_service.mensaje_decision_lacs(decidida, reservas)
+    intent = "confirmacion_lacs" if decision == "confirmar" else "denegacion_lacs"
     enviado = _avisar_estudiante(decidida.usuario, texto, intent)
     return jsonify({
         "reservas": [_serializar_reserva(r) for r in reservas],

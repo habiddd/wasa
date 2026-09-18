@@ -86,10 +86,10 @@ def motivo_bloqueo(d: date) -> str | None:
         return None
     if info["origen"] == "manual":
         motivo = (info["excepcion"] or {}).get("motivo")
-        return f"la CPA no presta servicio ese día ({motivo})" if motivo else "la CPA no presta servicio ese día"
+        return f"la LACS no presta servicio ese día ({motivo})" if motivo else "la LACS no presta servicio ese día"
     if info["origen"] == "festivo":
         return f"es festivo ({info['festivo']})"
-    return f"la CPA no presta servicio los {_DIAS_PLURAL[d.weekday()]}"
+    return f"la LACS no presta servicio los {_DIAS_PLURAL[d.weekday()]}"
 
 
 def siguiente_fecha_habilitada(desde: date, limite: int = 366) -> date | None:

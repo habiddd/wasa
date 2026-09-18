@@ -1,13 +1,19 @@
-name: cpa-reservas-bot
+name: lacs-reservas-bot
 
 networks:
   backend:
     driver: bridge
 
+# Nombres fijos: los volúmenes se crearon cuando el proyecto se llamaba
+# cpa-reservas-bot. Sin `name`, Docker los prefijaría con el nombre nuevo y
+# arrancaría con la base vacía y sin la sesión de WhatsApp vinculada.
 volumes:
   postgres_data:
+    name: cpa-reservas-bot_postgres_data
   redis_data:
+    name: cpa-reservas-bot_redis_data
   baileys_sessions:
+    name: cpa-reservas-bot_baileys_sessions
 
 services:
 
@@ -17,7 +23,7 @@ services:
   # ---------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: cpa_postgres
+    container_name: lacs_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
@@ -43,7 +49,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: cpa_redis
+    container_name: lacs_redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
@@ -57,7 +63,7 @@ services:
   baileys-bot:
     build:
       context: ./baileys-bot
-    container_name: cpa_baileys_bot
+    container_name: lacs_baileys_bot
     restart: unless-stopped
     depends_on:
       postgres:
@@ -86,7 +92,7 @@ services:
   flask-app:
     build:
       context: ./flask-app
-    container_name: cpa_flask_app
+    container_name: lacs_flask_app
     restart: unless-stopped
     depends_on:
       postgres:
@@ -140,7 +146,7 @@ services:
   dashboard-frontend:
     build:
       context: ./dashboard-frontend
-    container_name: cpa_dashboard_frontend
+    container_name: lacs_dashboard_frontend
     restart: unless-stopped
     depends_on:
       flask-app:
