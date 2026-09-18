@@ -107,6 +107,10 @@ export function actualizarUsuario(id: number, cambios: CambiosUsuario) {
   })
 }
 
+export function eliminarUsuario(id: number) {
+  return request<void>(`/usuarios/${id}`, { method: "DELETE" })
+}
+
 // --- Sesiones (reservas) -----------------------------------------------
 
 // "pendiente": el activo requiere confirmación y la CPA todavía no la da.

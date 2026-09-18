@@ -1,7 +1,16 @@
 import { useState, type FormEvent } from "react"
+import { Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -19,10 +28,12 @@ export function UsuarioEditForm({
   usuario,
   onCancel,
   onSave,
+  onDelete,
 }: {
   usuario: Usuario
   onCancel: () => void
   onSave: (cambios: CambiosUsuario) => Promise<void>
+  onDelete: () => Promise<void>
 }) {
   const [nombre, setNombre] = useState(usuario.nombre ?? "")
   const [telefono, setTelefono] = useState(usuario.telefono_wa)
@@ -32,6 +43,20 @@ export function UsuarioEditForm({
   const [activo, setActivo] = useState(usuario.activo)
   const [error, setError] = useState<string | null>(null)
   const [guardando, setGuardando] = useState(false)
+  const [confirmandoEliminacion, setConfirmandoEliminacion] = useState(false)
+  const [eliminando, setEliminando] = useState(false)
+  const [errorEliminar, setErrorEliminar] = useState<string | null>(null)
+
+  async function confirmarEliminacion() {
+    setErrorEliminar(null)
+    setEliminando(true)
+    try {
+      await onDelete()
+    } catch (err) {
+      setErrorEliminar(err instanceof Error ? err.message : String(err))
+      setEliminando(false)
+    }
+  }
 
   async function handleSubmit(ev: FormEvent) {
     ev.preventDefault()
@@ -93,7 +118,20 @@ export function UsuarioEditForm({
         <Label htmlFor={`activo-${usuario.id}`}>Activo</Label>
       </div>
       {error && <p className="col-span-full text-sm text-destructive">{error}</p>}
-      <div className="col-span-full flex justify-end gap-2">
+      <div className="col-span-full flex gap-2">
+        <Button
+          type="button"
+          variant="destructive"
+          className="mr-auto"
+          onClick={() => {
+            setErrorEliminar(null)
+            setConfirmandoEliminacion(true)
+          }}
+          disabled={guardando}
+        >
+          <Trash2 />
+          Eliminar
+        </Button>
         <Button type="button" variant="outline" onClick={onCancel} disabled={guardando}>
           Cancelar
         </Button>
@@ -101,6 +139,38 @@ export function UsuarioEditForm({
           Guardar
         </Button>
       </div>
+
+      <Dialog open={confirmandoEliminacion} onOpenChange={setConfirmandoEliminacion}>
+        <DialogContent showCloseButton={false} className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>¿Eliminar a {usuario.nombre || usuario.telefono_wa}?</DialogTitle>
+            <DialogDescription>
+              Se borrará el usuario y tendrá que registrarse de nuevo por WhatsApp. Esta acción no se
+              puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          {errorEliminar && <p className="text-sm text-destructive">{errorEliminar}</p>}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmandoEliminacion(false)}
+              disabled={eliminando}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={confirmarEliminacion}
+              disabled={eliminando}
+            >
+              <Trash2 />
+              {eliminando ? "Eliminando…" : "Eliminar usuario"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </form>
   )
 }

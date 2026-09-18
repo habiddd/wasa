@@ -10,7 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { usePolling } from "@/hooks/use-polling"
-import { actualizarUsuario, fetchUsuarios, type CambiosUsuario, type Usuario } from "@/lib/api"
+import { actualizarUsuario, eliminarUsuario, fetchUsuarios, type CambiosUsuario, type Usuario } from "@/lib/api"
 import { formatearFechaHoraCPA } from "@/lib/fechas"
 
 import { UsuarioEditForm } from "./UsuarioEditForm"
@@ -20,6 +20,7 @@ type PropsVista = {
   editandoId: number | null
   onToggleEditar: (id: number) => void
   onGuardar: (id: number, cambios: CambiosUsuario) => Promise<void>
+  onEliminar: (id: number) => Promise<void>
 }
 
 function codigoYCedula(u: Usuario) {
@@ -30,7 +31,7 @@ function codigoYCedula(u: Usuario) {
 }
 
 /** Pantallas angostas: una tarjeta por usuario, sin columnas. */
-function ListaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: PropsVista) {
+function ListaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar, onEliminar }: PropsVista) {
   return (
     <ul className="divide-y rounded-md border">
       {usuarios.map((u) => (
@@ -55,6 +56,7 @@ function ListaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: Prop
               usuario={u}
               onCancel={() => onToggleEditar(u.id)}
               onSave={(cambios) => onGuardar(u.id, cambios)}
+              onDelete={() => onEliminar(u.id)}
             />
           )}
         </li>
@@ -73,7 +75,7 @@ function ListaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: Prop
  * espacio de sobra para leer más cómodo, no solo para que la tabla se vea
  * ancha.
  */
-function TablaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: PropsVista) {
+function TablaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar, onEliminar }: PropsVista) {
   return (
     <div className="rounded-md border">
       <Table className="@6xl:text-base">
@@ -126,6 +128,7 @@ function TablaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar }: Prop
                       usuario={u}
                       onCancel={() => onToggleEditar(u.id)}
                       onSave={(cambios) => onGuardar(u.id, cambios)}
+                      onDelete={() => onEliminar(u.id)}
                     />
                   </TableCell>
                 </TableRow>
@@ -148,6 +151,12 @@ export function ListaUsuariosPanel() {
 
   async function handleSave(id: number, cambios: CambiosUsuario) {
     await actualizarUsuario(id, cambios)
+    setEditandoId(null)
+    await reload()
+  }
+
+  async function handleDelete(id: number) {
+    await eliminarUsuario(id)
     setEditandoId(null)
     await reload()
   }
@@ -181,6 +190,7 @@ export function ListaUsuariosPanel() {
               editandoId={editandoId}
               onToggleEditar={toggleEditar}
               onGuardar={handleSave}
+              onEliminar={handleDelete}
             />
           </div>
           <div className="hidden @2xl:block">
@@ -189,6 +199,7 @@ export function ListaUsuariosPanel() {
               editandoId={editandoId}
               onToggleEditar={toggleEditar}
               onGuardar={handleSave}
+              onEliminar={handleDelete}
             />
           </div>
         </>

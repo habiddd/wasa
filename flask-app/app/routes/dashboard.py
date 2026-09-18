@@ -393,6 +393,28 @@ def api_actualizar_usuario(usuario_id):
     return jsonify(_serializar_usuario(usuario))
 
 
+@bp.route("/api/usuarios/<int:usuario_id>", methods=["DELETE"])
+def api_eliminar_usuario(usuario_id):
+    # No se borra en cascada: un usuario con reservas se desactiva en vez de
+    # eliminarse, para no perder el historial de uso de los activos.
+    usuario = Usuario.query.get_or_404(usuario_id)
+    if Reserva.query.filter_by(usuario_id=usuario.id).first() is not None:
+        return jsonify({
+            "error": "El usuario tiene reservas y no se puede eliminar. Desactívalo en su lugar."
+        }), 409
+
+    ReservaGrupo.query.filter_by(usuario_id=usuario.id).delete()
+    db.session.delete(usuario)
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"error": "No se puede eliminar el usuario porque tiene información asociada."}), 400
+
+    return "", 204
+
+
 def _serializar_reserva(r: Reserva) -> dict:
     return {
         "id": r.id,
