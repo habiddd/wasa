@@ -15,7 +15,7 @@ import holidays
 from flask import current_app
 from sqlalchemy.exc import IntegrityError
 
-from app import llm_client, registro_service
+from app import fechas_bloqueadas_service, llm_client, registro_service
 from app.extensions import db
 from app.models import Recurso, Reserva, ReservaGrupo, ReservaGrupoIntegrante, Usuario
 from app.textutils import normalizar as _normalizar
@@ -1668,6 +1668,31 @@ def _error_plazo_seguro(wizard: dict, fecha_inicio: date) -> str | None:
     return None if fecha_inicio >= minima else _mensaje_fecha_antes_de_plazo(fecha_inicio, minima)
 
 
+def _error_fecha_bloqueada(wizard: dict, fecha_inicio: date, fecha_fin: date | None = None) -> str | None:
+    """None si ni el día de inicio ni el de fin están en la lista negra (pestaña
+    "Excepciones", ver fechas_bloqueadas_service). Solo se validan esos dos días
+    -- entrega y devolución, cuando la CPA tiene que estar abierta --; los días
+    intermedios de un préstamo de varios días sí pueden caer en domingo o
+    festivo. Si incumple, devuelve el mensaje de rechazo con la siguiente fecha
+    disponible (respetando el plazo del seguro si sale de Barranquilla)."""
+    fecha_fin = fecha_fin or fecha_inicio
+    un_dia = fecha_fin == fecha_inicio
+    for d, cuando in ((fecha_inicio, "empiece"), (fecha_fin, "termine")):
+        motivo = fechas_bloqueadas_service.motivo_bloqueo(d)
+        if not motivo:
+            continue
+        desde = d + timedelta(days=1)
+        if wizard.get("sale_de_barranquilla"):
+            desde = max(desde, fecha_minima_sale_de_barranquilla())
+        siguiente = fechas_bloqueadas_service.siguiente_fecha_habilitada(desde)
+        mensaje = (f"No se pueden hacer reservas para el {_fecha_legible(d)}: {motivo}." if un_dia
+                   else f"No se puede hacer una reserva que {cuando} el {_fecha_legible(d)}: {motivo}.")
+        if siguiente:
+            mensaje += f" La siguiente fecha disponible es el {_fecha_legible(siguiente)}."
+        return mensaje
+    return None
+
+
 def _linea_sale_de_barranquilla(wizard: dict) -> str:
     """Línea de la factura/resumen -- ver `_mensaje_resumen` y
     `_crear_reserva_desde_wizard`. NO se usa `_interpretar_opcion` para leer
@@ -1883,6 +1908,20 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
                 avisos.append(_mensaje_fecha_antes_de_plazo(fecha_actual, minima))
                 continue
 
+        # Lista negra de fechas (pestaña "Excepciones"): si el día de inicio o
+        # de fin está bloqueado -- ya sea recién escrito o bloqueado desde el
+        # dashboard mientras la sesión seguía abierta --, se borra la fecha y
+        # se vuelve a pedir, igual que con el plazo del seguro.
+        if wizard.get("fecha"):
+            f_ini = date.fromisoformat(wizard["fecha"])
+            f_fin = date.fromisoformat(wizard.get("fecha_fin") or wizard["fecha"])
+            error_bloqueo = _error_fecha_bloqueada(wizard, f_ini, f_fin)
+            if error_bloqueo:
+                wizard.update(fecha=None, fecha_fin=None, inicio=None, fin=None,
+                              alternativas_para=[], confirmado=False)
+                avisos.append(error_bloqueo)
+                continue
+
         paso = _siguiente_paso_wizard(wizard)
 
         if paso == "elegir_activo":
@@ -1955,6 +1994,11 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
                 f"(seguro: {_TEXTO_PLAZO}, porque los activos salen de Barranquilla).\n"
                 if wizard.get("sale_de_barranquilla") else ""
             )
+            # Lista negra de fechas (pestaña "Excepciones"): se avisa acá,
+            # justo donde el usuario va a escribir la fecha, en vez de dejar
+            # que se entere solo cuando el bot ya le rechazó una.
+            reglas_txt = fechas_bloqueadas_service.texto_reglas()
+            linea_bloqueos = f"{reglas_txt}.\n" if reglas_txt else ""
             mensaje = (
                 "*FECHA DE RESERVA*\n"
                 f"{_DIVISOR_FACTURA}\n"
@@ -1962,6 +2006,7 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
                 f"{_DIVISOR_FACTURA}\n"
                 f"Hoy es {_DIAS_ES[ahora_local.weekday()]} {ahora_local.strftime('%d/%m/%Y')}.\n"
                 f"{linea_minima}"
+                f"{linea_bloqueos}"
                 "¿Qué fecha necesitas? Un solo día: dd/mm/aaaa (ej. 22/11/2026). "
                 "Varios días: dd/mm/aaaa a dd/mm/aaaa (ej. 22/11/2026 a 25/11/2026)."
             )
@@ -2252,6 +2297,15 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     if _error_plazo_seguro(wizard, inicio_utc.astimezone(ZONA_HORARIA_CPA).date()):
         wizard["confirmado"] = False
         mensaje, wizard, _ = _avanzar_wizard(wizard, usuario)  # la validación de arriba borra la fecha y avisa
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    # Lista negra: la CPA pudo bloquear el día entre el resumen y "Confirmar".
+    if wizard.get("fecha") and _error_fecha_bloqueada(
+        wizard, date.fromisoformat(wizard["fecha"]),
+        date.fromisoformat(wizard.get("fecha_fin") or wizard["fecha"]),
+    ):
+        wizard["confirmado"] = False
+        mensaje, wizard, _ = _avanzar_wizard(wizard, usuario)  # 6.3 borra la fecha y avisa
         return mensaje, {**sesion, "reserva_wizard": wizard}
 
     # Última verificación antes de escribir en la base -- puede haber
@@ -2672,6 +2726,9 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             error_plazo = _error_plazo_seguro(wizard, fecha_inicio_interp)
             if error_plazo:
                 return error_plazo + " Dime otra fecha desde esa, en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
+            error_bloqueo = _error_fecha_bloqueada(wizard, fecha_inicio_interp, fecha_fin_interp)
+            if error_bloqueo:
+                return error_bloqueo + " Dime otra fecha en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
             inicio_legible = f"{_DIAS_ES[fecha_inicio_interp.weekday()]} {fecha_inicio_interp.strftime('%d/%m/%Y')}"
             fin_legible = f"{_DIAS_ES[fecha_fin_interp.weekday()]} {fecha_fin_interp.strftime('%d/%m/%Y')}"
             wizard["fecha_pendiente"] = fecha_inicio_interp.isoformat()
@@ -2691,6 +2748,9 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             error_plazo = _error_plazo_seguro(wizard, fecha_interpretada)
             if error_plazo:
                 return error_plazo + " Dime otra fecha desde esa, en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
+            error_bloqueo = _error_fecha_bloqueada(wizard, fecha_interpretada)
+            if error_bloqueo:
+                return error_bloqueo + " Dime otra fecha en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
             fecha_legible = f"{_DIAS_ES[fecha_interpretada.weekday()]} {fecha_interpretada.strftime('%d/%m/%Y')}"
             wizard["fecha_pendiente"] = fecha_interpretada.isoformat()
             wizard["paso"] = "confirmar_fecha_interpretada"
@@ -2748,6 +2808,9 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             error_plazo = _error_plazo_seguro(wizard, nueva_inicio)
             if error_plazo:
                 return error_plazo + " Dime otra fecha desde esa, en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
+            error_bloqueo = _error_fecha_bloqueada(wizard, nueva_inicio, nueva_fin)
+            if error_bloqueo:
+                return error_bloqueo + " Dime otra fecha en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
 
             pendiente_inicio = date.fromisoformat(wizard["fecha_pendiente"])
             pendiente_fin_str = wizard.get("fecha_fin_pendiente")

@@ -14,7 +14,7 @@ import base64
 import io
 import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import qrcode
 import requests
@@ -23,9 +23,18 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app import estado_bot, guardrails, recursos_service, registro_service, whatsapp_client
+from app import estado_bot, fechas_bloqueadas_service, guardrails, recursos_service, registro_service, whatsapp_client
 from app.extensions import db, redis_client
-from app.models import AuditoriaBot, Recurso, Reserva, ReservaGrupo, ReservaGrupoIntegrante, Usuario
+from app.models import (
+    AuditoriaBot,
+    CalendarioReglas,
+    FechaExcepcion,
+    Recurso,
+    Reserva,
+    ReservaGrupo,
+    ReservaGrupoIntegrante,
+    Usuario,
+)
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 
@@ -130,6 +139,108 @@ def api_fecha_minima_seguro():
         "hoy": hoy.isoformat(),
         "fecha_minima": recursos_service.fecha_minima_sale_de_barranquilla(hoy).isoformat(),
     })
+
+
+# --- Excepciones: lista negra de fechas -------------------------------------
+
+def _fecha_civil(crudo) -> date:
+    """'YYYY-MM-DD' -> date. ValueError si no es texto o no se puede parsear."""
+    if not isinstance(crudo, str):
+        raise ValueError
+    return date.fromisoformat(crudo)
+
+
+@bp.route("/api/excepciones")
+def api_excepciones():
+    """Días relevantes (reglas, festivos, excepciones) entre ?desde y ?hasta
+    (YYYY-MM-DD, incluidos). Sin parámetros: el año en curso (hora CPA)."""
+    hoy = datetime.now(timezone.utc).astimezone(recursos_service.ZONA_HORARIA_CPA).date()
+    try:
+        desde = _fecha_civil(request.args.get("desde") or f"{hoy.year}-01-01")
+        hasta = _fecha_civil(request.args.get("hasta") or f"{hoy.year}-12-31")
+    except ValueError:
+        return jsonify({"error": "'desde' y 'hasta' deben tener formato YYYY-MM-DD."}), 400
+    if hasta < desde or (hasta - desde).days > fechas_bloqueadas_service.MAX_DIAS_RANGO:
+        return jsonify({"error": f"Rango inválido (máximo {fechas_bloqueadas_service.MAX_DIAS_RANGO} días)."}), 400
+    return jsonify({
+        "reglas": fechas_bloqueadas_service.serializar_reglas(fechas_bloqueadas_service.obtener_reglas()),
+        "dias": fechas_bloqueadas_service.dias_en_rango(desde, hasta),
+    })
+
+
+@bp.route("/api/excepciones/reglas")
+def api_reglas_excepciones():
+    return jsonify(fechas_bloqueadas_service.serializar_reglas(fechas_bloqueadas_service.obtener_reglas()))
+
+
+@bp.route("/api/excepciones/reglas", methods=["PUT"])
+def api_guardar_reglas_excepciones():
+    datos = request.get_json(silent=True) or {}
+    dias, festivos = datos.get("dias_semana"), datos.get("festivos_co")
+    if not isinstance(dias, list) or not all(
+        isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6 for d in dias
+    ):
+        return jsonify({"error": "'dias_semana' debe ser una lista de enteros de 0 (lunes) a 6 (domingo)."}), 400
+    if len(set(dias)) == 7:
+        return jsonify({"error": "No se pueden bloquear los 7 días de la semana."}), 400
+    if not isinstance(festivos, bool):
+        return jsonify({"error": "'festivos_co' debe ser true o false."}), 400
+    reglas = CalendarioReglas.query.get(1) or CalendarioReglas(id=1)
+    reglas.dias_semana_bloqueados = sorted(set(dias))   # reasignar, no mutar
+    reglas.festivos_co = festivos
+    reglas.actualizado_en = datetime.now(timezone.utc)
+    db.session.add(reglas)
+    db.session.commit()
+    return jsonify(fechas_bloqueadas_service.serializar_reglas(reglas))
+
+
+@bp.route("/api/excepciones/fechas", methods=["POST"])
+def api_guardar_excepcion():
+    """Upsert de una excepción para un día o un rango (desde..hasta, incluido)."""
+    datos = request.get_json(silent=True) or {}
+    try:
+        desde = _fecha_civil(datos.get("desde"))
+        hasta = _fecha_civil(datos.get("hasta")) if datos.get("hasta") else desde
+    except ValueError:
+        return jsonify({"error": "Las fechas deben tener formato YYYY-MM-DD."}), 400
+    if hasta < desde or (hasta - desde).days > 365:
+        return jsonify({"error": "Rango inválido (máximo un año)."}), 400
+    tipo = datos.get("tipo")
+    if tipo not in fechas_bloqueadas_service.TIPOS_EXCEPCION:
+        return jsonify({"error": "'tipo' debe ser 'bloqueo' o 'desbloqueo'."}), 400
+    motivo = datos.get("motivo")
+    if motivo is not None and not isinstance(motivo, str):
+        return jsonify({"error": "'motivo' debe ser texto."}), 400
+    motivo = (motivo or "").strip() or None
+    if motivo and len(motivo) > 200:
+        return jsonify({"error": "El motivo no puede superar 200 caracteres."}), 400
+
+    existentes = {e.fecha: e for e in FechaExcepcion.query.filter(
+        FechaExcepcion.fecha >= desde, FechaExcepcion.fecha <= hasta).all()}
+    ahora = datetime.now(timezone.utc)
+    d = desde
+    while d <= hasta:
+        exc = existentes.get(d) or FechaExcepcion(fecha=d, creado_en=ahora)
+        exc.tipo, exc.motivo, exc.actualizado_en = tipo, motivo, ahora
+        db.session.add(exc)
+        d += timedelta(days=1)
+    db.session.commit()
+    return jsonify({"dias": fechas_bloqueadas_service.dias_en_rango(desde, hasta)})
+
+
+@bp.route("/api/excepciones/fechas/<fecha>", methods=["DELETE"])
+def api_eliminar_excepcion(fecha):
+    """Quita la excepción: el día vuelve a seguir las reglas. Devuelve el estado resultante."""
+    try:
+        d = _fecha_civil(fecha)
+    except ValueError:
+        return jsonify({"error": "Fecha inválida (YYYY-MM-DD)."}), 400
+    exc = FechaExcepcion.query.get(d)
+    if exc is None:
+        return jsonify({"error": "Ese día no tiene una excepción."}), 404
+    db.session.delete(exc)
+    db.session.commit()
+    return jsonify(fechas_bloqueadas_service.describir_fecha(d))
 
 
 @bp.route("/api/qr")

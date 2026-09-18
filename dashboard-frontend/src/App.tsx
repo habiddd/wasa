@@ -5,6 +5,7 @@ import {
   Boxes,
   CalendarClock,
   CalendarDays,
+  CalendarOff,
   ChevronRight,
   ClipboardList,
   ListChecks,
@@ -43,6 +44,7 @@ import { ActivosPanel } from "@/features/activos/ActivosPanel"
 import { ActivosProvider } from "@/features/activos/activos-context"
 import { LugaresPanel } from "@/features/activos/LugaresPanel"
 import { CalendarioPanel } from "@/features/calendario/CalendarioPanel"
+import { ExcepcionesPanel } from "@/features/excepciones/ExcepcionesPanel"
 import { MetricasPanel } from "@/features/metricas/MetricasPanel"
 import { ReservasPanel } from "@/features/reservas/ReservasPanel"
 import { EstadoServiciosPanel, QrWhatsappPanel } from "@/features/servicios/ServiciosPanel"
@@ -78,6 +80,7 @@ const MENU: (ItemMenu | GrupoMenu)[] = [
   { value: "metricas", label: "Métricas", icon: BarChart3, Panel: MetricasPanel },
   { value: "calendario", label: "Calendario", icon: CalendarDays, Panel: CalendarioPanel },
   { value: "reservas", label: "Reservas", icon: ClipboardList, Panel: ReservasPanel },
+  { value: "excepciones", label: "Excepciones", icon: CalendarOff, Panel: ExcepcionesPanel },
   {
     value: "usuarios",
     label: "Usuarios",

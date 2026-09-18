@@ -513,6 +513,34 @@ ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS sale_de_barranquilla BOOLEAN
 CREATE INDEX IF NOT EXISTS idx_auditoria_telefono_fecha ON auditoria_bot (telefono_wa, creado_en);
 CREATE INDEX IF NOT EXISTS idx_auditoria_mensaje_id ON auditoria_bot (mensaje_id);
 
+-- Lista negra de fechas (pestaña "Excepciones" del dashboard): días en que
+-- el bot NO acepta reservas. Ver app/fechas_bloqueadas_service.py.
+-- Reglas generales: UNA sola fila (id = 1). dias_semana_bloqueados usa la
+-- numeración de Python date.weekday(): 0 = lunes ... 6 = domingo. Los
+-- festivos de Colombia no se guardan: se calculan con el paquete `holidays`.
+CREATE TABLE IF NOT EXISTS calendario_reglas (
+    id                      SMALLINT PRIMARY KEY DEFAULT 1,
+    dias_semana_bloqueados  SMALLINT[] NOT NULL DEFAULT '{5,6}',
+    festivos_co             BOOLEAN NOT NULL DEFAULT TRUE,
+    actualizado_en          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT calendario_reglas_fila_unica CHECK (id = 1),
+    CONSTRAINT calendario_reglas_dias_validos
+        CHECK (dias_semana_bloqueados <@ ARRAY[0,1,2,3,4,5,6]::SMALLINT[])
+);
+INSERT INTO calendario_reglas (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- Excepciones de un día concreto: mandan sobre las reglas. 'bloqueo' cierra
+-- un día normal; 'desbloqueo' abre un festivo o un día de semana bloqueado.
+-- Una por fecha (PK); borrar la fila devuelve el día a las reglas.
+CREATE TABLE IF NOT EXISTS fechas_excepcion (
+    fecha           DATE PRIMARY KEY,
+    tipo            VARCHAR(12) NOT NULL,
+    motivo          VARCHAR(200),
+    creado_en       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actualizado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT fechas_excepcion_tipo_valido CHECK (tipo IN ('bloqueo', 'desbloqueo'))
+);
+
 -- Este script corre con el superusuario de Postgres (ver 01-init.sql), así
 -- que las tablas de arriba quedan con OWNER postgres. GRANT ALL PRIVILEGES
 -- ON DATABASE (en 01-init.sql) solo da privilegios a nivel de base de datos,

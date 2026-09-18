@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from sqlalchemy.dialects.postgresql import ARRAY
+
 from app.extensions import db
 
 
@@ -163,3 +165,27 @@ class AuditoriaBot(db.Model):
     mensaje_id = db.Column(db.String(64))
     estado_envio = db.Column(db.String(20), nullable=False, default="n/a")
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+
+class CalendarioReglas(db.Model):
+    """Reglas generales de la lista negra de fechas -- UNA fila (id=1), ver
+    postgres/init/02-schema.sql y app/fechas_bloqueadas_service.py."""
+    __tablename__ = "calendario_reglas"
+
+    id = db.Column(db.SmallInteger, primary_key=True, default=1)
+    # 0 = lunes ... 6 = domingo (date.weekday()). Reasignar la lista entera,
+    # no mutarla en sitio (ARRAY no rastrea .append()).
+    dias_semana_bloqueados = db.Column(ARRAY(db.SmallInteger), nullable=False, default=lambda: [5, 6])
+    festivos_co = db.Column(db.Boolean, nullable=False, default=True)
+    actualizado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+
+class FechaExcepcion(db.Model):
+    """Excepción manual de un día: 'bloqueo' | 'desbloqueo'. Manda sobre las reglas."""
+    __tablename__ = "fechas_excepcion"
+
+    fecha = db.Column(db.Date, primary_key=True)
+    tipo = db.Column(db.String(12), nullable=False)
+    motivo = db.Column(db.String(200))
+    creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    actualizado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)

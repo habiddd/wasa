@@ -324,3 +324,43 @@ export function actualizarActivo(
     body: JSON.stringify(cambios),
   })
 }
+
+// --- Excepciones (lista negra de fechas) -------------------------------------
+// Días en que el bot no acepta reservas. Fechas civiles "YYYY-MM-DD" (hora CPA).
+// dia_semana / dias_semana: 0 = lunes ... 6 = domingo (igual que diaDeSemana()).
+
+export type OrigenExcepcion = "dia_semana" | "festivo" | "manual" | "desbloqueada"
+export type TipoExcepcion = "bloqueo" | "desbloqueo"
+
+export type ReglasExcepcion = { dias_semana: number[]; festivos_co: boolean; actualizado_en: string | null }
+
+export type DiaExcepcion = {
+  fecha: string
+  dia_semana: number
+  bloqueada: boolean
+  origen: OrigenExcepcion | null
+  festivo: string | null
+  bloqueada_por_regla: boolean
+  excepcion: { tipo: TipoExcepcion; motivo: string | null; actualizado_en: string | null } | null
+}
+
+export function fetchExcepciones(desde: string, hasta: string) {
+  const params = new URLSearchParams({ desde, hasta })
+  return request<{ reglas: ReglasExcepcion; dias: DiaExcepcion[] }>(`/excepciones?${params}`)
+}
+
+export function fetchReglasExcepcion() {
+  return request<ReglasExcepcion>("/excepciones/reglas")
+}
+
+export function guardarReglasExcepcion(reglas: { dias_semana: number[]; festivos_co: boolean }) {
+  return request<ReglasExcepcion>("/excepciones/reglas", { method: "PUT", body: JSON.stringify(reglas) })
+}
+
+export function guardarExcepcion(datos: { desde: string; hasta?: string; tipo: TipoExcepcion; motivo?: string | null }) {
+  return request<{ dias: DiaExcepcion[] }>("/excepciones/fechas", { method: "POST", body: JSON.stringify(datos) })
+}
+
+export function eliminarExcepcion(fecha: string) {
+  return request<DiaExcepcion>(`/excepciones/fechas/${fecha}`, { method: "DELETE" })
+}

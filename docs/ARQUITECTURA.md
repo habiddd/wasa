@@ -561,6 +561,42 @@ CPA, seguro por salir de Barranquilla, las dos cosas o ninguna.
   -- se le avisa (mismo estilo del aviso de "por confirmar"), pero no se
   bloquea el guardado; la decisión final es suya.
 
+### Lista negra de fechas en el wizard
+
+El wizard también rechaza reservas cuyo día de entrega o de devolución cae
+en la lista negra de la pestaña "Excepciones" (ver más abajo, sección
+"Excepciones: lista negra de fechas"). Los enganches, todos en
+`recursos_service.py`:
+
+- **`_error_fecha_bloqueada(wizard, fecha_inicio, fecha_fin=None)`**, justo
+  después de `_error_plazo_seguro`: revisa únicamente el día de inicio y el
+  de fin (no los días intermedios de un préstamo de varios días) con
+  `fechas_bloqueadas_service.motivo_bloqueo`, y arma el mensaje de rechazo
+  con la siguiente fecha disponible (`siguiente_fecha_habilitada`),
+  respetando el plazo del seguro si el wizard tiene
+  `sale_de_barranquilla=True`.
+- **Validación central:** al tope del `while` de `_avanzar_wizard`, justo
+  después del bloque que revalida el plazo del seguro -- mismo criterio: si
+  la fecha puesta (recién escrita o bloqueada desde el dashboard mientras
+  la sesión seguía abierta) incumple, se borra y se vuelve a pedir.
+- **Rechazo temprano en fechas de lenguaje natural:** igual que con el
+  plazo del seguro, en los tres puntos de `_continuar_reserva` donde se
+  interpreta una fecha natural (el rango, la fecha única y el reingreso en
+  "confirmar_fecha_interpretada") -- así el usuario no llega a ver el "¿Es
+  correcto?" de una fecha que de todos modos se va a rechazar.
+- **Red de seguridad final:** `_crear_reserva_desde_wizard` repite el
+  chequeo justo antes de escribir en la base (la CPA pudo bloquear el día
+  entre el resumen y "Confirmar"); si falla, vuelve a llamar
+  `_avanzar_wizard` para que la validación central borre la fecha y avise,
+  igual que con el plazo del seguro.
+- **Mensaje del paso "fecha":** `fechas_bloqueadas_service.texto_reglas()`
+  ("No se reciben reservas los sábados, domingos ni festivos") se muestra
+  justo donde el usuario va a escribir la fecha, debajo de la línea de
+  fecha mínima del seguro si aplica.
+- Los días intermedios de un préstamo largo sí pueden caer en domingo o
+  festivo (un préstamo viernes → lunes es válido); el plazo del seguro
+  (`es_dia_habil`) no cambia con esto.
+
 ### Mensajes tipo factura
 
 Los pasos "activo seleccionado" (`confirmar_accesorios`), fecha, hora y el
@@ -1153,6 +1189,55 @@ tener presentes antes de tocarlo:
   todas las líneas del grupo y el `ReservaGrupo` mediante
   `DELETE /dashboard/api/reservas/grupo/<grupo_id>`; el toast solo informa
   el resultado posterior.
+
+## Excepciones: lista negra de fechas
+
+Pestaña "Excepciones" del dashboard (`features/excepciones/`): días en que
+el bot de WhatsApp no acepta reservas, editables desde una vista calendario
+y una vista lista.
+
+- **Dos tablas** (`postgres/init/02-schema.sql`): `calendario_reglas` --
+  una sola fila (`id=1`) con `dias_semana_bloqueados` (`SMALLINT[]`, 0 =
+  lunes ... 6 = domingo, igual que `date.weekday()` en Python y
+  `diaDeSemana()` en el frontend) y `festivos_co` (booleano); y
+  `fechas_excepcion` -- una fila por día concreto (`fecha` como PK), con
+  `tipo` ('bloqueo' | 'desbloqueo') y `motivo` opcional. Los festivos de
+  Colombia NO se guardan: se calculan en caliente con el paquete `holidays`
+  (`holidays.country_holidays("CO")`), igual que la cláusula de seguro.
+- **Precedencia** (`app/fechas_bloqueadas_service.py`, función `_describir`):
+  1) la excepción manual del día, si existe (`bloqueo` cierra, `desbloqueo`
+  abre); 2) si no hay excepción, festivo de Colombia con `festivos_co=True`;
+  3) si no, el día de la semana está en `dias_semana_bloqueados`. Un día sin
+  ninguna de las tres es un día normal.
+- **Servicio único:** todo el que necesite saber si una fecha se puede
+  reservar (el bot, el dashboard) pasa por
+  `app/fechas_bloqueadas_service.py` -- nunca se reimplementa la lógica de
+  precedencia en otro sitio. Expone `describir_fecha`, `es_fecha_bloqueada`,
+  `motivo_bloqueo` (cláusula en español lista para WhatsApp),
+  `siguiente_fecha_habilitada`, `dias_en_rango` (solo los días "relevantes":
+  con regla, festivo o excepción -- los días normales no se listan, para no
+  mandar 365 filas al frontend) y `texto_reglas` (resumen para el mensaje
+  del paso "fecha" del wizard).
+- **Endpoints** (`app/routes/dashboard.py`, todos bajo `/dashboard/api/`):
+  `GET /excepciones?desde&hasta` (reglas + días relevantes del rango),
+  `GET`/`PUT /excepciones/reglas`, `POST /excepciones/fechas` (upsert de una
+  fecha o un rango `desde..hasta`) y `DELETE /excepciones/fechas/<fecha>`
+  (quita la excepción; el día vuelve a seguir las reglas).
+- **El bot solo valida el día de inicio y el de fin** (entrega y
+  devolución, cuando la CPA tiene que estar abierta) de cada reserva -- los
+  días intermedios de un préstamo de varios días sí pueden caer en domingo
+  o festivo (un préstamo viernes → lunes es válido). Ver la sección "Lista
+  negra de fechas en el wizard" más arriba para los puntos de enganche.
+- **El plazo del seguro no cambia:** `es_dia_habil` /
+  `fecha_minima_sale_de_barranquilla` siguen contando solo lunes a viernes
+  sin festivos, independientemente de las reglas de esta pestaña.
+- **El dashboard no bloquea ediciones**, mismo criterio que con el plazo
+  del seguro: `ReservaDetalle.tsx` avisa (texto en `text-warning`) si el
+  inicio o el fin editado cae en un día de la lista negra, pero no impide
+  guardar.
+- **Valores por defecto:** `{5, 6}` (sábados y domingos) más festivos
+  activados -- con esto el bot empieza a rechazar sábados además de
+  domingos y festivos, ver `docs/SESION_2026-09-18.md`.
 
 ## Tablas responsivas del dashboard: lista en tarjetas + columna que absorbe el espacio
 

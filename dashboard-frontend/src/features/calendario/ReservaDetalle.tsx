@@ -29,8 +29,10 @@ import {
   confirmarReservaGrupo,
   decidirReserva,
   eliminarReservaGrupo,
+  fetchExcepciones,
   fetchFechaMinimaSeguro,
   type CambiosReserva,
+  type DiaExcepcion,
   type EstadoReserva,
   type FechaMinimaSeguro,
   type Modalidad,
@@ -352,6 +354,38 @@ function FormularioEdicion({
     !!inicioEditado &&
     !!minimaHoy &&
     claveDe(diaDe(inicioEditado)) < minimaHoy.fecha_minima
+
+  // Lista negra de fechas (pestaña "Excepciones"): mismo criterio que el bot
+  // (solo importan el día de inicio y el de fin, ver
+  // recursos_service._error_fecha_bloqueada) -- el dashboard NO bloquea el
+  // guardado, solo avisa (ver docs/ARQUITECTURA.md, sección "Excepciones").
+  const [diasBloqueados, setDiasBloqueados] = useState<Map<string, DiaExcepcion>>(new Map())
+  const finEditado = desdeInputLocal(fin)
+  const claveInicioEditado = inicioEditado ? claveDe(diaDe(inicioEditado)) : null
+  const claveFinEditado = finEditado ? claveDe(diaDe(finEditado)) : null
+  useEffect(() => {
+    if (!claveInicioEditado || !claveFinEditado) return
+    const desde = claveInicioEditado < claveFinEditado ? claveInicioEditado : claveFinEditado
+    const hasta = claveInicioEditado < claveFinEditado ? claveFinEditado : claveInicioEditado
+    let vigente = true
+    fetchExcepciones(desde, hasta)
+      .then((data) => {
+        if (vigente) setDiasBloqueados(new Map(data.dias.map((d) => [d.fecha, d])))
+      })
+      .catch(() => {})
+    return () => {
+      vigente = false
+    }
+  }, [claveInicioEditado, claveFinEditado])
+
+  const avisosBloqueo = [
+    claveInicioEditado && { clave: claveInicioEditado, cuando: "empieza" as const },
+    claveFinEditado &&
+      claveFinEditado !== claveInicioEditado && { clave: claveFinEditado, cuando: "termina" as const },
+  ]
+    .filter((x): x is { clave: string; cuando: "empieza" | "termina" } => !!x)
+    .map(({ clave, cuando }) => ({ dia: diasBloqueados.get(clave), cuando }))
+    .filter((x): x is { dia: DiaExcepcion; cuando: "empieza" | "termina" } => !!x.dia?.bloqueada)
 
   const actuales = evento.reservas.map(
     (r) => recursos.find((recurso) => recurso.id === r.recurso_id) ??
@@ -760,6 +794,14 @@ function FormularioEdicion({
           )}
         </div>
       )}
+
+      {avisosBloqueo.map(({ dia, cuando }) => (
+        <p key={dia.fecha} className="text-xs text-warning">
+          Ojo: el {fechaCivilLarga(dia.fecha)} (día en que {cuando} la reserva) está en la lista
+          negra ({dia.excepcion?.motivo || dia.festivo || "no hábil"}). El bot no lo permitiría; el
+          dashboard no lo bloquea.
+        </p>
+      ))}
 
       {evento.numeros.length === 1 && modalidad === "grupo" && (
         <fieldset className="space-y-1.5">
