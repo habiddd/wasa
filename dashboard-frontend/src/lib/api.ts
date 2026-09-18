@@ -147,6 +147,12 @@ export type Sesion = {
   modalidad: Modalidad
   tamano_grupo: number | null
   integrantes: string[]
+  // ¿Los activos salen de Barranquilla? true = trámite de seguro (mín. 5
+  // días hábiles). null = reserva anterior a la pregunta.
+  sale_de_barranquilla: boolean | null
+  // Fecha mínima de inicio (YYYY-MM-DD) calculada por el backend desde
+  // creado_en, con festivos de Colombia. null si no sale de Barranquilla.
+  fecha_minima_seguro: string | null
   inicio: string | null
   fin: string | null
   estado: EstadoReserva
@@ -156,6 +162,15 @@ export type Sesion = {
 
 export function fetchSesiones() {
   return request<Sesion[]>("/reservas")
+}
+
+// Fecha mínima de inicio HOY para una reserva que sale de Barranquilla (5
+// días hábiles, festivos de Colombia calculados por el backend) -- la usa
+// el formulario de edición en ReservaDetalle.tsx.
+export type FechaMinimaSeguro = { dias_habiles: number; hoy: string; fecha_minima: string }
+
+export function fetchFechaMinimaSeguro() {
+  return request<FechaMinimaSeguro>("/seguro/fecha-minima")
 }
 
 // El calendario pide por rango en vez de las últimas 500 por fecha de
@@ -187,6 +202,7 @@ export function actualizarReservaGrupo(
     modalidad?: Modalidad
     tamano_grupo?: number | null
     integrantes?: string[]
+    sale_de_barranquilla?: boolean
   }
 ) {
   return request<Sesion[]>(`/reservas/grupo/${grupoId}`, {

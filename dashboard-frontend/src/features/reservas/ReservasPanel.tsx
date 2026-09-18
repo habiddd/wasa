@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -111,6 +112,20 @@ function Activos({ evento }: { evento: EventoCalendario }) {
   )
 }
 
+/** Aviso de que la reserva requiere trámite de seguro (ver ReservaDetalle). */
+function SaleDeBarranquilla({ evento, className }: { evento: EventoCalendario; className?: string }) {
+  if (!evento.reservas[0].sale_de_barranquilla) return null
+  return (
+    <Badge
+      variant="warning"
+      className={className}
+      title="Sale de Barranquilla: requiere trámite de seguro (mín. 5 días hábiles)"
+    >
+      Sale de Barranquilla · seguro
+    </Badge>
+  )
+}
+
 type PropsVista = {
   eventos: EventoCalendario[]
   onSeleccionar: (evento: EventoCalendario) => void
@@ -135,7 +150,10 @@ function ListaReservas({ eventos, onSeleccionar }: PropsVista) {
             >
               <span className="flex items-start justify-between gap-2">
                 <Activos evento={evento} />
-                <EstadoEventoBadge evento={evento} />
+                <span className="flex gap-1">
+                  <SaleDeBarranquilla evento={evento} />
+                  <EstadoEventoBadge evento={evento} />
+                </span>
               </span>
               <span className="block text-xs text-muted-foreground">
                 N.º {numero(evento)} · {evento.usuarioNombre} · {uso(evento)}
@@ -190,6 +208,7 @@ function TablaReservas({ eventos, onSeleccionar }: PropsVista) {
                 <TableCell className="tabular-nums">{numero(evento)}</TableCell>
                 <TableCell className="whitespace-normal">
                   <Activos evento={evento} />
+                  <SaleDeBarranquilla evento={evento} className="mt-1" />
                   <p className="mt-0.5 text-xs text-muted-foreground @4xl:hidden">
                     {evento.usuarioNombre} · {uso(evento)}
                   </p>

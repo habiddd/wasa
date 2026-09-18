@@ -88,6 +88,12 @@ class ReservaGrupo(db.Model):
     # quien reserva -- ver recursos_service.crear_reservas_grupo.
     modalidad = db.Column(db.String(20), nullable=False, default="individual")  # 'individual' | 'grupo'
     tamano_grupo = db.Column(db.SmallInteger)  # solo si modalidad='grupo', entre 2 y 10
+    # ¿Los activos salen de Barranquilla? True obliga a tramitar seguro: el
+    # bot no deja poner un inicio antes del 5.º día HÁBIL (lunes a viernes,
+    # sin festivos de Colombia) después de hoy, ver
+    # recursos_service.fecha_minima_sale_de_barranquilla. None = reserva de
+    # antes de que se preguntara. Ver postgres/init/02-schema.sql.
+    sale_de_barranquilla = db.Column(db.Boolean)
 
     # order_by: los integrantes se listan siempre en el orden en que se
     # capturaron (orden=1 es quien reserva). cascade="all, delete-orphan": al

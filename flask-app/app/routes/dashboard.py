@@ -119,6 +119,19 @@ def api_status():
     )
 
 
+@bp.route("/api/seguro/fecha-minima")
+def api_fecha_minima_seguro():
+    """Fecha mínima de inicio HOY para una reserva que sale de Barranquilla
+    (5.º día hábil, festivos de Colombia) -- la usa el formulario de edición
+    del dashboard (ver ReservaDetalle.tsx) para advertir sin bloquear."""
+    hoy = datetime.now(timezone.utc).astimezone(recursos_service.ZONA_HORARIA_CPA).date()
+    return jsonify({
+        "dias_habiles": recursos_service.DIAS_MINIMOS_TRAMITE_SEGURO,
+        "hoy": hoy.isoformat(),
+        "fecha_minima": recursos_service.fecha_minima_sale_de_barranquilla(hoy).isoformat(),
+    })
+
+
 @bp.route("/api/qr")
 def api_qr():
     estado = _consultar_baileys() or {}
@@ -277,6 +290,18 @@ def _serializar_reserva(r: Reserva) -> dict:
         # ReservaGrupo.integrantes en models.py) -- integrantes[0] es
         # siempre quien reserva.
         "integrantes": [i.codigo_uninorte for i in r.grupo.integrantes] if r.grupo else [],
+        # ¿Los activos salen de Barranquilla? None = no se preguntó (reserva
+        # anterior a esta pregunta, ver postgres/init/02-schema.sql).
+        "sale_de_barranquilla": r.grupo.sale_de_barranquilla if r.grupo else None,
+        # Fecha mínima de inicio calculada desde la creación (5 días
+        # hábiles, festivos de Colombia) -- solo si sale de Barranquilla.
+        "fecha_minima_seguro": (
+            recursos_service.fecha_minima_sale_de_barranquilla(
+                (r.creado_en if r.creado_en.tzinfo else r.creado_en.replace(tzinfo=timezone.utc))
+                .astimezone(recursos_service.ZONA_HORARIA_CPA).date()
+            ).isoformat()
+            if r.grupo and r.grupo.sale_de_barranquilla and r.creado_en else None
+        ),
         "inicio": r.inicio.isoformat() if r.inicio else None,
         "fin": r.fin.isoformat() if r.fin else None,
         "estado": r.estado,
@@ -436,6 +461,8 @@ def api_actualizar_reserva_grupo(grupo_id):
     tamano_grupo_nuevo = datos.pop("tamano_grupo", None)
     tiene_integrantes = "integrantes" in datos
     integrantes_nuevos = datos.pop("integrantes", None)
+    tiene_sale_area = "sale_de_barranquilla" in datos
+    sale_area_nuevo = datos.pop("sale_de_barranquilla", None)
     cambios, error = _preparar_cambios_reserva(datos, _CAMPOS_EDITABLES_RESERVA)
     if error:
         return jsonify({"error": error}), 400
@@ -445,6 +472,9 @@ def api_actualizar_reserva_grupo(grupo_id):
 
     if tiene_modalidad and modalidad_nueva not in ("individual", "grupo"):
         return jsonify({"error": "La modalidad debe ser 'individual' o 'grupo'."}), 400
+
+    if tiene_sale_area and not isinstance(sale_area_nuevo, bool):
+        return jsonify({"error": "'sale_de_barranquilla' debe ser true o false."}), 400
 
     if recurso_ids is not None:
         if (
@@ -518,6 +548,11 @@ def api_actualizar_reserva_grupo(grupo_id):
             grupo.modalidad = "individual"
             grupo.tamano_grupo = None
             grupo.integrantes = []
+
+    # Sin validar el plazo de 5 días hábiles del seguro: el dashboard solo
+    # advierte (ver ReservaDetalle.tsx); la CPA tiene la última palabra.
+    if tiene_sale_area:
+        grupo.sale_de_barranquilla = sale_area_nuevo
 
     for reserva in reservas:
         error = _aplicar_cambios_reserva(reserva, cambios)

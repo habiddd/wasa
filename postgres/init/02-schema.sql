@@ -492,6 +492,24 @@ CREATE TABLE IF NOT EXISTS reserva_grupo_integrantes (
 );
 CREATE INDEX IF NOT EXISTS idx_reserva_grupo_integrantes_grupo ON reserva_grupo_integrantes (grupo_id);
 
+-- Cláusula de seguro: ¿los activos salen de Barranquilla? Si salen, hay que
+-- tramitar el seguro y la reserva empieza como mínimo el 5.º día hábil
+-- (lunes a viernes, sin festivos de Colombia) después de crearla (ver
+-- recursos_service.fecha_minima_sale_de_barranquilla). NULL = no se
+-- preguntó (reservas anteriores); el bot siempre guarda TRUE/FALSE.
+-- Renombre: la columna nació como `sale_area_metropolitana`; solo corre si
+-- existe la vieja y aún no la nueva.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'reserva_grupos' AND column_name = 'sale_area_metropolitana')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'reserva_grupos' AND column_name = 'sale_de_barranquilla') THEN
+        ALTER TABLE reserva_grupos RENAME COLUMN sale_area_metropolitana TO sale_de_barranquilla;
+    END IF;
+END $$;
+ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS sale_de_barranquilla BOOLEAN;
+
 CREATE INDEX IF NOT EXISTS idx_auditoria_telefono_fecha ON auditoria_bot (telefono_wa, creado_en);
 CREATE INDEX IF NOT EXISTS idx_auditoria_mensaje_id ON auditoria_bot (mensaje_id);
 

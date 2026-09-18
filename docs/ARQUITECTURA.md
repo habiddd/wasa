@@ -379,8 +379,8 @@ sub-pasos. Progresión para un ítem, una vez resueltas esas preguntas
 
 ```
 elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
-  → [confirmar_contenidos_espacio] → fecha → hora_inicio → hora_fin
-  → confirmar → listo
+  → [confirmar_contenidos_espacio] → sale_de_barranquilla → fecha
+  → hora_inicio → hora_fin → confirmar → listo
 
 hora_fin/confirmar → [resolver_disponibilidad → resumen | elegir_alternativa]
 ```
@@ -476,6 +476,90 @@ absoluto se muestra "No reconocí esa opción."
 qué parte del flujo esté el usuario -- solo borran `sesion["reserva_wizard"]`;
 nunca queda un activo/espacio a medio reservar porque nada se escribe en
 `reservas` hasta el paso final "confirmar".
+
+### Cláusula de seguro: salida de Barranquilla
+
+Antes de pedir la fecha, el wizard pregunta si los activos van a salir de
+Barranquilla. Si la respuesta es sí, la CPA tiene que tramitar un seguro y
+la reserva no puede empezar antes del `DIAS_MINIMOS_TRAMITE_SEGURO`-ésimo
+(5) día **hábil** (lunes a viernes, sin festivos de Colombia -- paquete
+`holidays`, `holidays.country_holidays("CO")`) después de hoy, hora de la
+CPA (`ZONA_HORARIA_CPA`); hoy no cuenta como día hábil transcurrido. Por
+ejemplo: viernes 18/09/2026 → viernes 25/09/2026 (fin de semana no cuenta);
+miércoles 07/10/2026 → jueves 15/10/2026 (salta el lunes 12/10, festivo).
+La regla no distingue de qué activo se trate.
+
+Este sí es un seguro de verdad (un trámite de la CPA antes de que los
+activos salgan de la ciudad), y no tiene nada que ver con
+`recursos.requiere_confirmacion`: esa columna se llamaba `requiere_seguro`
+y se renombró justamente porque nunca fue un seguro (ver
+`docs/SESION_2026-09-10.md`). Un activo puede necesitar confirmación de la
+CPA, seguro por salir de Barranquilla, las dos cosas o ninguna.
+
+- **Orden:** el paso "sale_de_barranquilla" va justo antes de "fecha"
+  (`_siguiente_paso_wizard`), ya con el carrito resuelto (después de
+  `confirmar_accesorios`/`confirmar_contenidos_espacio` si aplican) -- así
+  el mensaje de "fecha" puede mostrar de una vez la fecha mínima si hace
+  falta.
+- **`fecha_minima_sale_de_barranquilla(hoy=None)`** (pública, en
+  `recursos_service.py`) es la única fuente de la fecha mínima -- toma
+  `hoy` como parámetro para poder probarla con distintas fechas; con
+  `None` usa el día de hoy en la CPA. Se apoya en `sumar_dias_habiles`
+  (`@lru_cache`, cuenta días hábiles uno por uno desde `desde`, sin
+  incluirlo) y en `es_dia_habil` (lunes a viernes y no festivo). Ni el bot
+  ni el dashboard recalculan el plazo por su cuenta: el dashboard pide la
+  fecha vigente a `GET /dashboard/api/seguro/fecha-minima` y usa
+  `fecha_minima_seguro` (ya calculada desde `creado_en`) que trae cada
+  reserva en `GET /dashboard/api/reservas`.
+- **Validación central:** vive al tope del `while` de `_avanzar_wizard`
+  (`_error_plazo_seguro`), antes de calcular el siguiente paso -- corre en
+  cada vuelta, así que cubre tanto la primera fecha que el usuario escribe
+  como un cambio posterior ("Cambiar fecha" o "Cambiar si sale de
+  Barranquilla" desde el resumen). Si la fecha puesta queda antes del
+  plazo, se borra (`fecha`/`fecha_fin`/`inicio`/`fin`) y se avisa en vez de
+  dejarla pasar. `_crear_reserva_desde_wizard` repite el chequeo justo
+  antes de escribir en la base, por si el tiempo pasó mientras la sesión
+  estaba pausada.
+- **Rechazo temprano en fechas de lenguaje natural:** una fecha en
+  `dd/mm/aaaa` (o un rango en ese formato) se aplica directo al wizard y
+  cae en la validación central de arriba. Una fecha en lenguaje natural
+  ("mañana", "el viernes") en cambio solo queda *pendiente* hasta que el
+  usuario confirma "Entendí tal fecha, ¿es correcto?" -- ahí la validación
+  central todavía no la ve, así que `_continuar_reserva` la rechaza antes,
+  con `_error_plazo_seguro`, en los tres puntos donde se interpreta una
+  fecha natural: el rango (`_interpretar_rango_fecha_natural`), la fecha
+  única (`_interpretar_fecha_natural`) y cuando el usuario reescribe la
+  fecha estando ya en el paso "confirmar_fecha_interpretada". Si el
+  usuario confirma con "1"/"sí" una fecha que ya pasó ese chequeo, sigue
+  cubierta por la validación central al aplicarla.
+- **Parser determinista:** `_interpretar_si_no` nunca usa el LLM (mismo
+  criterio que fecha/hora, ver más arriba) -- entiende el número del menú,
+  sí/no explícitos, duda ("no sé", "tal vez" -> vuelve a preguntar) y
+  algunas palabras de contexto ("salen para Santa Marta" -> sí, "se quedan
+  en Barranquilla" -> no). No se reutiliza `_interpretar_opcion` para este
+  paso: compara por substring de la etiqueta, y eso daría falsos positivos
+  con "no".
+- **Exención en `gestionar_reserva`:** "sale_de_barranquilla" está en la
+  lista de pasos donde "no" no cancela el wizard (junto a
+  `confirmar_accesorios`/`confirmar_contenidos_espacio` y las
+  confirmaciones de fecha/hora interpretadas) -- ahí "no" responde "se
+  quedan en Barranquilla", no "cancela la reserva". "cancelar"/"cerrar"
+  siguen cortando el flujo igual que en cualquier otro paso.
+- **`sale_de_barranquilla` NULL en reservas viejas:** la columna
+  (`postgres/init/02-schema.sql`) es NULL solo en reservas creadas antes de
+  esta pregunta; el bot siempre guarda TRUE/FALSE. Una sesión de Redis
+  vieja, parada en "confirmar" sin este dato, recibe la pregunta antes de
+  crear la reserva en vez de guardarla con el campo vacío.
+- **Renombre de la columna:** nació como `sale_area_metropolitana` (cuando
+  la pregunta era por el área metropolitana con días calendario); la
+  migración renombra en vez de recrear si encuentra la columna vieja sin la
+  nueva. `_continuar_reserva` y la exención de `gestionar_reserva` también
+  aceptan "area_metropolitana" como alias del nombre del paso, por si una
+  sesión de Redis quedó parada ahí justo antes del despliegue.
+- **El dashboard solo advierte:** desde `ReservaDetalle.tsx` la CPA puede
+  editar la respuesta y el inicio aunque quede antes del plazo del seguro
+  -- se le avisa (mismo estilo del aviso de "por confirmar"), pero no se
+  bloquea el guardado; la decisión final es suya.
 
 ### Mensajes tipo factura
 
@@ -785,7 +869,8 @@ sus líneas:
   `POST /dashboard/api/reservas/grupo/<id>/confirmar` pasa las líneas
   pendientes a `confirmada`, hace commit y **después** le escribe al
   estudiante (`recursos_service.mensaje_reserva_confirmada`, con el número
-  de reserva, que también va en la factura de cuando reservó). El envío
+  de reserva, que también va en la factura de cuando reservó, y la línea
+  "Sale de Barranquilla: Sí" si aplica -- ver "Cláusula de seguro"). El envío
   queda en `auditoria_bot` con intent `confirmacion_cpa`. Si WhatsApp
   falla, la reserva queda confirmada igual y la respuesta trae
   `notificado: false`, para que el dashboard avise que hay que contactarlo
@@ -1054,7 +1139,8 @@ tener presentes antes de tocarlo:
   pero la reserva debe conservar al menos un activo.
 - **La edición del grupo es atómica.**
   `PATCH /dashboard/api/reservas/grupo/<grupo_id>` puede cambiar horario,
-  estado y conjunto de `recurso_ids` en una sola transacción. Las líneas
+  estado, conjunto de `recurso_ids` y los datos del grupo (`tipo_uso`,
+  `modalidad`, `sale_de_barranquilla`) en una sola transacción. Las líneas
   eliminadas, agregadas o modificadas se aplican todas o ninguna. El
   solapamiento no se re-valida en Python: lo garantiza el `EXCLUDE` de
   Postgres descrito más arriba.

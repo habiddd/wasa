@@ -250,6 +250,13 @@ export function etiquetaNumeros(evento: EventoCalendario) {
   return evento.numeros.length ? `N.º ${evento.numeros.join(", ")}` : "sin número"
 }
 
+// Mismo valor que DIAS_MINIMOS_TRAMITE_SEGURO en recursos_service.py -- solo
+// para textos ("mínimo 5 días hábiles"). Son días HÁBILES (lunes a viernes,
+// sin festivos de Colombia): la fecha mínima la calcula siempre el backend
+// (ver fetchFechaMinimaSeguro / Sesion.fecha_minima_seguro en lib/api.ts),
+// nunca se recalcula acá.
+export const DIAS_MINIMOS_SEGURO = 5
+
 // --- Rejilla ----------------------------------------------------------------
 
 /** Lo único que la rejilla necesita de lo que pinta: un rango de tiempo. */
@@ -403,6 +410,13 @@ export function horaCompacta(fecha: Date) {
 
 export function fechaHora(fecha: Date) {
   return `${capitalizar(FECHA_LARGA.format(fecha))}, ${HORA.format(fecha)}`
+}
+
+/** "2026-09-25" -> "Viernes, 25 de septiembre de 2026" -- fechas del backend
+ * (ej. `fecha_minima_seguro`, `fetchFechaMinimaSeguro`) que no traen hora. */
+export function fechaCivilLarga(iso: string) {
+  const [anio, mes, dia] = iso.split("-").map(Number)
+  return capitalizar(FECHA_LARGA.format(inicioDelDia({ anio, mes, dia })))
 }
 
 export function etiquetaPeriodo(vista: Vista, ancla: DiaCivil) {

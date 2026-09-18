@@ -8,8 +8,10 @@ está disponible sale siempre de aquí (ver docs/ARQUITECTURA.md, sección
 
 import re
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 
+import holidays
 from flask import current_app
 from sqlalchemy.exc import IntegrityError
 
@@ -762,6 +764,7 @@ def crear_reservas_grupo(
     modalidad: str = "individual",
     tamano_grupo: int | None = None,
     integrantes: list[str] | None = None,
+    sale_de_barranquilla: bool | None = None,
 ) -> tuple[list[Reserva] | None, str | None]:
     """Inserta una reserva por cada recurso en `recursos`, todas ligadas al
     mismo ReservaGrupo y en una sola transacción -- si alguna choca al
@@ -785,11 +788,17 @@ def crear_reservas_grupo(
     orden en que se capturaron (orden=1 es quien reserva) -- dentro de la
     MISMA transacción, después del flush que asigna `grupo.id` y antes del
     commit, para que un choque de disponibilidad revierta también la lista
-    de integrantes."""
+    de integrantes.
+
+    `sale_de_barranquilla` es otro dato del grupo completo, igual que
+    `tipo_uso`/`modalidad`: True obliga al trámite de seguro (ver
+    DIAS_MINIMOS_TRAMITE_SEGURO); None solo debería llegar desde llamadores
+    que no pasan por el wizard del bot."""
     grupo = ReservaGrupo(
         usuario_id=usuario_id,
         tipo_uso=tipo_uso, nrc=nrc if tipo_uso == "asignatura" else None,
         modalidad=modalidad, tamano_grupo=tamano_grupo if modalidad == "grupo" else None,
+        sale_de_barranquilla=sale_de_barranquilla,
     )
     db.session.add(grupo)
     db.session.flush()  # asigna grupo.id sin cerrar la transacción
@@ -918,6 +927,10 @@ def mensaje_reserva_confirmada(reservas: list[Reserva]) -> str:
     primera = vigentes[0]
     inicio_local = primera.inicio.astimezone(ZONA_HORARIA_CPA)
     fin_local = primera.fin.astimezone(ZONA_HORARIA_CPA)
+    linea_area = (
+        f"Sale de Barranquilla: Sí (requiere seguro, mínimo {DIAS_MINIMOS_TRAMITE_SEGURO} días hábiles)\n"
+        if primera.grupo and primera.grupo.sale_de_barranquilla else ""
+    )
     return (
         "*RESERVA CONFIRMADA*\n"
         f"{_DIVISOR_FACTURA}\n"
@@ -926,6 +939,7 @@ def mensaje_reserva_confirmada(reservas: list[Reserva]) -> str:
         f"N.º de reserva: {primera.grupo_id}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
+        f"{linea_area}"
         f"{_DIVISOR_FACTURA}\n"
         f"{_cierre_confirmacion(reservas)}"
     )
@@ -1487,6 +1501,7 @@ OPCIONES_CONFIRMAR = [
     ("cambiar_hora", "Cambiar hora"),
     ("cambiar_uso", "Cambiar particular / asignatura (NRC)"),
     ("cambiar_grupo", "Cambiar grupo / integrantes"),
+    ("cambiar_sale_barranquilla", "Cambiar si sale de Barranquilla"),
     ("cancelar", "Cancelar"),
 ]
 
@@ -1543,6 +1558,128 @@ _MENSAJE_ID_INVALIDO = (
 )
 _MENSAJE_ID_REPETIDO = "Ese ID ya está en el grupo. Dame el de otro integrante."
 
+# --- Cláusula de seguro: salida de Barranquilla ------------------------------
+# Si los activos salen de Barranquilla, la CPA tramita un seguro y la reserva
+# no puede empezar antes del DIAS_MINIMOS_TRAMITE_SEGURO-ésimo día HÁBIL
+# (lunes a viernes, sin festivos de Colombia) después de hoy. Hoy no cuenta.
+DIAS_MINIMOS_TRAMITE_SEGURO = 5
+_FESTIVOS_CO = holidays.country_holidays("CO")  # se expande solo a cada año consultado
+
+OPCIONES_SALE_DE_BARRANQUILLA = [
+    ("si", "Sí, salen de Barranquilla"),
+    ("no", "No, se quedan en Barranquilla"),
+]
+
+
+def es_dia_habil(d: date) -> bool:
+    return d.weekday() < 5 and d not in _FESTIVOS_CO
+
+
+@lru_cache(maxsize=1024)
+def sumar_dias_habiles(desde: date, n: int) -> date:
+    """n-ésimo día hábil DESPUÉS de `desde` (`desde` no cuenta, sea o no hábil)."""
+    d, contados = desde, 0
+    while contados < n:
+        d += timedelta(days=1)
+        if es_dia_habil(d):
+            contados += 1
+    return d
+
+
+def _hoy_cpa() -> date:
+    return datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA).date()
+
+
+def fecha_minima_sale_de_barranquilla(hoy: date | None = None) -> date:
+    """Primer día en que puede empezar una reserva cuyos activos salen de
+    Barranquilla. `hoy` es parámetro para poder probarla; None = hoy en la CPA."""
+    return sumar_dias_habiles(hoy or _hoy_cpa(), DIAS_MINIMOS_TRAMITE_SEGURO)
+
+
+_TEXTO_PLAZO = f"mínimo {DIAS_MINIMOS_TRAMITE_SEGURO} días hábiles (lunes a viernes, sin contar festivos)"
+
+
+# `_interpretar_si_no` es determinista (nunca usa el LLM, ver
+# docs/ARQUITECTURA.md sección "Por qué separar el LLM de la lógica de
+# reservas"): un sí/no mal interpretado aquí decide si hace falta seguro.
+_SI_EXPLICITO = {"si", "sip", "claro", "correcto", "afirmativo", "obvio", "exacto",
+                 "efectivamente", "dale", "yes", "asi"}
+_NO_EXPLICITO = {"no", "nop", "nope", "negativo", "nel", "nunca", "tampoco"}
+_SI_CONTEXTO = {"sale", "salen", "saldra", "saldran", "fuera", "afuera", "viaje", "viajo", "viajamos"}
+_NO_CONTEXTO = {"quedan", "queda", "dentro", "adentro", "aqui"}
+_PATRON_NO_SE = re.compile(r"\bno (lo )?se\b(?!\s+(quedan|queda|van|va|mueven|mueve|saldran|saldra))")
+_PATRON_DUDA = re.compile(r"\b(nose|tal ?vez|quizas?|depende|no estoy segur[oa]|no sabemos)\b")
+
+
+def _interpretar_si_no(texto: str) -> bool | None:
+    """Sí/No determinista para "¿salen de Barranquilla?". Nunca usa
+    el LLM. None = ambiguo (se vuelve a preguntar). Orden:
+    1) número del menú (1 = sí, 2 = no);
+    2) duda explícita ("no sé", "tal vez") -> None;
+    3) sí y no explícitos a la vez -> None; si no, gana el explícito;
+       "no" gana a palabras de contexto ("no salen" -> False);
+    4) solo palabras de contexto ("salen para Santa Marta" -> True,
+       "se quedan en Barranquilla" -> False)."""
+    num = re.match(r"^\s*([12])\b", texto)
+    if num:
+        return num.group(1) == "1"
+    norm = _normalizar(texto)
+    if _PATRON_NO_SE.search(norm) or _PATRON_DUDA.search(norm):
+        return None
+    tokens = set(re.findall(r"[a-z]+", norm))
+    si, no = bool(tokens & _SI_EXPLICITO), bool(tokens & _NO_EXPLICITO)
+    if si and no:
+        return None
+    if no:
+        return False
+    if si:
+        return True
+    ctx_si, ctx_no = bool(tokens & _SI_CONTEXTO), bool(tokens & _NO_CONTEXTO)
+    if ctx_si != ctx_no:
+        return ctx_si
+    return None
+
+
+def _fecha_legible(d: date) -> str:
+    return f"{_DIAS_ES[d.weekday()]} {d.strftime('%d/%m/%Y')}"
+
+
+def _aviso_plazo_seguro() -> str:
+    return ("⚠️ Como los activos van a salir de Barranquilla, hay que tramitar su seguro: "
+            f"el plazo es de {_TEXTO_PLAZO}. La reserva puede empezar desde el "
+            f"{_fecha_legible(fecha_minima_sale_de_barranquilla())}.")
+
+
+def _mensaje_fecha_antes_de_plazo(fecha: date, minima: date) -> str:
+    return (f"La fecha de inicio ({fecha.strftime('%d/%m/%Y')}) queda antes del plazo del seguro. "
+            f"Como los activos salen de Barranquilla, el plazo es de {_TEXTO_PLAZO}: "
+            f"la reserva puede empezar desde el {_fecha_legible(minima)}.")
+
+
+def _error_plazo_seguro(wizard: dict, fecha_inicio: date) -> str | None:
+    """None si la fecha no incumple el plazo del seguro (o si no aplica
+    porque los activos no salen de Barranquilla); si incumple, el mensaje
+    de rechazo listo para mostrar. Usado tanto en la validación central de
+    `_avanzar_wizard` como en el rechazo temprano de fechas en lenguaje
+    natural dentro de `_continuar_reserva`."""
+    if not wizard.get("sale_de_barranquilla"):
+        return None
+    minima = fecha_minima_sale_de_barranquilla()
+    return None if fecha_inicio >= minima else _mensaje_fecha_antes_de_plazo(fecha_inicio, minima)
+
+
+def _linea_sale_de_barranquilla(wizard: dict) -> str:
+    """Línea de la factura/resumen -- ver `_mensaje_resumen` y
+    `_crear_reserva_desde_wizard`. NO se usa `_interpretar_opcion` para leer
+    la respuesta a este paso: matchea por substring de la etiqueta y "no" es
+    substring de "no se queda..." tanto como de cualquier otra cosa, así que
+    se prefiere `_interpretar_si_no`, ver el paso "sale_de_barranquilla" en
+    `_continuar_reserva`."""
+    if wizard.get("sale_de_barranquilla"):
+        return f"Sale de Barranquilla: Sí (requiere seguro, mínimo {DIAS_MINIMOS_TRAMITE_SEGURO} días hábiles)"
+    return "Sale de Barranquilla: No"
+
+
 OPCIONES_CONFIRMAR_FECHA = [
     ("si", "Sí, esa fecha está bien"),
     ("no", "No, quiero escribirla en formato dd/mm/aaaa"),
@@ -1579,6 +1716,10 @@ def _siguiente_paso_wizard(wizard: dict) -> str:
         # nombre_recurso ya se resolvió pero todavía no se encajó en el
         # carrito -- eso lo maneja _avanzar_wizard antes de llegar aquí
         # (ver el chequeo al tope de su while), así que no debería pasar.
+    # Cláusula de seguro: se pregunta antes de la fecha porque, si salen de
+    # Barranquilla, la fecha mínima de inicio cambia (5.º día hábil desde hoy).
+    if wizard.get("sale_de_barranquilla") is None:
+        return "sale_de_barranquilla"
     if not wizard.get("fecha"):
         return "fecha"
     # La hora de inicio y la de fin se piden en pasos (mensajes) separados,
@@ -1727,6 +1868,21 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
 
             continue
 
+        # Si el usuario cambió a "sale de Barranquilla" DESPUÉS de ya tener
+        # una fecha puesta (ej. "Cambiar si sale de Barranquilla" desde el
+        # resumen), esa fecha puede quedar antes del plazo del seguro -- se
+        # borra y se vuelve a pedir en vez de dejar pasar una reserva que
+        # incumple el trámite.
+        if wizard.get("fecha"):
+            minima = fecha_minima_sale_de_barranquilla()
+            fecha_actual = date.fromisoformat(wizard["fecha"])
+            error_plazo = _error_plazo_seguro(wizard, fecha_actual)
+            if error_plazo:
+                wizard.update(fecha=None, fecha_fin=None, inicio=None, fin=None,
+                              alternativas_para=[], confirmado=False)
+                avisos.append(_mensaje_fecha_antes_de_plazo(fecha_actual, minima))
+                continue
+
         paso = _siguiente_paso_wizard(wizard)
 
         if paso == "elegir_activo":
@@ -1767,17 +1923,45 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             wizard["_mensaje_menu_actual"] = mensaje
             return _con_avisos(avisos, mensaje), wizard, False
 
+        if paso == "sale_de_barranquilla":
+            wizard["opciones_actuales"] = OPCIONES_SALE_DE_BARRANQUILLA
+            wizard["paso"] = "sale_de_barranquilla"
+            mensaje = (
+                "*SALIDA DE BARRANQUILLA*\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"{_lineas_carrito(wizard['carrito'])}\n"
+                f"{_DIVISOR_FACTURA}\n"
+                + _formatear_menu(
+                    "¿Los activos van a salir de Barranquilla? Si salen, hay que tramitar el "
+                    f"seguro de los activos y el plazo es de {_TEXTO_PLAZO}: la reserva podría "
+                    f"empezar desde el {_fecha_legible(fecha_minima_sale_de_barranquilla())}.",
+                    OPCIONES_SALE_DE_BARRANQUILLA,
+                )
+            )
+            wizard["_mensaje_menu_actual"] = mensaje
+            return _con_avisos(avisos, mensaje), wizard, False
+
         if paso == "fecha":
             ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_CPA)
             wizard["opciones_actuales"] = None
             wizard["paso"] = "fecha"
             lineas_activos = _lineas_carrito(wizard["carrito"])
+            # Si sale de Barranquilla, se recuerda la fecha mínima justo en
+            # el paso donde el usuario va a escribirla (ver
+            # `fecha_minima_sale_de_barranquilla` y la validación al tope
+            # del while).
+            linea_minima = (
+                f"Fecha mínima de inicio: {_fecha_legible(fecha_minima_sale_de_barranquilla())} "
+                f"(seguro: {_TEXTO_PLAZO}, porque los activos salen de Barranquilla).\n"
+                if wizard.get("sale_de_barranquilla") else ""
+            )
             mensaje = (
                 "*FECHA DE RESERVA*\n"
                 f"{_DIVISOR_FACTURA}\n"
                 f"{lineas_activos}\n"
                 f"{_DIVISOR_FACTURA}\n"
                 f"Hoy es {_DIAS_ES[ahora_local.weekday()]} {ahora_local.strftime('%d/%m/%Y')}.\n"
+                f"{linea_minima}"
                 "¿Qué fecha necesitas? Un solo día: dd/mm/aaaa (ej. 22/11/2026). "
                 "Varios días: dd/mm/aaaa a dd/mm/aaaa (ej. 22/11/2026 a 25/11/2026)."
             )
@@ -1913,10 +2097,13 @@ def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, s
         f"Reservado por: {usuario.nombre}\n"
         f"{_linea_tipo_uso(wizard)}\n"
         f"{_lineas_grupo(wizard)}\n"
+        f"{_linea_sale_de_barranquilla(wizard)}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
     )
+    if wizard.get("sale_de_barranquilla"):
+        resumen += "\n" + _aviso_plazo_seguro()
     return resumen + "\n\n" + _formatear_menu("¿Qué quieres hacer?", opciones)
 
 
@@ -2056,6 +2243,17 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
             "Esa fecha/hora ya pasó mientras confirmabas. Intenta reservar de nuevo con una fecha futura."
         ), {**sesion, "reserva_wizard": None}
 
+    # Última verificación del plazo del seguro -- por si el tiempo pasó
+    # entre que se puso la fecha y este "Confirmar" (ej. sesión pausada
+    # varios días). La validación de `_avanzar_wizard` ya cubre el caso
+    # normal (cambiar la fecha o el "sale de Barranquilla" desde el
+    # resumen); esto es la red de seguridad final antes de escribir en la
+    # base.
+    if _error_plazo_seguro(wizard, inicio_utc.astimezone(ZONA_HORARIA_CPA).date()):
+        wizard["confirmado"] = False
+        mensaje, wizard, _ = _avanzar_wizard(wizard, usuario)  # la validación de arriba borra la fecha y avisa
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
     # Última verificación antes de escribir en la base -- puede haber
     # cambiado desde que se eligió la hora (ej. otra persona reservó algo
     # justo mientras este usuario confirmaba).
@@ -2077,6 +2275,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         tipo_uso=wizard.get("tipo_uso") or "particular", nrc=wizard.get("nrc"),
         modalidad=wizard.get("modalidad") or "individual",
         tamano_grupo=wizard.get("tamano_grupo"), integrantes=wizard.get("integrantes"),
+        sale_de_barranquilla=bool(wizard.get("sale_de_barranquilla")),
     )
     if error is not None:
         return (
@@ -2097,12 +2296,16 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         f"Reservado por: {usuario.nombre}\n"
         f"{_linea_tipo_uso(wizard)}\n"
         f"{_lineas_grupo(wizard)}\n"
+        f"{_linea_sale_de_barranquilla(wizard)}\n"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
     )
     if aviso_confirmacion:
         mensaje += "\n" + aviso_confirmacion
+    if wizard.get("sale_de_barranquilla"):
+        mensaje += ("\n🛡️ Como los activos salen de Barranquilla, la CPA debe tramitar su seguro antes de la entrega: "
+                    f"plazo de {_TEXTO_PLAZO} (fecha mínima de inicio: {_fecha_legible(fecha_minima_sale_de_barranquilla())}).")
     return mensaje, sesion_limpia
 
 
@@ -2242,6 +2445,10 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         "tamano_grupo": None,
         "integrantes": [],
         "grupo_confirmado": False,
+        # None = todavía no se preguntó (ver paso "sale_de_barranquilla" en
+        # _avanzar_wizard); toda lectura usa wizard.get(...), porque una
+        # sesión vieja en Redis, de antes de esta pregunta, no trae la clave.
+        "sale_de_barranquilla": None,
         "fecha": None,
         "fecha_fin": None,
         "inicio": None,
@@ -2394,6 +2601,28 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
         return mensaje, {**sesion, "reserva_wizard": wizard}
 
+    # "area_metropolitana": alias del nombre del paso antes del renombre a
+    # "sale_de_barranquilla" -- una sesión de Redis que quedó parada ahí
+    # justo antes del despliegue sigue funcionando con el mismo handler.
+    if paso in ("sale_de_barranquilla", "area_metropolitana"):
+        # No se usa `_interpretar_opcion` acá a propósito (falsos positivos
+        # por substring, ver `_linea_sale_de_barranquilla`) -- este paso
+        # tiene su propio parser determinista.
+        valor = _interpretar_si_no(texto_usuario)
+        if valor is None:
+            return (
+                "No te entendí. Responde *1* si los activos salen de Barranquilla "
+                "o *2* si se quedan en Barranquilla.\n\n" + (wizard.get("_mensaje_menu_actual") or "")
+            ), {**sesion, "reserva_wizard": wizard}
+        wizard["sale_de_barranquilla"] = valor
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        if valor:
+            mensaje = _con_avisos([_aviso_plazo_seguro()], mensaje)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
     if paso in ("elegir_activo", "elegir_marca", "elegir_modelo"):
         error = _aplicar_respuesta_menu(wizard, texto_usuario)
         if error:
@@ -2440,6 +2669,9 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
                 return (
                     "La fecha de fin debe ser igual o después de la fecha de inicio. ¿Puedes revisar el rango?"
                 ), {**sesion, "reserva_wizard": wizard}
+            error_plazo = _error_plazo_seguro(wizard, fecha_inicio_interp)
+            if error_plazo:
+                return error_plazo + " Dime otra fecha desde esa, en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
             inicio_legible = f"{_DIAS_ES[fecha_inicio_interp.weekday()]} {fecha_inicio_interp.strftime('%d/%m/%Y')}"
             fin_legible = f"{_DIAS_ES[fecha_fin_interp.weekday()]} {fecha_fin_interp.strftime('%d/%m/%Y')}"
             wizard["fecha_pendiente"] = fecha_inicio_interp.isoformat()
@@ -2456,6 +2688,9 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
                 return (
                     "Esa fecha ya pasó. Dime una fecha de hoy en adelante, en formato dd/mm/aaaa."
                 ), {**sesion, "reserva_wizard": wizard}
+            error_plazo = _error_plazo_seguro(wizard, fecha_interpretada)
+            if error_plazo:
+                return error_plazo + " Dime otra fecha desde esa, en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
             fecha_legible = f"{_DIAS_ES[fecha_interpretada.weekday()]} {fecha_interpretada.strftime('%d/%m/%Y')}"
             wizard["fecha_pendiente"] = fecha_interpretada.isoformat()
             wizard["paso"] = "confirmar_fecha_interpretada"
@@ -2510,6 +2745,9 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
                 return (
                     "La fecha de fin debe ser igual o después de la fecha de inicio. ¿Puedes revisar el rango?"
                 ), {**sesion, "reserva_wizard": wizard}
+            error_plazo = _error_plazo_seguro(wizard, nueva_inicio)
+            if error_plazo:
+                return error_plazo + " Dime otra fecha desde esa, en formato dd/mm/aaaa.", {**sesion, "reserva_wizard": wizard}
 
             pendiente_inicio = date.fromisoformat(wizard["fecha_pendiente"])
             pendiente_fin_str = wizard.get("fecha_fin_pendiente")
@@ -2677,6 +2915,14 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             ), {**sesion, "reserva_wizard": None}
 
         if valor == "confirmar":
+            if wizard.get("sale_de_barranquilla") is None:
+                # Sesión de Redis de antes de esta pregunta, ya parada en
+                # "confirmar" -- se le hace la pregunta que le falta en vez
+                # de crear la reserva sin ese dato.
+                mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+                if listo:
+                    return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+                return mensaje, {**sesion, "reserva_wizard": wizard}
             wizard["alternativas_para"] = []  # vio la oferta y eligió confirmar sin usarla
             wizard["confirmado"] = True
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
@@ -2701,6 +2947,8 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             wizard.update(tipo_uso=None, nrc=None)
         elif valor == "cambiar_grupo":
             wizard.update(modalidad=None, tamano_grupo=None, integrantes=[], grupo_confirmado=False)
+        elif valor in ("cambiar_sale_barranquilla", "cambiar_area"):
+            wizard.update(sale_de_barranquilla=None)
 
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
         if listo:
@@ -2910,6 +3158,11 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
         "confirmar_hora_fin_interpretada",
         "confirmar_accesorios",
         "confirmar_contenidos_espacio",
+        # "sale_de_barranquilla": "no" responde "¿salen de Barranquilla?"
+        # (= se quedan), no "cancela la reserva". "cancelar"/"cerrar" siguen cortando.
+        "sale_de_barranquilla",
+        # area_metropolitana: sesiones de Redis de antes del renombre.
+        "area_metropolitana",
         # A propósito NO se agrega "elegir_alternativa" acá: ese paso no
         # tiene ninguna opción que empiece por "no" (sus opciones son
         # nombres de activos, "Volver al resumen" o "Elegir otro tipo de

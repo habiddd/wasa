@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react"
+import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
@@ -29,8 +29,10 @@ import {
   confirmarReservaGrupo,
   decidirReserva,
   eliminarReservaGrupo,
+  fetchFechaMinimaSeguro,
   type CambiosReserva,
   type EstadoReserva,
+  type FechaMinimaSeguro,
   type Modalidad,
   type Recurso,
   type Sesion,
@@ -39,10 +41,14 @@ import {
 
 import {
   aInputLocal,
+  claveDe,
   desdeInputLocal,
+  diaDe,
+  DIAS_MINIMOS_SEGURO,
   etiquetaEvento,
   etiquetaNumeros,
   etiquetaReserva,
+  fechaCivilLarga,
   fechaHora,
   type EventoCalendario,
 } from "./calendario-utils"
@@ -134,6 +140,15 @@ function Detalle({
   }))
   const ids = new Set(lineas.map(({ reserva }) => reserva.recurso_id))
   const raices = lineas.filter(({ padreId }) => padreId === null || !ids.has(padreId))
+  const primera = evento.reservas[0]
+  // `fecha_minima_seguro` ya viene calculada por el backend (5 días
+  // hábiles desde `creado_en`, festivos de Colombia, ver
+  // recursos_service.fecha_minima_sale_de_barranquilla) -- acá solo se
+  // compara, nunca se recalcula el plazo en el frontend.
+  const incumplePlazoDesdeCreacion =
+    primera.sale_de_barranquilla === true &&
+    !!primera.fecha_minima_seguro &&
+    claveDe(diaDe(evento.inicio)) < primera.fecha_minima_seguro
 
   function hijosDe(recursoId: number) {
     return lineas.filter(({ padreId }) => padreId === recursoId)
@@ -233,7 +248,29 @@ function Detalle({
             "Individual"
           )}
         </Dato>
+        <Dato etiqueta="Salida de Barranquilla">
+          {primera.sale_de_barranquilla === true ? (
+            <>
+              <Badge variant="warning">Sale de Barranquilla</Badge>
+              <p className="text-muted-foreground">
+                Requiere trámite de seguro (mín. {DIAS_MINIMOS_SEGURO} días hábiles)
+              </p>
+            </>
+          ) : primera.sale_de_barranquilla === false ? (
+            "No sale de Barranquilla"
+          ) : (
+            <span className="text-muted-foreground">Sin registrar</span>
+          )}
+        </Dato>
       </div>
+
+      {incumplePlazoDesdeCreacion && (
+        <p className="rounded-md border border-dashed border-warning bg-warning/5 px-3 py-2 text-sm">
+          Los activos salen de Barranquilla y la reserva empieza antes del plazo del seguro (5
+          días hábiles desde que se creó; fecha mínima: {fechaCivilLarga(primera.fecha_minima_seguro!)}
+          ): verifica que el seguro alcance a tramitarse.
+        </p>
+      )}
 
       <Dato
         etiqueta={
@@ -286,9 +323,35 @@ function FormularioEdicion({
   const [integrantes, setIntegrantes] = useState<string[]>(
     primera.modalidad === "grupo" ? primera.integrantes : []
   )
+  const [saleBarranquilla, setSaleBarranquilla] = useState<"si" | "no" | "">(
+    primera.sale_de_barranquilla === true ? "si" : primera.sale_de_barranquilla === false ? "no" : ""
+  )
   const [guardando, setGuardando] = useState(false)
   const [agregandoActivo, setAgregandoActivo] = useState(false)
   const [activosParaAgregar, setActivosParaAgregar] = useState<number[]>([])
+
+  // Fecha mínima de HOY (no de creación, a diferencia del aviso de solo
+  // lectura en Detalle) para el aviso del Select "¿Sale de Barranquilla?" --
+  // la calcula el backend (festivos de Colombia), nunca este componente.
+  const [minimaHoy, setMinimaHoy] = useState<FechaMinimaSeguro | null>(null)
+  useEffect(() => {
+    let vigente = true
+    fetchFechaMinimaSeguro()
+      .then((datos) => {
+        if (vigente) setMinimaHoy(datos)
+      })
+      .catch(() => {})
+    return () => {
+      vigente = false
+    }
+  }, [])
+
+  const inicioEditado = desdeInputLocal(inicio)
+  const incumplePlazoDesdeHoy =
+    saleBarranquilla === "si" &&
+    !!inicioEditado &&
+    !!minimaHoy &&
+    claveDe(diaDe(inicioEditado)) < minimaHoy.fecha_minima
 
   const actuales = evento.reservas.map(
     (r) => recursos.find((recurso) => recurso.id === r.recurso_id) ??
@@ -434,6 +497,7 @@ function FormularioEdicion({
       nrc?: string | null
       modalidad?: Modalidad
       integrantes?: string[]
+      sale_de_barranquilla?: boolean
     } = {}
     if (nuevoInicio.getTime() !== evento.inicio.getTime()) cambios.inicio = nuevoInicio.toISOString()
     if (nuevoFin.getTime() !== evento.fin.getTime()) cambios.fin = nuevoFin.toISOString()
@@ -492,6 +556,15 @@ function FormularioEdicion({
       } else if (modalidad !== primera.modalidad) {
         cambios.modalidad = "individual"
         cambios.integrantes = []
+      }
+
+      // "" (sin tocar el Select) nunca se envía -- no bloquea, y el dashboard
+      // no tiene por qué forzar una respuesta que reservas viejas no tienen.
+      if (saleBarranquilla !== "") {
+        const saleBarranquillaNueva = saleBarranquilla === "si"
+        if (saleBarranquillaNueva !== primera.sale_de_barranquilla) {
+          cambios.sale_de_barranquilla = saleBarranquillaNueva
+        }
       }
     }
 
@@ -657,6 +730,34 @@ function FormularioEdicion({
               <SelectItem value="grupo">Grupo</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+      )}
+
+      {evento.numeros.length === 1 && (
+        <div className="space-y-1.5">
+          <Label htmlFor="reserva-sale-barranquilla">¿Sale de Barranquilla?</Label>
+          <Select value={saleBarranquilla} onValueChange={(v) => setSaleBarranquilla(v as "si" | "no")}>
+            <SelectTrigger id="reserva-sale-barranquilla" className="w-full">
+              <SelectValue placeholder="Sin registrar" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="si">Sí, requiere seguro</SelectItem>
+              <SelectItem value="no">No</SelectItem>
+            </SelectContent>
+          </Select>
+          {saleBarranquilla === "si" && (
+            <p className="text-xs text-muted-foreground">
+              Requiere tramitar el seguro de los activos: plazo mínimo de {DIAS_MINIMOS_SEGURO} días
+              hábiles (lunes a viernes, sin festivos).
+            </p>
+          )}
+          {incumplePlazoDesdeHoy && minimaHoy && (
+            <p className="text-xs text-warning">
+              Ojo: el inicio queda antes de la fecha mínima del seguro (
+              {fechaCivilLarga(minimaHoy.fecha_minima)}, {DIAS_MINIMOS_SEGURO} días hábiles desde
+              hoy). Puedes guardar igual.
+            </p>
+          )}
         </div>
       )}
 
