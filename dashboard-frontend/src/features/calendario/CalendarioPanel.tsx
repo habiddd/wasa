@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import { ChevronLeft, ChevronRight, Plus } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -11,12 +11,19 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useActivosContext } from "@/features/activos/activos-context"
-import { fetchReservasRango, type EstadoReserva, type Sesion } from "@/lib/api"
+import { NuevaReservaDialog } from "@/features/reservas/NuevaReservaDialog"
+import {
+  fetchReservasRango,
+  type EstadoReserva,
+  type ReservaCreada,
+  type Sesion,
+} from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 import {
   agruparEnEventos,
   desplazar,
+  diaDe,
   diasDelPeriodo,
   estiloDe,
   etiquetaPeriodo,
@@ -96,6 +103,7 @@ export function CalendarioPanel() {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [idSeleccionado, setIdSeleccionado] = useState<number | null>(null)
+  const [creando, setCreando] = useState(false)
 
   // El catálogo de recursos alimenta el filtro por activo/lugar; el contexto
   // no se carga solo (ver ActivosPanel/LugaresPanel).
@@ -206,6 +214,16 @@ export function CalendarioPanel() {
     cambiarVista("dia")
   }
 
+  // La reserva nueva puede caer fuera del periodo visible: se lleva el
+  // calendario a su día para que el modal de detalle pueda abrirla. Si el
+  // periodo cambia, el efecto de `cargar` la trae con el rango nuevo.
+  async function reservaCreada(r: ReservaCreada) {
+    const primera = r.reservas[0]
+    if (primera?.inicio) setAncla(diaDe(new Date(primera.inicio)))
+    await cargar()
+    setIdSeleccionado(primera?.id ?? null)
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -265,6 +283,10 @@ export function CalendarioPanel() {
             </SelectContent>
           </Select>
 
+          <Button size="sm" onClick={() => setCreando(true)}>
+            <Plus />
+            Nueva reserva
+          </Button>
           <Button size="sm" variant="outline" onClick={() => cargar()}>
             Refrescar
           </Button>
@@ -351,6 +373,14 @@ export function CalendarioPanel() {
         onClose={() => setIdSeleccionado(null)}
         onGuardado={cargar}
       />
+
+      {creando && (
+        <NuevaReservaDialog
+          recursos={activos}
+          onClose={() => setCreando(false)}
+          onCreada={reservaCreada}
+        />
+      )}
     </div>
   )
 }

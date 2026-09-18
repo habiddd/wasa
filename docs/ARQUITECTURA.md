@@ -1238,7 +1238,7 @@ validaciones de forma que ya tenía `api_actualizar_reserva_grupo`
   usa para destildar en vivo un activo que se volvió ocupado mientras se
   completaban los demás campos.
 - **Formulario** (`features/reservas/NuevaReservaDialog.tsx`, botón "Nueva
-  reserva" de `ReservasPanel`): Dialog centrado con una sección por paso del
+  reserva" de `ReservasPanel` y de `CalendarioPanel`): Dialog centrado con una sección por paso del
   bot separadas por `Separator` (para quién → uso/NRC → grupo/integrantes →
   espacios y activos → sale de Barranquilla → horario → aviso por WhatsApp).
   En la UI se habla de "usuario", no de "cliente" (el campo de la API sigue
@@ -1257,6 +1257,11 @@ validaciones de forma que ya tenía `api_actualizar_reserva_grupo`
     de un equipo del espacio (que también tienen `espacio_id`) se muestran
     solo bajo su equipo. El conteo de seleccionados va solo en la nota bajo
     las dos listas.
+- **Al crear desde el Calendario**, el panel mueve el ancla al día de inicio
+  de la reserva nueva (puede caer fuera del periodo visible), recarga el
+  rango y abre su detalle. Si los filtros del calendario (tipo, recurso,
+  usuario, estado) la ocultan, la reserva se crea igual pero el modal no se
+  abre.
 
 ## Excepciones: lista negra de fechas
 
