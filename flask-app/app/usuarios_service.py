@@ -6,6 +6,9 @@ con `registro_completo=False` y sin nombre/código/cédula hasta que
 registro_service.py complete esos datos por el flujo de preguntas.
 """
 
+import re
+
+from app import registro_service
 from app.extensions import db
 from app.models import Usuario
 
@@ -25,3 +28,77 @@ def obtener_o_crear_usuario(telefono_wa: str, jid_wa: str | None = None) -> Usua
     db.session.add(usuario)
     db.session.commit()
     return usuario
+
+
+def normalizar_telefono(valor: str) -> str | None:
+    """Deja solo dígitos y antepone el indicativo de Colombia (57) a un
+    celular de 10 dígitos escrito sin él -- mismo formato que usa
+    telefono_wa (ver whatsapp_client). None si no queda un número
+    plausible (8 a 15 dígitos)."""
+    digitos = re.sub(r"\D", "", valor or "")
+    if len(digitos) == 10 and digitos.startswith("3"):
+        digitos = "57" + digitos
+    return digitos if 8 <= len(digitos) <= 15 else None
+
+
+def preparar_usuario_dashboard(
+    nombre: str, telefono: str, codigo_uninorte: str | None = None, cedula: str | None = None
+) -> tuple[Usuario | None, bool, str | None]:
+    """Da de alta (o reusa) el cliente de una reserva creada desde el
+    dashboard, con las mismas reglas de validación que el registro por
+    WhatsApp (registro_service). Devuelve (usuario, creado, error); en caso
+    de error `usuario` es None.
+
+    Si ya existe un Usuario con ese `telefono_wa`, se reusa esa fila y solo
+    se rellenan los campos que tenía vacíos -- nunca se pisa un dato que el
+    cliente ya había dado por WhatsApp. `registro_completo` solo se puede
+    poner en True acá (nunca se apaga): si con estos datos ya quedan los
+    tres campos, se marca completo igual que lo haría el bot.
+
+    No hace commit -- solo `db.session.add`/`flush` -- para que la
+    transacción la controle quien llama (la creación de la reserva), y así
+    un choque de disponibilidad revierta también este alta."""
+    nombre_valido = registro_service.validar_campo("nombre", nombre or "")
+    if nombre_valido is None:
+        return None, False, "Escribe nombre y apellido."
+
+    telefono_valido = normalizar_telefono(telefono or "")
+    if telefono_valido is None:
+        return None, False, "Teléfono inválido: incluye el número de celular (ej. 3001234567)."
+
+    codigo_valido = None
+    if codigo_uninorte:
+        codigo_valido = registro_service.validar_codigo_uninorte(codigo_uninorte)
+        if codigo_valido is None:
+            return None, False, "ID uninorte inválido (3 a 30 caracteres)."
+
+    cedula_valida = None
+    if cedula:
+        cedula_valida = registro_service.validar_campo("cedula", cedula)
+        if cedula_valida is None:
+            return None, False, "Cédula inválida (5 a 15 dígitos)."
+
+    usuario = Usuario.query.filter_by(telefono_wa=telefono_valido).first()
+    if usuario:
+        if not usuario.nombre:
+            usuario.nombre = nombre_valido
+        if not usuario.codigo_uninorte and codigo_valido:
+            usuario.codigo_uninorte = codigo_valido
+        if not usuario.cedula and cedula_valida:
+            usuario.cedula = cedula_valida
+        if usuario.nombre and usuario.codigo_uninorte and usuario.cedula:
+            usuario.registro_completo = True
+        db.session.flush()
+        return usuario, False, None
+
+    usuario = Usuario(
+        telefono_wa=telefono_valido,
+        nombre=nombre_valido,
+        codigo_uninorte=codigo_valido,
+        cedula=cedula_valida,
+        rol="estudiante",
+        registro_completo=bool(nombre_valido and codigo_valido and cedula_valida),
+    )
+    db.session.add(usuario)
+    db.session.flush()
+    return usuario, True, None

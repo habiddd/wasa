@@ -23,7 +23,15 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app import estado_bot, fechas_bloqueadas_service, guardrails, recursos_service, registro_service, whatsapp_client
+from app import (
+    estado_bot,
+    fechas_bloqueadas_service,
+    guardrails,
+    recursos_service,
+    registro_service,
+    usuarios_service,
+    whatsapp_client,
+)
 from app.extensions import db, redis_client
 from app.models import (
     AuditoriaBot,
@@ -337,6 +345,7 @@ def _serializar_usuario(u: Usuario) -> dict:
         "cedula": u.cedula,
         "rol": u.rol,
         "activo": u.activo,
+        "registro_completo": u.registro_completo,
         "creado_en": u.creado_en.isoformat() if u.creado_en else None,
     }
 
@@ -346,11 +355,14 @@ def api_usuarios():
     # Solo usuarios que terminaron el flujo de registro por WhatsApp -- deja
     # afuera contactos a medio registrar y el usuario dummy de seed.py
     # (registro_completo=False), que no es un registro real del bot.
-    usuarios = (
-        Usuario.query.filter_by(registro_completo=True)
-        .order_by(Usuario.creado_en.desc())
-        .all()
-    )
+    # ?incluir_incompletos=1 los incluye igual -- lo usa el selector de
+    # cliente al crear una reserva desde el dashboard (ver
+    # api_crear_reserva), donde un cliente nuevo o a medio registrar
+    # también debe poder elegirse.
+    consulta = Usuario.query
+    if request.args.get("incluir_incompletos") != "1":
+        consulta = consulta.filter_by(registro_completo=True)
+    usuarios = consulta.order_by(Usuario.creado_en.desc()).all()
     return jsonify([_serializar_usuario(u) for u in usuarios])
 
 
@@ -471,6 +483,158 @@ def api_reservas():
     return jsonify([_serializar_reserva(r) for r in reservas])
 
 
+@bp.route("/api/reservas/ocupados")
+def api_reservas_ocupados():
+    """IDs de recurso ocupados (confirmada/pendiente) en un rango horario --
+    lo usa el formulario "Nueva reserva" del dashboard para avisar en vivo
+    si un activo que ya estaba marcado deja de estar libre mientras se
+    completa el formulario."""
+    inicio_crudo, fin_crudo = request.args.get("inicio"), request.args.get("fin")
+    if not inicio_crudo or not fin_crudo:
+        return jsonify({"error": "Los parámetros 'inicio' y 'fin' son obligatorios."}), 400
+    try:
+        inicio, fin = _fecha_iso(inicio_crudo), _fecha_iso(fin_crudo)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Los parámetros 'inicio' y 'fin' deben ser fechas ISO-8601."}), 400
+
+    return jsonify({"ocupados": sorted(recursos_service.ids_ocupados_en_rango(inicio, fin))})
+
+
+def _desc_activo(recurso: Recurso) -> str:
+    return f"{recurso.nombre} ({recurso.placa})" if recurso.placa else recurso.nombre
+
+
+@bp.route("/api/reservas", methods=["POST"])
+def api_crear_reserva():
+    """Crea una reserva completa desde el dashboard, con los mismos campos y
+    validaciones de forma que el wizard del bot por WhatsApp (ver
+    recursos_service._avanzar_wizard), pero sin sus bloqueos "blandos":
+    fecha bloqueada, plazo del seguro e inicio ya pasado solo se avisan acá
+    (`advertencias` en la respuesta), no impiden crear la reserva -- quien
+    la crea ya es la CPA (ver docs/ARQUITECTURA.md, sección "Crear reservas
+    desde el dashboard"). Nace 'confirmada' con `canal_origen='dashboard'`
+    sin importar `requiere_confirmacion`: no tiene sentido que la CPA se
+    autoconfirme algo que acaba de crear ella misma."""
+    datos = request.get_json(silent=True) or {}
+
+    usuario_id = datos.get("usuario_id")
+    cliente_nuevo = datos.get("cliente_nuevo")
+    usa_usuario_id = isinstance(usuario_id, int) and not isinstance(usuario_id, bool)
+    usa_cliente_nuevo = isinstance(cliente_nuevo, dict)
+    if usa_usuario_id == usa_cliente_nuevo:
+        return jsonify({"error": "Indica para quién es la reserva."}), 400
+
+    recurso_ids = datos.get("recurso_ids")
+    if (
+        not isinstance(recurso_ids, list)
+        or not recurso_ids
+        or any(not isinstance(recurso_id, int) or isinstance(recurso_id, bool) for recurso_id in recurso_ids)
+        or len(recurso_ids) != len(set(recurso_ids))
+    ):
+        return jsonify({"error": "Elige al menos un activo, sin repetir."}), 400
+
+    recursos = Recurso.query.filter(Recurso.id.in_(recurso_ids)).all()
+    if len(recursos) != len(recurso_ids):
+        return jsonify({"error": "Alguno de los activos indicados no existe."}), 400
+    for recurso in recursos:
+        if recurso.estado != recursos_service.ESTADO_DISPONIBLE:
+            return jsonify(
+                {"error": f"No se puede reservar {_desc_activo(recurso)}: está {recurso.estado}."}
+            ), 400
+
+    try:
+        inicio, fin = _fecha_iso(datos.get("inicio")), _fecha_iso(datos.get("fin"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Las fechas de inicio y fin deben ser ISO-8601."}), 400
+    if fin <= inicio:
+        return jsonify({"error": _MENSAJES_INTEGRIDAD_RESERVA["rango_valido"]}), 400
+
+    nrc_limpio, error = _validar_tipo_uso(datos.get("tipo_uso"), datos.get("nrc"))
+    if error:
+        return jsonify({"error": error}), 400
+
+    modalidad = datos.get("modalidad")
+    if modalidad not in ("individual", "grupo"):
+        return jsonify({"error": "La modalidad debe ser 'individual' o 'grupo'."}), 400
+
+    codigos_validados = None
+    if modalidad == "grupo":
+        codigos_validados, error = _validar_integrantes(datos.get("integrantes"))
+        if error:
+            return jsonify({"error": error}), 400
+
+    sale_de_barranquilla = datos.get("sale_de_barranquilla")
+    if not isinstance(sale_de_barranquilla, bool):
+        return jsonify({"error": "Indica si los activos salen de Barranquilla."}), 400
+
+    usuario_creado = False
+    if usa_usuario_id:
+        usuario = Usuario.query.get(usuario_id)
+        if usuario is None:
+            return jsonify({"error": "El usuario no existe."}), 404
+    else:
+        usuario, usuario_creado, error = usuarios_service.preparar_usuario_dashboard(
+            cliente_nuevo.get("nombre"),
+            cliente_nuevo.get("telefono"),
+            cliente_nuevo.get("codigo_uninorte"),
+            cliente_nuevo.get("cedula"),
+        )
+        if error:
+            return jsonify({"error": error}), 400
+
+    ocupados = recursos_service.ids_ocupados_en_rango(inicio, fin, recurso_ids)
+    if ocupados:
+        db.session.rollback()
+        nombres = [_desc_activo(r) for r in recursos if r.id in ocupados]
+        return jsonify({
+            "error": f"Ocupado en ese horario: {', '.join(nombres)}.",
+            "ocupados": sorted(ocupados),
+        }), 409
+
+    advertencias = recursos_service.advertencias_fechas(inicio, fin, sale_de_barranquilla)
+    if usa_cliente_nuevo and not usuario_creado:
+        advertencias.append(
+            f"Ya existía un usuario con ese teléfono ({usuario.nombre or usuario.telefono_wa}); "
+            "la reserva quedó a su nombre."
+        )
+
+    reservas, error = recursos_service.crear_reservas_grupo(
+        usuario.id,
+        recursos,
+        inicio,
+        fin,
+        tipo_uso=datos.get("tipo_uso"),
+        nrc=nrc_limpio,
+        modalidad=modalidad,
+        tamano_grupo=len(codigos_validados) if modalidad == "grupo" else None,
+        integrantes=codigos_validados,
+        sale_de_barranquilla=sale_de_barranquilla,
+        canal_origen="dashboard",
+        aprobada_por_cpa=True,
+    )
+    if error:
+        return jsonify(
+            {"error": "Alguno de los activos se acaba de reservar en ese horario. Intenta de nuevo."}
+        ), 409
+
+    completas = _reservas_del_grupo(reservas[0].grupo_id)
+
+    notificado = None
+    if datos.get("notificar") is True:
+        notificado = _avisar_estudiante(
+            usuario, recursos_service.mensaje_reserva_confirmada(completas), "reserva_dashboard"
+        )
+
+    return jsonify({
+        "reservas": [_serializar_reserva(r) for r in completas],
+        "grupo_id": reservas[0].grupo_id,
+        "usuario": _serializar_usuario(usuario),
+        "usuario_creado": usuario_creado,
+        "advertencias": advertencias,
+        "notificado": notificado,
+    }), 201
+
+
 # Campos que el calendario puede modificar de una reserva. No incluye
 # `usuario_id` ni `grupo_id`: reasignar una reserva a otra persona o moverla
 # de carrito no es una edición del calendario, es otra reserva.
@@ -557,6 +721,44 @@ def api_actualizar_reserva(reserva_id):
     return jsonify(_serializar_reserva(reserva))
 
 
+def _validar_tipo_uso(tipo_uso, nrc) -> tuple[str | None, str | None]:
+    """Valida uso/NRC con las mismas reglas del wizard del bot (ver
+    recursos_service._avanzar_wizard). Devuelve (nrc_limpio, error); para
+    'particular' el nrc limpio siempre es None. Compartido por el PATCH de
+    grupo y la creación de reservas desde el dashboard."""
+    if tipo_uso not in ("particular", "asignatura"):
+        return None, "El uso debe ser 'particular' o 'asignatura'."
+    if tipo_uso == "particular":
+        return None, None
+    if not isinstance(nrc, str) or not re.fullmatch(r"\d{4}", nrc):
+        return None, "El NRC debe tener exactamente 4 dígitos."
+    return nrc, None
+
+
+def _validar_integrantes(integrantes) -> tuple[list[str] | None, str | None]:
+    """Valida la lista de códigos Uninorte de un grupo (2 a
+    TAMANO_GRUPO_MAX, sin repetidos), igual que el wizard del bot. Devuelve
+    (códigos limpios, error). Compartido por el PATCH de grupo y la
+    creación de reservas desde el dashboard."""
+    if not isinstance(integrantes, list) or not (
+        recursos_service.TAMANO_GRUPO_MIN <= len(integrantes) <= recursos_service.TAMANO_GRUPO_MAX
+    ):
+        return None, (
+            f"El grupo debe tener entre {recursos_service.TAMANO_GRUPO_MIN} y "
+            f"{recursos_service.TAMANO_GRUPO_MAX} integrantes."
+        )
+
+    codigos_validados = []
+    for codigo in integrantes:
+        codigo_valido = registro_service.validar_codigo_uninorte(codigo) if isinstance(codigo, str) else None
+        if codigo_valido is None:
+            return None, f"El ID uninorte '{codigo}' no es válido."
+        codigos_validados.append(codigo_valido)
+    if len(codigos_validados) != len(set(codigos_validados)):
+        return None, "No puede haber integrantes repetidos."
+    return codigos_validados, None
+
+
 @bp.route("/api/reservas/grupo/<int:grupo_id>", methods=["PATCH"])
 def api_actualizar_reserva_grupo(grupo_id):
     """Actualiza horario/estado y activos de una reserva completa atomically."""
@@ -577,9 +779,6 @@ def api_actualizar_reserva_grupo(grupo_id):
     cambios, error = _preparar_cambios_reserva(datos, _CAMPOS_EDITABLES_RESERVA)
     if error:
         return jsonify({"error": error}), 400
-
-    if tiene_tipo_uso and tipo_uso_nuevo not in ("particular", "asignatura"):
-        return jsonify({"error": "El uso debe ser 'particular' o 'asignatura'."}), 400
 
     if tiene_modalidad and modalidad_nueva not in ("individual", "grupo"):
         return jsonify({"error": "La modalidad debe ser 'individual' o 'grupo'."}), 400
@@ -608,15 +807,12 @@ def api_actualizar_reserva_grupo(grupo_id):
     # el tipo de uso), el otro se completa con lo que ya tenía el grupo.
     if tiene_tipo_uso or tiene_nrc:
         tipo_uso_efectivo = tipo_uso_nuevo if tiene_tipo_uso else grupo.tipo_uso
-        if tipo_uso_efectivo == "asignatura":
-            nrc_efectivo = nrc_nuevo if tiene_nrc else grupo.nrc
-            if not isinstance(nrc_efectivo, str) or not re.fullmatch(r"\d{4}", nrc_efectivo):
-                return jsonify({"error": "El NRC debe tener exactamente 4 dígitos."}), 400
-            grupo.tipo_uso = "asignatura"
-            grupo.nrc = nrc_efectivo
-        else:
-            grupo.tipo_uso = "particular"
-            grupo.nrc = None
+        nrc_efectivo = nrc_nuevo if tiene_nrc else grupo.nrc
+        nrc_limpio, error = _validar_tipo_uso(tipo_uso_efectivo, nrc_efectivo)
+        if error:
+            return jsonify({"error": error}), 400
+        grupo.tipo_uso = tipo_uso_efectivo
+        grupo.nrc = nrc_limpio
 
     # Mismo criterio que tipo_uso/nrc arriba: si solo llega uno de los tres
     # campos, los otros se completan con lo que ya tenía el grupo. El
@@ -630,22 +826,9 @@ def api_actualizar_reserva_grupo(grupo_id):
                 integrantes_nuevos if tiene_integrantes
                 else [i.codigo_uninorte for i in grupo.integrantes]
             )
-            if not isinstance(integrantes_efectivos, list) or not (
-                recursos_service.TAMANO_GRUPO_MIN <= len(integrantes_efectivos) <= recursos_service.TAMANO_GRUPO_MAX
-            ):
-                return jsonify({
-                    "error": f"El grupo debe tener entre {recursos_service.TAMANO_GRUPO_MIN} y "
-                             f"{recursos_service.TAMANO_GRUPO_MAX} integrantes."
-                }), 400
-
-            codigos_validados = []
-            for codigo in integrantes_efectivos:
-                codigo_valido = registro_service.validar_codigo_uninorte(codigo) if isinstance(codigo, str) else None
-                if codigo_valido is None:
-                    return jsonify({"error": f"El ID uninorte '{codigo}' no es válido."}), 400
-                codigos_validados.append(codigo_valido)
-            if len(codigos_validados) != len(set(codigos_validados)):
-                return jsonify({"error": "No puede haber integrantes repetidos."}), 400
+            codigos_validados, error = _validar_integrantes(integrantes_efectivos)
+            if error:
+                return jsonify({"error": error}), 400
             if tiene_tamano_grupo and tamano_grupo_nuevo != len(codigos_validados):
                 return jsonify({"error": "El tamaño del grupo no coincide con la cantidad de integrantes."}), 400
 

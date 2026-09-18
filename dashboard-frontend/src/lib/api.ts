@@ -81,6 +81,10 @@ export type Usuario = {
   cedula: string | null
   rol: Rol
   activo: boolean
+  // false = falta nombre, ID uninorte o cédula (registro a medio hacer,
+  // sea por WhatsApp o creado desde el dashboard). Ver
+  // usuarios_service.preparar_usuario_dashboard.
+  registro_completo?: boolean
   creado_en: string | null
 }
 
@@ -91,8 +95,9 @@ export type CambiosUsuario = Partial<
   >
 >
 
-export function fetchUsuarios() {
-  return request<Usuario[]>("/usuarios")
+export function fetchUsuarios(opciones?: { incluirIncompletos?: boolean }) {
+  const params = opciones?.incluirIncompletos ? "?incluir_incompletos=1" : ""
+  return request<Usuario[]>(`/usuarios${params}`)
 }
 
 export function actualizarUsuario(id: number, cambios: CambiosUsuario) {
@@ -251,6 +256,61 @@ export function fetchReservasRango(desde: Date, hasta: Date) {
     hasta: hasta.toISOString(),
   })
   return request<Sesion[]>(`/reservas?${params}`)
+}
+
+// --- Crear reserva desde el dashboard (features/reservas/NuevaReservaDialog) ----
+// Mismos campos y mismas validaciones de forma que el wizard del bot por
+// WhatsApp (ver recursos_service._avanzar_wizard); a diferencia del bot,
+// fecha bloqueada/plazo del seguro/inicio pasado no bloquean -- solo avisan
+// (`advertencias` en la respuesta). Ver docs/ARQUITECTURA.md, sección "Crear
+// reservas desde el dashboard".
+
+export type ClienteNuevo = {
+  nombre: string
+  telefono: string
+  codigo_uninorte?: string
+  cedula?: string
+}
+
+export type NuevaReserva = {
+  usuario_id?: number
+  cliente_nuevo?: ClienteNuevo
+  recurso_ids: number[]
+  inicio: string
+  fin: string
+  tipo_uso: TipoUso
+  nrc?: string
+  modalidad: Modalidad
+  integrantes?: string[]
+  sale_de_barranquilla: boolean
+  notificar: boolean
+}
+
+export type ReservaCreada = {
+  reservas: Sesion[]
+  grupo_id: number
+  usuario: Usuario
+  usuario_creado: boolean
+  advertencias: string[]
+  notificado: boolean | null
+}
+
+export function crearReserva(datos: NuevaReserva) {
+  return request<ReservaCreada>("/reservas", {
+    method: "POST",
+    body: JSON.stringify(datos),
+  })
+}
+
+// IDs de recurso ocupados (confirmada/pendiente) en un rango horario -- lo usa
+// el formulario de "Nueva reserva" para avisar en vivo si un activo marcado
+// deja de estar libre mientras se completan los demás campos.
+export function fetchOcupados(inicio: Date, fin: Date) {
+  const params = new URLSearchParams({
+    inicio: inicio.toISOString(),
+    fin: fin.toISOString(),
+  })
+  return request<{ ocupados: number[] }>(`/reservas/ocupados?${params}`)
 }
 
 // --- Activos -----------------------------------------------------------

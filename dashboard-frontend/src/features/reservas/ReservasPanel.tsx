@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { Plus } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -35,8 +36,10 @@ import { EstadoEventoBadge } from "@/features/calendario/EstadoBadge"
 import { IconoTipo } from "@/features/calendario/IconoTipo"
 import { ReservaDetalle } from "@/features/calendario/ReservaDetalle"
 import { usePolling } from "@/hooks/use-polling"
-import { fetchSesiones, type EstadoReserva } from "@/lib/api"
+import { fetchSesiones, type EstadoReserva, type ReservaCreada } from "@/lib/api"
 import { cn } from "@/lib/utils"
+
+import { NuevaReservaDialog } from "./NuevaReservaDialog"
 
 const FILTRO_STORAGE_KEY = "dashboard-cpa-reservas-estado"
 
@@ -267,6 +270,7 @@ export function ReservasPanel() {
   const [filtro, setFiltro] = useState<FiltroEstado>(filtroInicial)
   const [soloSeguro, setSoloSeguro] = useState<boolean>(seguroInicial)
   const [idSeleccionado, setIdSeleccionado] = useState<number | null>(null)
+  const [creando, setCreando] = useState(false)
 
   // El modal de edición necesita el catálogo para elegir activos; el
   // contexto no se carga solo (ver CalendarioPanel).
@@ -349,9 +353,15 @@ export function ReservasPanel() {
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Reservas
         </h2>
-        <Button size="sm" variant="outline" onClick={() => reload()}>
-          Refrescar
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => setCreando(true)}>
+            <Plus />
+            Nueva reserva
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => reload()}>
+            Refrescar
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -442,7 +452,7 @@ export function ReservasPanel() {
 
       <p className="text-xs text-muted-foreground">
         Horarios en hora local de la CPA (America/Bogota). Haz clic en una reserva para ver el
-        detalle o editarla.
+        detalle o editarla, o usa «Nueva reserva» para crear una desde acá.
       </p>
 
       <ReservaDetalle
@@ -451,6 +461,17 @@ export function ReservasPanel() {
         onClose={() => setIdSeleccionado(null)}
         onGuardado={reload}
       />
+
+      {creando && (
+        <NuevaReservaDialog
+          recursos={activos}
+          onClose={() => setCreando(false)}
+          onCreada={async (r: ReservaCreada) => {
+            await reload()
+            setIdSeleccionado(r.reservas[0]?.id ?? null)
+          }}
+        />
+      )}
     </div>
   )
 }

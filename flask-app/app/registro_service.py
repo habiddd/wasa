@@ -41,6 +41,13 @@ def validar_codigo_uninorte(valor: str) -> str | None:
     return valor if 3 <= len(valor) <= 30 else None
 
 
+def validar_campo(campo: str, valor: str) -> str | None:
+    """Versión pública de `_validar`, para reusar las mismas reglas fuera
+    del flujo de registro por WhatsApp (ver
+    usuarios_service.preparar_usuario_dashboard)."""
+    return _validar(campo, valor)
+
+
 def _validar(campo: str, valor: str) -> str | None:
     """Devuelve el valor limpio y válido, o None si hay que pedirlo de nuevo."""
     valor = valor.strip()

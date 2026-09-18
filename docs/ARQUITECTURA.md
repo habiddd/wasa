@@ -1190,6 +1190,74 @@ tener presentes antes de tocarlo:
   `DELETE /dashboard/api/reservas/grupo/<grupo_id>`; el toast solo informa
   el resultado posterior.
 
+### Crear reservas desde el dashboard
+
+`POST /dashboard/api/reservas` (`api_crear_reserva`, `app/routes/dashboard.py`)
+le permite a la CPA crear una reserva completa sin pasar por WhatsApp --
+mismos campos que el wizard del bot (cliente, activos, uso/NRC,
+modalidad/integrantes, si sale de Barranquilla, horario), reusando las
+validaciones de forma que ya tenía `api_actualizar_reserva_grupo`
+(`_validar_tipo_uso`, `_validar_integrantes`) y `recursos_service`
+(`ids_ocupados_en_rango`, `advertencias_fechas`).
+
+- **Bloqueos duros vs. avisos.** Activo inexistente o no `disponible`,
+  fechas mal formadas o `fin <= inicio`, uso/NRC/modalidad/integrantes
+  inválidos, y choque real de horario (`ids_ocupados_en_rango` antes de
+  escribir, más el `EXCLUDE` de Postgres como red final) sí devuelven 400/409
+  y no crean nada. En cambio, fecha bloqueada, plazo del seguro incumplido e
+  inicio ya pasado solo van en `advertencias` de la respuesta (200/201) --
+  mismo criterio que "el dashboard solo advierte" del calendario y de
+  Excepciones: quien crea la reserva acá ya es la CPA.
+- **Nace `confirmada` y con `canal_origen='dashboard'`.** `crear_reservas_grupo`
+  gana los parámetros `canal_origen` (por defecto `"whatsapp"`, sin tocar al
+  bot) y `aprobada_por_cpa` (por defecto `False`): con `aprobada_por_cpa=True`
+  todas las líneas nacen `confirmada` sin importar `requiere_confirmacion` --
+  no tiene sentido que la CPA se autoconfirme algo que acaba de crear ella
+  misma. `canal_origen` no tiene CHECK en Postgres, así que `'dashboard'` es
+  un valor válido sin migración.
+- **Cliente existente o nuevo.** `usuario_id` reusa un `Usuario`; `cliente_nuevo`
+  (`{nombre, telefono, codigo_uninorte?, cedula?}`) pasa por
+  `usuarios_service.preparar_usuario_dashboard`, que valida con las mismas
+  reglas del registro por WhatsApp (`registro_service.validar_campo`), reusa
+  la fila si el teléfono ya existe (sin pisar datos que el cliente ya había
+  dado) y solo hace `add`/`flush` -- nunca `commit` -- para que la
+  transacción de la reserva decida si el alta se guarda o se revierte junto
+  con el choque de disponibilidad. Con datos incompletos (sin ID Uninorte o
+  cédula) el usuario queda con `registro_completo=False`, igual que uno a
+  medio registrar por el bot; `GET /api/usuarios` lo deja afuera salvo que se
+  pida con `?incluir_incompletos=1` (lo usa el selector de cliente del
+  formulario).
+- **Aviso por WhatsApp opcional.** El campo `notificar` (booleano, por
+  defecto `False` en el formulario) decide si se le manda al cliente el
+  mismo mensaje de confirmación que usa el bot
+  (`recursos_service.mensaje_reserva_confirmada`); la respuesta trae
+  `notificado` (`true`/`false`/`null` si no se pidió avisar) para que el
+  dashboard muestre un aviso si el envío falló.
+- **`GET /dashboard/api/reservas/ocupados?inicio&fin`** devuelve los IDs de
+  recurso ocupados en ese rango (`ids_ocupados_en_rango`); el formulario lo
+  usa para destildar en vivo un activo que se volvió ocupado mientras se
+  completaban los demás campos.
+- **Formulario** (`features/reservas/NuevaReservaDialog.tsx`, botón "Nueva
+  reserva" de `ReservasPanel`): Dialog centrado con una sección por paso del
+  bot separadas por `Separator` (para quién → uso/NRC → grupo/integrantes →
+  espacios y activos → sale de Barranquilla → horario → aviso por WhatsApp).
+  En la UI se habla de "usuario", no de "cliente" (el campo de la API sigue
+  siendo `cliente_nuevo`).
+  - `SelectorCliente.tsx`: "Usuario existente" (búsqueda local sin tildes por
+    nombre, teléfono, ID Uninorte o cédula) o "Usuario nuevo".
+  - `SelectorActivos.tsx` se usa dos veces, como listas desplegables
+    (`Collapsible`, cerradas al abrir): **Espacios** (cada espacio con sus
+    contenidos y los accesorios de estos) y **Activos** (todos los equipos,
+    también los que están dentro de un espacio, con "· en <espacio>"). Las
+    dos comparten un solo arreglo de ids, así que marcar en una marca en la
+    otra y cada activo se envía una sola vez (además el formulario
+    deduplica y el backend responde 400 ante ids repetidos). Marcar un nodo
+    incluye sus descendientes disponibles; cualquier hijo se puede quitar
+    aparte, y desmarcar un nodo quita lo que cuelga de él. Los accesorios
+    de un equipo del espacio (que también tienen `espacio_id`) se muestran
+    solo bajo su equipo. El conteo de seleccionados va solo en la nota bajo
+    las dos listas.
+
 ## Excepciones: lista negra de fechas
 
 Pestaña "Excepciones" del dashboard (`features/excepciones/`): días en que

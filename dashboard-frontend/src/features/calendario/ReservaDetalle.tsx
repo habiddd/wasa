@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react"
+import { useState, type FormEvent, type ReactNode } from "react"
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 
@@ -29,12 +29,8 @@ import {
   confirmarReservaGrupo,
   decidirReserva,
   eliminarReservaGrupo,
-  fetchExcepciones,
-  fetchFechaMinimaSeguro,
   type CambiosReserva,
-  type DiaExcepcion,
   type EstadoReserva,
-  type FechaMinimaSeguro,
   type Modalidad,
   type Recurso,
   type Sesion,
@@ -56,6 +52,8 @@ import {
 } from "./calendario-utils"
 import { EstadoEventoBadge, EstadoReservaBadge } from "./EstadoBadge"
 import { IconoTipo } from "./IconoTipo"
+import { IntegrantesEditor, TAMANO_GRUPO_MAX, TAMANO_GRUPO_MIN } from "./IntegrantesEditor"
+import { AvisosFechasReserva, useAvisosFechasReserva } from "./use-avisos-fechas"
 
 const ESTADOS: EstadoReserva[] = [
   "confirmada",
@@ -65,11 +63,6 @@ const ESTADOS: EstadoReserva[] = [
   "denegada",
   "no_show",
 ]
-
-// Mismo rango que TAMANO_GRUPO_MIN/MAX en recursos_service.py y el CHECK
-// reserva_grupos_tamano_rango de postgres/init/02-schema.sql.
-const TAMANO_GRUPO_MIN = 2
-const TAMANO_GRUPO_MAX = 10
 
 /** Activos de la reserva que esperan la confirmación de la CPA, sin repetir modelo. */
 function nombresPendientes(evento: EventoCalendario) {
@@ -333,59 +326,17 @@ function FormularioEdicion({
   const [activosParaAgregar, setActivosParaAgregar] = useState<number[]>([])
 
   // Fecha mínima de HOY (no de creación, a diferencia del aviso de solo
-  // lectura en Detalle) para el aviso del Select "¿Sale de Barranquilla?" --
-  // la calcula el backend (festivos de Colombia), nunca este componente.
-  const [minimaHoy, setMinimaHoy] = useState<FechaMinimaSeguro | null>(null)
-  useEffect(() => {
-    let vigente = true
-    fetchFechaMinimaSeguro()
-      .then((datos) => {
-        if (vigente) setMinimaHoy(datos)
-      })
-      .catch(() => {})
-    return () => {
-      vigente = false
-    }
-  }, [])
-
+  // lectura en Detalle) para el aviso del Select "¿Sale de Barranquilla?", y
+  // lista negra de fechas (pestaña "Excepciones") del inicio/fin editados --
+  // el dashboard NO bloquea el guardado con ninguno de los dos, solo avisa
+  // (ver docs/ARQUITECTURA.md, secciones "Cláusula de seguro" y "Excepciones").
   const inicioEditado = desdeInputLocal(inicio)
-  const incumplePlazoDesdeHoy =
-    saleBarranquilla === "si" &&
-    !!inicioEditado &&
-    !!minimaHoy &&
-    claveDe(diaDe(inicioEditado)) < minimaHoy.fecha_minima
-
-  // Lista negra de fechas (pestaña "Excepciones"): mismo criterio que el bot
-  // (solo importan el día de inicio y el de fin, ver
-  // recursos_service._error_fecha_bloqueada) -- el dashboard NO bloquea el
-  // guardado, solo avisa (ver docs/ARQUITECTURA.md, sección "Excepciones").
-  const [diasBloqueados, setDiasBloqueados] = useState<Map<string, DiaExcepcion>>(new Map())
   const finEditado = desdeInputLocal(fin)
-  const claveInicioEditado = inicioEditado ? claveDe(diaDe(inicioEditado)) : null
-  const claveFinEditado = finEditado ? claveDe(diaDe(finEditado)) : null
-  useEffect(() => {
-    if (!claveInicioEditado || !claveFinEditado) return
-    const desde = claveInicioEditado < claveFinEditado ? claveInicioEditado : claveFinEditado
-    const hasta = claveInicioEditado < claveFinEditado ? claveFinEditado : claveInicioEditado
-    let vigente = true
-    fetchExcepciones(desde, hasta)
-      .then((data) => {
-        if (vigente) setDiasBloqueados(new Map(data.dias.map((d) => [d.fecha, d])))
-      })
-      .catch(() => {})
-    return () => {
-      vigente = false
-    }
-  }, [claveInicioEditado, claveFinEditado])
-
-  const avisosBloqueo = [
-    claveInicioEditado && { clave: claveInicioEditado, cuando: "empieza" as const },
-    claveFinEditado &&
-      claveFinEditado !== claveInicioEditado && { clave: claveFinEditado, cuando: "termina" as const },
-  ]
-    .filter((x): x is { clave: string; cuando: "empieza" | "termina" } => !!x)
-    .map(({ clave, cuando }) => ({ dia: diasBloqueados.get(clave), cuando }))
-    .filter((x): x is { dia: DiaExcepcion; cuando: "empieza" | "termina" } => !!x.dia?.bloqueada)
+  const { minimaHoy, incumplePlazo: incumplePlazoDesdeHoy, avisosBloqueo } = useAvisosFechasReserva(
+    inicioEditado,
+    finEditado,
+    saleBarranquilla === "si"
+  )
 
   const actuales = evento.reservas.map(
     (r) => recursos.find((recurso) => recurso.id === r.recurso_id) ??
@@ -495,18 +446,6 @@ function FormularioEdicion({
     if (valor === "grupo" && integrantes.length === 0) {
       setIntegrantes([primera.usuario_codigo_uninorte ?? ""])
     }
-  }
-
-  function actualizarIntegrante(indice: number, valor: string) {
-    setIntegrantes((anteriores) => anteriores.map((codigo, i) => (i === indice ? valor : codigo)))
-  }
-
-  function quitarIntegrante(indice: number) {
-    setIntegrantes((anteriores) => anteriores.filter((_, i) => i !== indice))
-  }
-
-  function agregarIntegrante() {
-    setIntegrantes((anteriores) => [...anteriores, ""])
   }
 
   async function guardar(evt: FormEvent) {
@@ -785,64 +724,13 @@ function FormularioEdicion({
               hábiles (lunes a viernes, sin festivos).
             </p>
           )}
-          {incumplePlazoDesdeHoy && minimaHoy && (
-            <p className="text-xs text-warning">
-              Ojo: el inicio queda antes de la fecha mínima del seguro (
-              {fechaCivilLarga(minimaHoy.fecha_minima)}, {DIAS_MINIMOS_SEGURO} días hábiles desde
-              hoy). Puedes guardar igual.
-            </p>
-          )}
         </div>
       )}
 
-      {avisosBloqueo.map(({ dia, cuando }) => (
-        <p key={dia.fecha} className="text-xs text-warning">
-          Ojo: el {fechaCivilLarga(dia.fecha)} (día en que {cuando} la reserva) está en la lista
-          negra ({dia.excepcion?.motivo || dia.festivo || "no hábil"}). El bot no lo permitiría; el
-          dashboard no lo bloquea.
-        </p>
-      ))}
+      <AvisosFechasReserva minimaHoy={minimaHoy} incumplePlazo={incumplePlazoDesdeHoy} avisosBloqueo={avisosBloqueo} />
 
       {evento.numeros.length === 1 && modalidad === "grupo" && (
-        <fieldset className="space-y-1.5">
-          <legend className="text-sm font-medium">
-            Integrantes ({integrantes.length})
-          </legend>
-          <div className="space-y-2">
-            {integrantes.map((codigo, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Input
-                  aria-label={i === 0 ? "ID uninorte de quien reserva" : `ID uninorte del integrante ${i + 1}`}
-                  placeholder={i === 0 ? "ID de quien reserva" : `ID del integrante ${i + 1}`}
-                  value={codigo}
-                  onChange={(e) => actualizarIntegrante(i, e.target.value)}
-                  disabled={guardando}
-                />
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label={`Quitar integrante ${i + 1}`}
-                  title={`Quitar integrante ${i + 1}`}
-                  onClick={() => quitarIntegrante(i)}
-                  disabled={guardando || integrantes.length <= TAMANO_GRUPO_MIN}
-                >
-                  <Trash2 />
-                </Button>
-              </div>
-            ))}
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={agregarIntegrante}
-            disabled={guardando || integrantes.length >= TAMANO_GRUPO_MAX}
-          >
-            <Plus />
-            Agregar integrante
-          </Button>
-        </fieldset>
+        <IntegrantesEditor integrantes={integrantes} onChange={setIntegrantes} disabled={guardando} />
       )}
 
       <p className="text-xs text-muted-foreground">

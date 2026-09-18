@@ -624,6 +624,20 @@ def _reserva_solapada(recurso_id: int, inicio: datetime, fin: datetime) -> Reser
     )
 
 
+def ids_ocupados_en_rango(inicio: datetime, fin: datetime, ids: list[int] | None = None) -> set[int]:
+    """IDs de recurso con una reserva que ocupa (ESTADOS_QUE_OCUPAN) y se
+    cruza con [inicio, fin). `ids` filtra a un subconjunto de recursos (ej.
+    los que se están por reservar desde el dashboard); None revisa todos."""
+    consulta = Reserva.query.filter(
+        Reserva.estado.in_(ESTADOS_QUE_OCUPAN),
+        Reserva.inicio < fin,
+        Reserva.fin > inicio,
+    )
+    if ids is not None:
+        consulta = consulta.filter(Reserva.recurso_id.in_(ids))
+    return {recurso_id for (recurso_id,) in consulta.with_entities(Reserva.recurso_id).distinct()}
+
+
 def _unidad_libre_en_rango(nombre: str, inicio: datetime, fin: datetime) -> Recurso | None:
     """Primera unidad del grupo sin choque de horario, o None si todas
     están ocupadas. No importa cuál unidad específica se devuelva -- todas
@@ -765,6 +779,8 @@ def crear_reservas_grupo(
     tamano_grupo: int | None = None,
     integrantes: list[str] | None = None,
     sale_de_barranquilla: bool | None = None,
+    canal_origen: str = "whatsapp",
+    aprobada_por_cpa: bool = False,
 ) -> tuple[list[Reserva] | None, str | None]:
     """Inserta una reserva por cada recurso en `recursos`, todas ligadas al
     mismo ReservaGrupo y en una sola transacción -- si alguna choca al
@@ -774,7 +790,10 @@ def crear_reservas_grupo(
 
     Cada activo con `requiere_confirmacion` nace 'pendiente' y el resto
     'confirmada': si el carrito mezcla ambos, la reserva queda parcial hasta
-    que la CPA la confirme desde el dashboard.
+    que la CPA la confirme desde el dashboard. `aprobada_por_cpa=True` (solo
+    para reservas creadas por la CPA desde el dashboard, no el bot) se salta
+    ese paso: todo nace 'confirmada', porque quien la está creando ya es
+    quien aprobaría el pendiente.
     El chequeo de disponibilidad antes de llamar a esta función (ver
     `_resolver_disponibilidad_carrito` / `_unidad_libre_en_rango`) es solo
     para dar un mensaje más claro, no la garantía de consistencia.
@@ -793,7 +812,10 @@ def crear_reservas_grupo(
     `sale_de_barranquilla` es otro dato del grupo completo, igual que
     `tipo_uso`/`modalidad`: True obliga al trámite de seguro (ver
     DIAS_MINIMOS_TRAMITE_SEGURO); None solo debería llegar desde llamadores
-    que no pasan por el wizard del bot."""
+    que no pasan por el wizard del bot.
+
+    `canal_origen` distingue de dónde vino la reserva ('whatsapp' | 'dashboard',
+    ver Reserva.canal_origen en models.py)."""
     grupo = ReservaGrupo(
         usuario_id=usuario_id,
         tipo_uso=tipo_uso, nrc=nrc if tipo_uso == "asignatura" else None,
@@ -815,7 +837,11 @@ def crear_reservas_grupo(
             recurso_id=recurso.id,
             inicio=inicio,
             fin=fin,
-            estado=ESTADO_PENDIENTE if recurso.requiere_confirmacion else "confirmada",
+            estado=(
+                "confirmada" if aprobada_por_cpa
+                else (ESTADO_PENDIENTE if recurso.requiere_confirmacion else "confirmada")
+            ),
+            canal_origen=canal_origen,
             grupo_id=grupo.id,
         )
         for recurso in recursos
@@ -1691,6 +1717,27 @@ def _error_fecha_bloqueada(wizard: dict, fecha_inicio: date, fecha_fin: date | N
             mensaje += f" La siguiente fecha disponible es el {_fecha_legible(siguiente)}."
         return mensaje
     return None
+
+
+def advertencias_fechas(inicio_utc: datetime, fin_utc: datetime, sale_de_barranquilla: bool | None) -> list[str]:
+    """Igual que las validaciones del wizard del bot (inicio no pasado,
+    plazo del seguro, fecha bloqueada), pero como avisos en vez de bloqueos
+    -- para el dashboard, donde la CPA puede saltárselas a propósito (ver
+    docs/ARQUITECTURA.md, sección "Crear reservas desde el dashboard")."""
+    wizard = {"sale_de_barranquilla": sale_de_barranquilla}
+    f_ini = inicio_utc.astimezone(ZONA_HORARIA_CPA).date()
+    f_fin = fin_utc.astimezone(ZONA_HORARIA_CPA).date()
+
+    avisos = []
+    if inicio_utc < datetime.now(timezone.utc) - MARGEN_INICIO_PASADO:
+        avisos.append("El inicio de la reserva ya pasó.")
+    error_plazo = _error_plazo_seguro(wizard, f_ini)
+    if error_plazo:
+        avisos.append(error_plazo)
+    error_bloqueada = _error_fecha_bloqueada(wizard, f_ini, f_fin)
+    if error_bloqueada:
+        avisos.append(error_bloqueada)
+    return avisos
 
 
 def _linea_sale_de_barranquilla(wizard: dict) -> str:
