@@ -35,6 +35,16 @@ let connectionState = "connecting"; // "connecting" | "qr" | "open" | "close"
 let lastQrAt = null;
 let phoneNumber = null;
 
+// Ids de mensajes entrantes ya reenviados a Flask (los últimos 500).
+const idsVistos = new Set();
+function mensajeYaVisto(id) {
+  if (!id) return false;
+  if (idsVistos.has(id)) return true;
+  idsVistos.add(id);
+  if (idsVistos.size > 500) idsVistos.delete(idsVistos.values().next().value);
+  return false;
+}
+
 async function connectToWhatsApp() {
   const { version } = await fetchLatestBaileysVersion();
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
@@ -132,10 +142,17 @@ async function connectToWhatsApp() {
 
   // Manejar mensajes entrantes
   sock.ev.on("messages.upsert", async (m) => {
+    // "append" es historial/sincronización, no un mensaje nuevo que responder.
+    if (m.type !== "notify") return;
     const messageInfo = m.messages[0];
 
     // Ignorar mensajes enviados por el propio bot
     if (messageInfo.key.fromMe) return;
+
+    // WhatsApp a veces entrega el mismo mensaje dos veces seguidas (visto:
+    // un "Hola" con `senderPn` y el mismo, 136 ms después, sin él), y cada
+    // copia generaba su propia respuesta.
+    if (mensajeYaVisto(messageInfo.key.id)) return;
 
     const remoteJid = messageInfo.key.remoteJid;
     const numero = remoteJid.split("@")[0];

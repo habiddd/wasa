@@ -124,6 +124,10 @@ def recibir_webhook():
     # "Juan Pérez" como respuesta a "¿cuál es tu nombre?" se clasificaría
     # como intent "otro" y quedaría bloqueado por la whitelist. ---
     usuario = usuarios_service.obtener_o_crear_usuario(numero, remote_jid)
+    # Si el mensaje llegó con JID "@lid" y sin `senderPn`, `numero` es el
+    # LID; el usuario ya conocido trae el número real. Sin esto su sesión y
+    # su auditoría se partirían en dos claves distintas.
+    numero = usuario.telefono_wa
     sesion = sesiones.obtener_sesion(numero)
 
     if not registro_service.usuario_esta_completo(usuario):

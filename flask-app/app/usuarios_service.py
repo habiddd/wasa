@@ -19,11 +19,14 @@ def obtener_o_crear_usuario(telefono_wa: str, jid_wa: str | None = None) -> Usua
     al que responder -- ver Usuario.jid_wa."""
     usuario = Usuario.query.filter_by(telefono_wa=telefono_wa).first()
     if not usuario and jid_wa and jid_wa.endswith("@lid"):
-        # Usuario dado de alta antes de que llegara `senderPn`: quedó con el
-        # LID como telefono_wa. Se le corrige al número real en vez de
-        # crearle una cuenta nueva.
         usuario = Usuario.query.filter_by(jid_wa=jid_wa).first()
-        if usuario:
+        # Si `telefono_wa` es el propio LID, este mensaje llegó sin
+        # `senderPn` (WhatsApp no siempre lo manda, a veces ni en el mismo
+        # mensaje repetido): se usa el usuario tal cual, sin pisarle el
+        # número real con el LID. Si es un número de verdad, es un usuario
+        # dado de alta antes de que llegara `senderPn`, que quedó con el LID
+        # como telefono_wa: se le corrige en vez de crearle una cuenta nueva.
+        if usuario and telefono_wa != jid_wa.split("@")[0]:
             usuario.telefono_wa = telefono_wa
             db.session.commit()
     if usuario:
