@@ -96,6 +96,12 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   reserva en una sola transacción. Todos los horarios se muestran en hora
   local de la LACS (`America/Bogota`), sin importar la zona del equipo desde
   el que se abra el dashboard. Se refresca solo cada 60s.
+- **Reservas**: la misma lista de sesiones en tabla (o tarjetas en pantallas
+  angostas), filtrable por estado y por si necesita seguro. Cada fila tiene
+  un botón para descargar el **acta de entrega y devolución** en PDF (todos
+  los datos de la reserva más los 4 cuadros de firma de entrega/devolución),
+  generado por el backend a partir de `GET
+  /dashboard/api/reservas/grupo/<id>/pdf`.
 - **Usuarios**: submenú desplegable de dos entradas, mismo patrón que
   "Servicios". "Usuarios" lista los usuarios que completaron el registro
   por WhatsApp (`registro_completo=True` -- deja afuera contactos a medio

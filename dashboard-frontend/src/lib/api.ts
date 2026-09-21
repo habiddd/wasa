@@ -229,6 +229,19 @@ export function eliminarReservaGrupo(grupoId: number) {
   return request<void>(`/reservas/grupo/${grupoId}`, { method: "DELETE" })
 }
 
+// El acta de entrega y devolución es un PDF, no JSON -- `request<T>` hace
+// `resp.json()` sobre toda respuesta y reventaría con un blob. Este helper
+// aparte hace el mismo manejo de errores (intenta leer `{error}` del cuerpo
+// para que el toast diga algo útil) pero devuelve el blob si todo salió bien.
+export async function descargarActaPdf(grupoId: number): Promise<Blob> {
+  const resp = await fetch(`${BASE}/reservas/grupo/${grupoId}/pdf`)
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => null)
+    throw new Error((data && data.error) || `HTTP ${resp.status}`)
+  }
+  return resp.blob()
+}
+
 // La LACS aprueba los activos pendientes y el backend le avisa al estudiante
 // por WhatsApp. `notificado` es false si el mensaje no salió: la reserva
 // queda confirmada igual.

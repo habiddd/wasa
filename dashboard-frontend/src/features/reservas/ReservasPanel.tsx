@@ -39,6 +39,7 @@ import { usePolling } from "@/hooks/use-polling"
 import { fetchSesiones, type EstadoReserva, type ReservaCreada } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
+import { BotonActaPdf } from "./BotonActaPdf"
 import { NuevaReservaDialog } from "./NuevaReservaDialog"
 
 const FILTRO_STORAGE_KEY = "dashboard-lacs-reservas-estado"
@@ -115,6 +116,13 @@ function numero(evento: EventoCalendario) {
   return evento.numeros.length ? evento.numeros.join(", ") : "-"
 }
 
+// El acta es del grupo completo: con varios números (caso legado, reservas
+// de antes del carrito) se usa el primero, igual que el resto de acciones de
+// grupo del panel (confirmar, eliminar).
+function grupoIdDe(evento: EventoCalendario): number | null {
+  return evento.numeros[0] ?? null
+}
+
 function uso(evento: EventoCalendario) {
   const primera = evento.reservas[0]
   return primera.tipo_uso === "asignatura" ? `NRC ${primera.nrc}` : "Particular"
@@ -169,11 +177,14 @@ function ListaReservas({ eventos, onSeleccionar }: PropsVista) {
       {eventos.map((evento) => {
         const [dia, horas] = horario(evento)
         return (
-          <li key={evento.clave}>
+          // La tarjeta y el botón del acta son hermanos, no anidados: un
+          // <button> dentro de otro <button> es HTML inválido (y React lo
+          // advierte). El botón principal se queda con casi todo el ancho.
+          <li key={evento.clave} className="flex items-center pr-2 hover:bg-muted/50">
             <button
               type="button"
               onClick={() => onSeleccionar(evento)}
-              className="w-full space-y-1 px-3 py-2.5 text-left text-sm outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+              className="w-full min-w-0 flex-1 space-y-1 px-3 py-2.5 text-left text-sm outline-none focus-visible:bg-muted/50"
             >
               <span className="flex items-start justify-between gap-2">
                 <Activos evento={evento} />
@@ -189,6 +200,7 @@ function ListaReservas({ eventos, onSeleccionar }: PropsVista) {
                 {dia} · {horas}
               </span>
             </button>
+            <BotonActaPdf grupoId={grupoIdDe(evento)} />
           </li>
         )
       })}
@@ -214,6 +226,9 @@ function TablaReservas({ eventos, onSeleccionar }: PropsVista) {
             <TableHead>Horario</TableHead>
             <TableHead>Estado</TableHead>
             <TableHead className="hidden @5xl:table-cell">Creada</TableHead>
+            <TableHead className="w-10">
+              <span className="sr-only">Acta</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -254,6 +269,9 @@ function TablaReservas({ eventos, onSeleccionar }: PropsVista) {
                 </TableCell>
                 <TableCell className="hidden text-muted-foreground @5xl:table-cell">
                   {creada(evento)}
+                </TableCell>
+                <TableCell>
+                  <BotonActaPdf grupoId={grupoIdDe(evento)} />
                 </TableCell>
               </TableRow>
             )

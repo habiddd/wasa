@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app import (
+    acta_pdf,
     estado_bot,
     fechas_bloqueadas_service,
     guardrails,
@@ -1029,6 +1030,23 @@ def _reservas_del_grupo(grupo_id: int) -> list[Reserva]:
         .filter_by(grupo_id=grupo_id)
         .order_by(Reserva.id)
         .all()
+    )
+
+
+@bp.route("/api/reservas/grupo/<int:grupo_id>/pdf")
+def api_acta_reserva_grupo(grupo_id):
+    """Acta de entrega y devolución en PDF de la reserva completa (ver
+    acta_pdf.generar_acta) -- un archivo por `grupo_id`, no por activo, para
+    que quien firma lo haga una sola vez por todo lo que se lleva."""
+    reservas = _reservas_del_grupo(grupo_id)
+    if not reservas:
+        return jsonify({"error": "Esa reserva no existe."}), 404
+
+    pdf = acta_pdf.generar_acta(reservas)
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="reserva-{grupo_id}.pdf"'},
     )
 
 

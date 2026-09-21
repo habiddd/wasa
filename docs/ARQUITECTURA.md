@@ -1318,6 +1318,39 @@ validaciones de forma que ya tenía `api_actualizar_reserva_grupo`
   usuario, estado) la ocultan, la reserva se crea igual pero el modal no se
   abre.
 
+### Acta de entrega y devolución (PDF)
+
+`GET /dashboard/api/reservas/grupo/<grupo_id>/pdf` (`api_acta_reserva_grupo`,
+`app/acta_pdf.py`) genera en el momento el acta que se imprime y se firma al
+retirar y regresar los activos de una reserva.
+
+- **Se genera en Flask, no en el navegador.** El acta es un documento
+  administrativo que se firma en papel y se archiva: generarla en el
+  backend con reportlab la saca de la misma fuente de verdad que ya sirve
+  `/api/reservas` (mismos objetos `Reserva`/`ReservaGrupo`, sin duplicar
+  formateo en JS) y deja el resultado versionado con el código del repo, en
+  vez de depender de qué build del bundle tenga cacheado el navegador de
+  quien la imprime. `acta_pdf.generar_acta` no importa nada de Flask (recibe
+  objetos del modelo y devuelve bytes): la ruta solo resuelve el `grupo_id`
+  con `_reservas_del_grupo` y envuelve el PDF en la respuesta HTTP.
+- **Un PDF por `grupo_id`, no por línea de activo.** Es la reserva completa
+  la que se entrega y se devuelve en una sola sesión (aunque el carrito
+  tenga varios equipos), así que el acta junta todas sus líneas en una
+  tabla y un solo bloque de firmas al final. `grupo_id` inexistente
+  responde 404 con el mismo formato de error que el resto de rutas de
+  grupo, en vez de un 500 por lista vacía.
+- **Rejilla de firmas 2x2 que no se parte entre páginas.** ENTREGA arriba,
+  DEVOLUCIÓN abajo; Usuario / Administrador (LACS) en columnas. Es una sola
+  `Table` de reportlab envuelta en `KeepTogether`, para que si no alcanza el
+  espacio en la página actual, salte completa a la siguiente en vez de
+  partir un cuadro de firma entre dos hojas. La cédula del titular se deja
+  siempre en blanco para escribirla a mano junto a la firma, aunque ya
+  conste en `usuario.cedula` -- es lo que le da valor probatorio al acta.
+- **Fechas en hora local de la LACS.** Usa el mismo
+  `recursos_service.ZONA_HORARIA_LACS` que el resto del proyecto y
+  normaliza a UTC antes de convertir los `datetime` que puedan llegar
+  naive de la BD, igual que `_serializar_reserva`.
+
 ## Excepciones: lista negra de fechas
 
 Pestaña "Excepciones" del dashboard (`features/excepciones/`): días en que
