@@ -9,7 +9,7 @@ instance/
 .claude/
 .mcp.json
 .vscode
-
+.playwright/
 # Dashboard frontend (React + shadcn/ui) — ver dashboard-frontend/
 dashboard-frontend/node_modules/
 dashboard-frontend/dist/
