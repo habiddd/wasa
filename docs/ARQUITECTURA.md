@@ -10,7 +10,11 @@
 3. Flask, en orden (ver `routes/webhook.py:recibir_webhook`):
    - Aplica **rate limiting** por número (`guardrails.excede_limite_mensajes`).
    - Aplica **filtrado de entrada** contra mensajes sospechosos/inyección
-     de prompt (`guardrails.mensaje_es_sospechoso`).
+     de prompt (`guardrails.mensaje_es_sospechoso`). La comparación se
+     hace sobre una forma *compactada* del mensaje -- sin tildes, sin
+     caracteres invisibles y sin nada que no sea letra o dígito -- para
+     que meter un espacio o un guion de más no evada el filtro; ver
+     `docs/SEGURIDAD.md`.
    - Resuelve/crea el **Usuario** por `telefono_wa` (`usuarios_service`) y,
      si su registro no está completo, el mensaje se trata como respuesta a
      la siguiente pregunta pendiente del alta (`registro_service`) --

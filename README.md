@@ -170,8 +170,10 @@ Si en el futuro quieres migrar a la API oficial de Meta:
 ## 7. Qué ya incluye este scaffold
 
 - Guardrails: rate limiting por número (`app/guardrails.py`), filtrado
-  básico contra inyección de prompt, whitelist de intents, auditoría de
-  cada interacción en la tabla `auditoria_bot`.
+  contra inyección de prompt (compara sobre una forma normalizada y
+  compactada del mensaje, para que el espaciado o la puntuación no lo
+  evadan), whitelist de intents, y auditoría de cada interacción en la
+  tabla `auditoria_bot`.
 - Esquema de datos base: `usuarios`, `recursos` (equipos/espacios),
   `reservas`, `secuencias_confirmacion` (para tu flujo de confirmación de equipos),
   `auditoria_bot` — ver `postgres/init/02-schema.sql`.
