@@ -380,7 +380,7 @@ sub-pasos. Progresión para un ítem, una vez resueltas esas preguntas
 ```
 elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
   → [confirmar_contenidos_espacio] → sale_de_barranquilla → fecha
-  → hora_inicio → hora_fin → confirmar → listo
+  → hora_inicio → hora_fin → nota_preguntar → [nota_texto] → confirmar → listo
 
 hora_fin/confirmar → [resolver_disponibilidad → resumen | elegir_alternativa]
 ```
@@ -560,6 +560,57 @@ LACS, seguro por salir de Barranquilla, las dos cosas o ninguna.
   editar la respuesta y el inicio aunque quede antes del plazo del seguro
   -- se le avisa (mismo estilo del aviso de "por confirmar"), pero no se
   bloquea el guardado; la decisión final es suya.
+
+### Nota de la reserva
+
+Texto libre y opcional, dato del grupo completo (no de cada activo dentro
+de él), como `tipo_uso`/`modalidad`/`sale_de_barranquilla`. Se guarda en
+`reserva_grupos.nota` (`VARCHAR(300)`, `postgres/init/02-schema.sql`); NULL
+= sin nota. El límite de caracteres vive en `recursos_service.NOTA_MAX_CARACTERES`
+(bot) y `calendario-utils.NOTA_MAX_CARACTERES` (dashboard), ambos en 300
+para que coincidan con la columna.
+
+- **Orden en el wizard:** va al final, después de `hora_fin` y antes de
+  `confirmar` (`nota_preguntar → [nota_texto]`, ver
+  `_siguiente_paso_wizard`) -- a diferencia de `sale_de_barranquilla`, que
+  se pregunta antes de la fecha porque mueve la fecha mínima, la nota no
+  condiciona ninguna otra validación, así que no hay apuro en pedirla
+  antes.
+- **Dos pasos:** "nota_preguntar" (sí/no, con `_interpretar_si_no` por el
+  mismo motivo que `sale_de_barranquilla`: comparar por substring de la
+  etiqueta daría falsos positivos con "no") y, solo si el usuario dijo que
+  sí, "nota_texto" (el texto libre en sí, validado contra
+  `NOTA_MAX_CARACTERES` y contra que no quede vacío tras `strip()`).
+- **`nota_texto` está exenta de las palabras de cancelación:** a
+  diferencia de "nota_preguntar" (que solo se agrega a la lista de pasos
+  donde "no" no cancela, igual que `sale_de_barranquilla`), en "nota_texto"
+  ni siquiera "cancelar"/"cerrar" cortan el wizard -- el usuario está
+  escribiendo texto libre para la nota en sí, y una nota que diga "cancelar
+  si llueve" no puede matar la reserva. `gestionar_reserva` vacía del todo
+  `palabras_cancelar` para ese paso; quien quiera abortar de verdad usa la
+  opción "Cancelar" del resumen, dos pasos después.
+- **El guardrail de longitud se afloja en "nota_texto":**
+  `guardrails.mensaje_es_sospechoso` corta todo mensaje de más de
+  `LONGITUD_MAXIMA_MENSAJE` (1000) antes de que llegue al LLM, y respondía
+  "No puedo procesar ese mensaje" a una nota larga -- sin decirle al usuario
+  que el problema era el largo ni cuál es el máximo. Ahora `routes/webhook.py`
+  consulta `recursos_service.espera_texto_libre(sesion)` (una lectura de
+  Redis sin efectos, antes de crear la fila de Usuario) y, si el wizard está
+  parado en "nota_texto", le pasa `texto_libre=True`: el tope sube a
+  `LONGITUD_MAXIMA_TEXTO_LIBRE` (10 000) y la nota llega al wizard, que
+  responde `_MENSAJE_NOTA_LARGA` con el máximo concreto y le pide
+  reescribirla. Los patrones de inyección se revisan igual en los dos casos,
+  y el paso "nota_texto" no usa el LLM.
+- **Dónde se ve:** en el resumen/factura del wizard (`_mensaje_resumen`,
+  `_crear_reserva_desde_wizard`) y en `mensaje_reserva_confirmada`, y en el
+  detalle del dashboard (`ReservaDetalle.tsx`, componente `Detalle`) --
+  nunca en las vistas compactas (`VistaMes.tsx`, `VistaTiempo.tsx`,
+  `ReservasPanel.tsx`).
+- **El dashboard también la crea y edita:** el POST de creación de reservas
+  (`api_crear_reserva`) y el PATCH de grupo (`api_actualizar_reserva_grupo`)
+  aceptan `nota` como campo opcional, validado con el mismo helper
+  (`_validar_nota` en `routes/dashboard.py`). En el PATCH, desmarcar el
+  checkbox de "Dejar una nota" manda `null` y borra la nota existente.
 
 ### Lista negra de fechas en el wizard
 
@@ -1180,7 +1231,7 @@ tener presentes antes de tocarlo:
 - **La edición del grupo es atómica.**
   `PATCH /dashboard/api/reservas/grupo/<grupo_id>` puede cambiar horario,
   estado, conjunto de `recurso_ids` y los datos del grupo (`tipo_uso`,
-  `modalidad`, `sale_de_barranquilla`) en una sola transacción. Las líneas
+  `modalidad`, `sale_de_barranquilla`, `nota`) en una sola transacción. Las líneas
   eliminadas, agregadas o modificadas se aplican todas o ninguna. El
   solapamiento no se re-valida en Python: lo garantiza el `EXCLUDE` de
   Postgres descrito más arriba.
@@ -1195,10 +1246,10 @@ tener presentes antes de tocarlo:
 `POST /dashboard/api/reservas` (`api_crear_reserva`, `app/routes/dashboard.py`)
 le permite a la LACS crear una reserva completa sin pasar por WhatsApp --
 mismos campos que el wizard del bot (cliente, activos, uso/NRC,
-modalidad/integrantes, si sale de Barranquilla, horario), reusando las
+modalidad/integrantes, si sale de Barranquilla, nota, horario), reusando las
 validaciones de forma que ya tenía `api_actualizar_reserva_grupo`
-(`_validar_tipo_uso`, `_validar_integrantes`) y `recursos_service`
-(`ids_ocupados_en_rango`, `advertencias_fechas`).
+(`_validar_tipo_uso`, `_validar_integrantes`, `_validar_nota`) y
+`recursos_service` (`ids_ocupados_en_rango`, `advertencias_fechas`).
 
 - **Bloqueos duros vs. avisos.** Activo inexistente o no `disponible`,
   fechas mal formadas o `fin <= inicio`, uso/NRC/modalidad/integrantes

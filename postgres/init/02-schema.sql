@@ -510,6 +510,13 @@ BEGIN
 END $$;
 ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS sale_de_barranquilla BOOLEAN;
 
+-- Nota de la reserva: texto libre, opcional, dato del grupo completo (no de
+-- cada número/recurso individual). La escribe quien reserva a través del
+-- bot (paso "nota_texto" del wizard) o la LACS desde el dashboard. Máximo
+-- 300 caracteres (recursos_service.NOTA_MAX_CARACTERES en el bot,
+-- _validar_nota en el dashboard). NULL = sin nota.
+ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS nota VARCHAR(300);
+
 CREATE INDEX IF NOT EXISTS idx_auditoria_telefono_fecha ON auditoria_bot (telefono_wa, creado_en);
 CREATE INDEX IF NOT EXISTS idx_auditoria_mensaje_id ON auditoria_bot (mensaje_id);
 

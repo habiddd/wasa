@@ -257,6 +257,10 @@ export function etiquetaNumeros(evento: EventoCalendario) {
 // nunca se recalcula acá.
 export const DIAS_MINIMOS_SEGURO = 5
 
+// Debe coincidir con recursos_service.NOTA_MAX_CARACTERES en el bot y con el
+// VARCHAR(300) de reserva_grupos.nota en postgres/init/02-schema.sql.
+export const NOTA_MAX_CARACTERES = 300
+
 // --- Rejilla ----------------------------------------------------------------
 
 /** Lo único que la rejilla necesita de lo que pinta: un rango de tiempo. */

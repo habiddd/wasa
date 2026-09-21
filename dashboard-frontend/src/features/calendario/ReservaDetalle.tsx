@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import {
   actualizarReserva,
   actualizarReservaGrupo,
@@ -48,6 +49,7 @@ import {
   etiquetaReserva,
   fechaCivilLarga,
   fechaHora,
+  NOTA_MAX_CARACTERES,
   type EventoCalendario,
 } from "./calendario-utils"
 import { EstadoEventoBadge, EstadoReservaBadge } from "./EstadoBadge"
@@ -267,6 +269,12 @@ function Detalle({
         </p>
       )}
 
+      {primera.nota && (
+        <Dato etiqueta="Nota">
+          <p className="whitespace-pre-wrap break-words">{primera.nota}</p>
+        </Dato>
+      )}
+
       <Dato
         etiqueta={
           evento.reservas.length === 1
@@ -321,6 +329,8 @@ function FormularioEdicion({
   const [saleBarranquilla, setSaleBarranquilla] = useState<"si" | "no" | "">(
     primera.sale_de_barranquilla === true ? "si" : primera.sale_de_barranquilla === false ? "no" : ""
   )
+  const [dejarNota, setDejarNota] = useState(!!primera.nota)
+  const [nota, setNota] = useState(primera.nota ?? "")
   const [guardando, setGuardando] = useState(false)
   const [agregandoActivo, setAgregandoActivo] = useState(false)
   const [activosParaAgregar, setActivosParaAgregar] = useState<number[]>([])
@@ -471,6 +481,7 @@ function FormularioEdicion({
       modalidad?: Modalidad
       integrantes?: string[]
       sale_de_barranquilla?: boolean
+      nota?: string | null
     } = {}
     if (nuevoInicio.getTime() !== evento.inicio.getTime()) cambios.inicio = nuevoInicio.toISOString()
     if (nuevoFin.getTime() !== evento.fin.getTime()) cambios.fin = nuevoFin.toISOString()
@@ -538,6 +549,13 @@ function FormularioEdicion({
         if (saleBarranquillaNueva !== primera.sale_de_barranquilla) {
           cambios.sale_de_barranquilla = saleBarranquillaNueva
         }
+      }
+
+      // Desmarcar el checkbox borra la nota (manda null); si no cambió, no
+      // se manda nada.
+      const notaNueva = dejarNota && nota.trim() ? nota.trim() : null
+      if (notaNueva !== (primera.nota ?? null)) {
+        cambios.nota = notaNueva
       }
     }
 
@@ -723,6 +741,42 @@ function FormularioEdicion({
               Requiere tramitar el seguro de los activos: plazo mínimo de {DIAS_MINIMOS_SEGURO} días
               hábiles (lunes a viernes, sin festivos).
             </p>
+          )}
+        </div>
+      )}
+
+      {evento.numeros.length === 1 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="reserva-dejar-nota"
+              checked={dejarNota}
+              onCheckedChange={(v) => {
+                const marcado = v === true
+                setDejarNota(marcado)
+                if (!marcado) setNota("")
+              }}
+              disabled={guardando}
+            />
+            <Label htmlFor="reserva-dejar-nota" className="cursor-pointer">
+              Dejar una nota
+            </Label>
+          </div>
+          {dejarNota && (
+            <>
+              <Textarea
+                id="reserva-nota"
+                value={nota}
+                onChange={(e) => setNota(e.target.value)}
+                maxLength={NOTA_MAX_CARACTERES}
+                disabled={guardando}
+                placeholder="Aclaración sobre el uso de la reserva…"
+                className="resize-none"
+              />
+              <p className="text-xs text-muted-foreground">
+                {nota.length}/{NOTA_MAX_CARACTERES} caracteres
+              </p>
+            </>
           )}
         </div>
       )}

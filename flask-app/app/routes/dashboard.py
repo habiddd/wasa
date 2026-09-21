@@ -447,6 +447,9 @@ def _serializar_reserva(r: Reserva) -> dict:
             ).isoformat()
             if r.grupo and r.grupo.sale_de_barranquilla and r.creado_en else None
         ),
+        # Nota libre y opcional de la reserva (dato del grupo completo, no
+        # de cada activo). None = sin nota. Ver ReservaGrupo.nota.
+        "nota": r.grupo.nota if r.grupo else None,
         "inicio": r.inicio.isoformat() if r.inicio else None,
         "fin": r.fin.isoformat() if r.fin else None,
         "estado": r.estado,
@@ -589,6 +592,12 @@ def api_crear_reserva():
     if not isinstance(sale_de_barranquilla, bool):
         return jsonify({"error": "Indica si los activos salen de Barranquilla."}), 400
 
+    # La nota es OPCIONAL: que no llegue no es error, a diferencia de
+    # sale_de_barranquilla arriba.
+    nota_limpia, error = _validar_nota(datos.get("nota"))
+    if error:
+        return jsonify({"error": error}), 400
+
     usuario_creado = False
     if usa_usuario_id:
         usuario = Usuario.query.get(usuario_id)
@@ -631,6 +640,7 @@ def api_crear_reserva():
         tamano_grupo=len(codigos_validados) if modalidad == "grupo" else None,
         integrantes=codigos_validados,
         sale_de_barranquilla=sale_de_barranquilla,
+        nota=nota_limpia,
         canal_origen="dashboard",
         aprobada_por_lacs=True,
     )
@@ -781,6 +791,24 @@ def _validar_integrantes(integrantes) -> tuple[list[str] | None, str | None]:
     return codigos_validados, None
 
 
+def _validar_nota(valor) -> tuple[str | None, str | None]:
+    """Valida la nota de la reserva, opcional, con el mismo límite que el
+    wizard del bot (recursos_service.NOTA_MAX_CARACTERES) y el VARCHAR(300)
+    del esquema. Devuelve (nota_limpia, error); None o "" (tras strip)
+    siempre es válido y equivale a "sin nota". Compartido por el PATCH de
+    grupo y la creación de reservas desde el dashboard."""
+    if valor is None or valor == "":
+        return None, None
+    if not isinstance(valor, str):
+        return None, "La nota debe ser texto."
+    texto = valor.strip()
+    if not texto:
+        return None, None
+    if len(texto) > recursos_service.NOTA_MAX_CARACTERES:
+        return None, f"La nota no puede superar los {recursos_service.NOTA_MAX_CARACTERES} caracteres."
+    return texto, None
+
+
 @bp.route("/api/reservas/grupo/<int:grupo_id>", methods=["PATCH"])
 def api_actualizar_reserva_grupo(grupo_id):
     """Actualiza horario/estado y activos de una reserva completa atomically."""
@@ -798,6 +826,8 @@ def api_actualizar_reserva_grupo(grupo_id):
     integrantes_nuevos = datos.pop("integrantes", None)
     tiene_sale_area = "sale_de_barranquilla" in datos
     sale_area_nuevo = datos.pop("sale_de_barranquilla", None)
+    tiene_nota = "nota" in datos
+    nota_nueva = datos.pop("nota", None)
     cambios, error = _preparar_cambios_reserva(datos, _CAMPOS_EDITABLES_RESERVA)
     if error:
         return jsonify({"error": error}), 400
@@ -807,6 +837,12 @@ def api_actualizar_reserva_grupo(grupo_id):
 
     if tiene_sale_area and not isinstance(sale_area_nuevo, bool):
         return jsonify({"error": "'sale_de_barranquilla' debe ser true o false."}), 400
+
+    nota_limpia = None
+    if tiene_nota:
+        nota_limpia, error = _validar_nota(nota_nueva)
+        if error:
+            return jsonify({"error": error}), 400
 
     if recurso_ids is not None:
         if (
@@ -869,6 +905,9 @@ def api_actualizar_reserva_grupo(grupo_id):
     # advierte (ver ReservaDetalle.tsx); la LACS tiene la última palabra.
     if tiene_sale_area:
         grupo.sale_de_barranquilla = sale_area_nuevo
+
+    if tiene_nota:
+        grupo.nota = nota_limpia
 
     for reserva in reservas:
         error = _aplicar_cambios_reserva(reserva, cambios)

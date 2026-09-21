@@ -34,6 +34,13 @@ def excede_limite_mensajes(telefono_wa: str) -> bool:
 
 # --- 2. Filtrado básico de entrada ----------------------------------------
 LONGITUD_MAXIMA_MENSAJE = 1000
+# Tope cuando el bot SÍ está esperando texto libre del usuario (hoy, la nota
+# de una reserva: ver recursos_service.espera_texto_libre). Ahí un mensaje
+# largo no es sospechoso, es alguien que se pasó del máximo de la nota, y
+# quien se lo tiene que decir -- con el límite concreto y pidiéndole que la
+# reescriba -- es el wizard, no el mensaje genérico de este guardrail. Sigue
+# habiendo tope: un pegote enorme se corta igual, solo que más arriba.
+LONGITUD_MAXIMA_TEXTO_LIBRE = 10 * LONGITUD_MAXIMA_MENSAJE
 
 PATRONES_SOSPECHOSOS = (
     "ignora las instrucciones anteriores",
@@ -43,11 +50,16 @@ PATRONES_SOSPECHOSOS = (
 )
 
 
-def mensaje_es_sospechoso(texto: str) -> bool:
+def mensaje_es_sospechoso(texto: str, texto_libre: bool = False) -> bool:
     """Heurística simple contra intentos de inyección de prompt.
     No sustituye validación seria de intents (ver ALLOWED_INTENTS),
-    solo evita casos obvios antes de llegar al LLM."""
-    if not texto or len(texto) > LONGITUD_MAXIMA_MENSAJE:
+    solo evita casos obvios antes de llegar al LLM.
+
+    `texto_libre=True` sube el tope de longitud a LONGITUD_MAXIMA_TEXTO_LIBRE
+    (el bot está esperando texto largo a propósito); los patrones de
+    inyección se revisan igual, sin excepción."""
+    limite = LONGITUD_MAXIMA_TEXTO_LIBRE if texto_libre else LONGITUD_MAXIMA_MENSAJE
+    if not texto or len(texto) > limite:
         return True
     texto_normalizado = texto.lower()
     return any(patron in texto_normalizado for patron in PATRONES_SOSPECHOSOS)

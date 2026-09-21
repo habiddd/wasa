@@ -105,7 +105,16 @@ def recibir_webhook():
         return jsonify({"status": "rate_limited"}), 200
 
     # --- Guardrail 2: filtrado de entrada ---
-    if guardrails.mensaje_es_sospechoso(texto):
+    # El tope de longitud se afloja (no se quita) cuando el wizard de reserva
+    # dejó al usuario escribiendo la nota: ese mensaje largo no es un intento
+    # de inyección, es alguien que se pasó de NOTA_MAX_CARACTERES, y tiene
+    # que llegar al wizard para que le conteste con el límite concreto y le
+    # pida reescribirla (ver recursos_service.espera_texto_libre). La sesión
+    # se lee acá solo para eso -- es una lectura de Redis sin efectos, antes
+    # de crearle fila de Usuario a nadie; los patrones de inyección se siguen
+    # revisando igual en los dos casos.
+    texto_libre = recursos_service.espera_texto_libre(sesiones.obtener_sesion(numero))
+    if guardrails.mensaje_es_sospechoso(texto, texto_libre=texto_libre):
         respuesta = "No puedo procesar ese mensaje. Escribe 'ayuda' para ver qué puedo hacer."
         enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
         guardrails.registrar_interaccion(

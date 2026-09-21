@@ -96,6 +96,11 @@ class ReservaGrupo(db.Model):
     # recursos_service.fecha_minima_sale_de_barranquilla. None = reserva de
     # antes de que se preguntara. Ver postgres/init/02-schema.sql.
     sale_de_barranquilla = db.Column(db.Boolean)
+    # Nota libre y opcional de la reserva, dato del grupo completo (no de
+    # cada integrante/recurso). None = sin nota. La escribe el estudiante
+    # por el bot (paso "nota_texto" del wizard) o la LACS desde el
+    # dashboard. Máximo 300 caracteres, ver postgres/init/02-schema.sql.
+    nota = db.Column(db.String(300))
 
     # order_by: los integrantes se listan siempre en el orden en que se
     # capturaron (orden=1 es quien reserva). cascade="all, delete-orphan": al

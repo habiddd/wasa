@@ -1,0 +1,6 @@
+# Los scripts de shell SIEMPRE se escriben con LF, aunque se clonen en
+# Windows (donde core.autocrlf=true los convertiría a CRLF al hacer
+# checkout). Si docker-entrypoint.sh queda con CRLF, la imagen de Alpine
+# busca el intérprete "/bin/sh\r" y el contenedor muere en bucle con exit
+# 127 ("not found") -- ver dashboard-frontend/Dockerfile.
+*.sh text eol=lf

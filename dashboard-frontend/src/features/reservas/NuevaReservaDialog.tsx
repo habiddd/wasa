@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { desdeInputLocal, DIAS_MINIMOS_SEGURO } from "@/features/calendario/calendario-utils"
+import { Textarea } from "@/components/ui/textarea"
+import { desdeInputLocal, DIAS_MINIMOS_SEGURO, NOTA_MAX_CARACTERES } from "@/features/calendario/calendario-utils"
 import { IntegrantesEditor, TAMANO_GRUPO_MAX, TAMANO_GRUPO_MIN } from "@/features/calendario/IntegrantesEditor"
 import { AvisosFechasReserva, useAvisosFechasReserva } from "@/features/calendario/use-avisos-fechas"
 import {
@@ -60,6 +61,8 @@ export function NuevaReservaDialog({
   const [modalidad, setModalidad] = useState<Modalidad>("individual")
   const [integrantes, setIntegrantes] = useState<string[]>([])
   const [saleBarranquilla, setSaleBarranquilla] = useState<"si" | "no" | "">("")
+  const [dejarNota, setDejarNota] = useState(false)
+  const [nota, setNota] = useState("")
   const [inicio, setInicio] = useState("")
   const [fin, setFin] = useState("")
   const [notificar, setNotificar] = useState(false)
@@ -198,6 +201,9 @@ export function NuevaReservaDialog({
       modalidad,
       integrantes: codigosGrupo,
       sale_de_barranquilla: saleBarranquilla === "si",
+      // Opcional: si marcó el checkbox pero no escribió nada, simplemente no
+      // se manda (sin toast de error, a diferencia de sale_de_barranquilla).
+      nota: dejarNota && nota.trim() ? nota.trim() : undefined,
       notificar,
       ...(cliente.tipo === "existente"
         ? { usuario_id: cliente.usuario.id }
@@ -342,6 +348,42 @@ export function NuevaReservaDialog({
                 Requiere tramitar el seguro de los activos: plazo mínimo de {DIAS_MINIMOS_SEGURO} días
                 hábiles (lunes a viernes, sin festivos).
               </p>
+            )}
+          </div>
+
+          <Separator />
+
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="nueva-reserva-dejar-nota"
+                checked={dejarNota}
+                onCheckedChange={(v) => {
+                  const marcado = v === true
+                  setDejarNota(marcado)
+                  if (!marcado) setNota("")
+                }}
+                disabled={guardando}
+              />
+              <Label htmlFor="nueva-reserva-dejar-nota" className="cursor-pointer">
+                Dejar una nota
+              </Label>
+            </div>
+            {dejarNota && (
+              <>
+                <Textarea
+                  id="nueva-reserva-nota"
+                  value={nota}
+                  onChange={(e) => setNota(e.target.value)}
+                  maxLength={NOTA_MAX_CARACTERES}
+                  disabled={guardando}
+                  placeholder="Aclaración sobre el uso de la reserva…"
+                  className="resize-none"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {nota.length}/{NOTA_MAX_CARACTERES} caracteres
+                </p>
+              </>
             )}
           </div>
 

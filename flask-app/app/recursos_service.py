@@ -779,6 +779,7 @@ def crear_reservas_grupo(
     tamano_grupo: int | None = None,
     integrantes: list[str] | None = None,
     sale_de_barranquilla: bool | None = None,
+    nota: str | None = None,
     canal_origen: str = "whatsapp",
     aprobada_por_lacs: bool = False,
 ) -> tuple[list[Reserva] | None, str | None]:
@@ -814,6 +815,10 @@ def crear_reservas_grupo(
     DIAS_MINIMOS_TRAMITE_SEGURO); None solo debería llegar desde llamadores
     que no pasan por el wizard del bot.
 
+    `nota` también es un dato del grupo completo, igual que `tipo_uso`/
+    `sale_de_barranquilla`: texto libre y opcional (máximo NOTA_MAX_CARACTERES
+    caracteres, ver postgres/init/02-schema.sql), None = sin nota.
+
     `canal_origen` distingue de dónde vino la reserva ('whatsapp' | 'dashboard',
     ver Reserva.canal_origen en models.py)."""
     grupo = ReservaGrupo(
@@ -821,6 +826,7 @@ def crear_reservas_grupo(
         tipo_uso=tipo_uso, nrc=nrc if tipo_uso == "asignatura" else None,
         modalidad=modalidad, tamano_grupo=tamano_grupo if modalidad == "grupo" else None,
         sale_de_barranquilla=sale_de_barranquilla,
+        nota=nota,
     )
     db.session.add(grupo)
     db.session.flush()  # asigna grupo.id sin cerrar la transacción
@@ -957,6 +963,10 @@ def mensaje_reserva_confirmada(reservas: list[Reserva]) -> str:
         f"Sale de Barranquilla: Sí (requiere seguro, mínimo {DIAS_MINIMOS_TRAMITE_SEGURO} días hábiles)\n"
         if primera.grupo and primera.grupo.sale_de_barranquilla else ""
     )
+    linea_nota = (
+        f"Nota: {primera.grupo.nota}\n"
+        if primera.grupo and primera.grupo.nota else ""
+    )
     return (
         "*RESERVA CONFIRMADA*\n"
         f"{_DIVISOR_FACTURA}\n"
@@ -966,6 +976,7 @@ def mensaje_reserva_confirmada(reservas: list[Reserva]) -> str:
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{linea_area}"
+        f"{linea_nota}"
         f"{_DIVISOR_FACTURA}\n"
         f"{_cierre_confirmacion(reservas)}"
     )
@@ -1528,6 +1539,7 @@ OPCIONES_CONFIRMAR = [
     ("cambiar_uso", "Cambiar particular / asignatura (NRC)"),
     ("cambiar_grupo", "Cambiar grupo / integrantes"),
     ("cambiar_sale_barranquilla", "Cambiar si sale de Barranquilla"),
+    ("cambiar_nota", "Cambiar la nota"),
     ("cancelar", "Cancelar"),
 ]
 
@@ -1596,6 +1608,48 @@ OPCIONES_SALE_DE_BARRANQUILLA = [
     ("no", "No, se quedan en Barranquilla"),
 ]
 
+# --- Nota de la reserva -------------------------------------------------
+# Texto libre y opcional, dato del grupo completo (ver reserva_grupos.nota
+# en postgres/init/02-schema.sql). Va al final del wizard, después del
+# horario -- a diferencia de `sale_de_barranquilla`, que mueve la fecha
+# mínima y por eso se pregunta antes de la fecha, la nota no condiciona
+# ninguna otra validación.
+NOTA_MAX_CARACTERES = 300
+OPCIONES_NOTA = [
+    ("si", "Sí, quiero dejar una nota"),
+    ("no", "No, sin nota"),
+]
+
+_MENSAJE_PEDIR_NOTA = (
+    f"Escribe tu nota en el siguiente mensaje. Máximo {NOTA_MAX_CARACTERES} caracteres."
+)
+# Sin "responde *cancelar*": en el paso "nota_texto" ninguna palabra corta el
+# wizard (es texto libre, ver `gestionar_reserva`), así que ofrecerlo acá
+# sería mentira -- ese "cancelar" se guardaría como la nota. Para abortar
+# está la opción "Cancelar" del resumen, dos pasos después.
+_MENSAJE_NOTA_VACIA = (
+    "La nota no puede estar vacía. Escríbela en el siguiente mensaje, "
+    f"con un máximo de {NOTA_MAX_CARACTERES} caracteres."
+)
+_MENSAJE_NOTA_LARGA = (
+    "Esa nota es muy larga: escribiste {largo} caracteres y el máximo son "
+    f"{NOTA_MAX_CARACTERES}. Vuelve a escribirla en el siguiente mensaje, "
+    f"con menos de {NOTA_MAX_CARACTERES} caracteres."
+)
+
+
+def espera_texto_libre(sesion: dict) -> bool:
+    """¿El wizard de reserva dejó al usuario escribiendo texto libre? Hoy
+    solo el paso "nota_texto". Lo consulta routes/webhook.py para aflojarle
+    el tope de longitud al guardrail de entrada
+    (guardrails.LONGITUD_MAXIMA_MENSAJE, pensado contra inyección de prompt
+    antes de llegar al LLM): una nota pasada de largo tiene que llegar hasta
+    acá para que el wizard conteste `_MENSAJE_NOTA_LARGA`, con el máximo
+    concreto, en vez del "no puedo procesar ese mensaje" genérico, que no le
+    dice al usuario qué corregir. El paso "nota_texto" no usa el LLM."""
+    wizard = sesion.get("reserva_wizard") or {}
+    return wizard.get("paso") == "nota_texto"
+
 
 def es_dia_habil(d: date) -> bool:
     return d.weekday() < 5 and d not in _FESTIVOS_CO
@@ -1638,7 +1692,8 @@ _PATRON_DUDA = re.compile(r"\b(nose|tal ?vez|quizas?|depende|no estoy segur[oa]|
 
 
 def _interpretar_si_no(texto: str) -> bool | None:
-    """Sí/No determinista para "¿salen de Barranquilla?". Nunca usa
+    """Sí/No determinista para "¿salen de Barranquilla?" y para "¿quieres
+    dejar una nota?" (paso "nota_preguntar"). Nunca usa
     el LLM. None = ambiguo (se vuelve a preguntar). Orden:
     1) número del menú (1 = sí, 2 = no);
     2) duda explícita ("no sé", "tal vez") -> None;
@@ -1752,6 +1807,18 @@ def _linea_sale_de_barranquilla(wizard: dict) -> str:
     return "Sale de Barranquilla: No"
 
 
+def _linea_nota(wizard: dict) -> str:
+    """Línea de la factura/resumen con la nota de la reserva -- ver
+    `_mensaje_resumen` y `_crear_reserva_desde_wizard`. A diferencia de las
+    demás líneas de esas factura (que se insertan como f"{...}\\n"), la nota
+    es OPCIONAL: si no hay, no debe dejar una línea en blanco. Por eso esta
+    función ya incluye su propio salto de línea cuando hay nota, y devuelve
+    "" (sin salto) cuando no la hay -- se inserta sin \\n adicional."""
+    if wizard.get("nota"):
+        return f"Nota: {wizard['nota']}\n"
+    return ""
+
+
 OPCIONES_CONFIRMAR_FECHA = [
     ("si", "Sí, esa fecha está bien"),
     ("no", "No, quiero escribirla en formato dd/mm/aaaa"),
@@ -1802,6 +1869,14 @@ def _siguiente_paso_wizard(wizard: dict) -> str:
         return "hora_inicio"
     if not wizard.get("fin"):
         return "hora_fin"
+    # La nota va al final, después del horario -- a diferencia de
+    # `sale_de_barranquilla` (que se pregunta antes de la fecha porque mueve
+    # la fecha mínima), la nota no condiciona ninguna otra validación, así
+    # que no hay apuro en preguntarla antes.
+    if wizard.get("quiere_nota") is None:
+        return "nota_preguntar"
+    if wizard.get("quiere_nota") and not wizard.get("nota"):
+        return "nota_texto"
     if not wizard.get("confirmado"):
         return "confirmar"
     return "listo"
@@ -2091,6 +2166,36 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             )
             return _con_avisos(avisos, mensaje), wizard, False
 
+        if paso == "nota_preguntar":
+            wizard["opciones_actuales"] = OPCIONES_NOTA
+            wizard["paso"] = "nota_preguntar"
+            mensaje = (
+                "*NOTA DE LA RESERVA*\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"{_lineas_carrito(wizard['carrito'])}\n"
+                f"{_DIVISOR_FACTURA}\n"
+                + _formatear_menu(
+                    "¿Quieres dejar una nota para la LACS? Por ejemplo, alguna "
+                    "aclaración sobre el uso que le vas a dar a la reserva.",
+                    OPCIONES_NOTA,
+                )
+            )
+            wizard["_mensaje_menu_actual"] = mensaje
+            return _con_avisos(avisos, mensaje), wizard, False
+
+        if paso == "nota_texto":
+            wizard["opciones_actuales"] = None
+            wizard["paso"] = "nota_texto"
+            mensaje = (
+                "*NOTA DE LA RESERVA*\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"{_lineas_carrito(wizard['carrito'])}\n"
+                f"{_DIVISOR_FACTURA}\n"
+                f"{_MENSAJE_PEDIR_NOTA}"
+            )
+            wizard["_mensaje_menu_actual"] = mensaje
+            return _con_avisos(avisos, mensaje), wizard, False
+
         if paso == "confirmar":
             opciones = _opciones_confirmar(wizard)
             wizard["opciones_actuales"] = opciones
@@ -2190,6 +2295,7 @@ def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, s
         f"{_linea_tipo_uso(wizard)}\n"
         f"{_lineas_grupo(wizard)}\n"
         f"{_linea_sale_de_barranquilla(wizard)}\n"
+        f"{_linea_nota(wizard)}"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
@@ -2377,6 +2483,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         modalidad=wizard.get("modalidad") or "individual",
         tamano_grupo=wizard.get("tamano_grupo"), integrantes=wizard.get("integrantes"),
         sale_de_barranquilla=bool(wizard.get("sale_de_barranquilla")),
+        nota=wizard.get("nota"),
     )
     if error is not None:
         return (
@@ -2398,6 +2505,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         f"{_linea_tipo_uso(wizard)}\n"
         f"{_lineas_grupo(wizard)}\n"
         f"{_linea_sale_de_barranquilla(wizard)}\n"
+        f"{_linea_nota(wizard)}"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
         f"{_DIVISOR_FACTURA}"
@@ -2550,6 +2658,11 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         # _avanzar_wizard); toda lectura usa wizard.get(...), porque una
         # sesión vieja en Redis, de antes de esta pregunta, no trae la clave.
         "sale_de_barranquilla": None,
+        # None = todavía no se preguntó (ver pasos "nota_preguntar"/"nota_texto" en
+        # _avanzar_wizard); toda lectura usa wizard.get(...) porque una sesión vieja
+        # en Redis, de antes de esta pregunta, no trae estas claves.
+        "quiere_nota": None,
+        "nota": None,
         "fecha": None,
         "fecha_fin": None,
         "inicio": None,
@@ -2722,6 +2835,40 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             return _crear_reserva_desde_wizard(wizard, usuario, sesion)
         if valor:
             mensaje = _con_avisos([_aviso_plazo_seguro()], mensaje)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "nota_preguntar":
+        # Mismo motivo que en "sale_de_barranquilla" para no usar
+        # `_interpretar_opcion`: matchea por substring y un "no" suelto
+        # tendría falsos positivos contra las etiquetas del menú.
+        valor = _interpretar_si_no(texto_usuario)
+        if valor is None:
+            return (
+                "No te entendí. Responde *1* si quieres dejar una nota "
+                "o *2* si no.\n\n" + (wizard.get("_mensaje_menu_actual") or "")
+            ), {**sesion, "reserva_wizard": wizard}
+        if valor:
+            wizard["quiere_nota"] = True
+        else:
+            wizard["quiere_nota"] = False
+            wizard["nota"] = None
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+        return mensaje, {**sesion, "reserva_wizard": wizard}
+
+    if paso == "nota_texto":
+        texto = texto_usuario.strip()
+        if not texto:
+            return _MENSAJE_NOTA_VACIA, {**sesion, "reserva_wizard": wizard}
+        if len(texto) > NOTA_MAX_CARACTERES:
+            return _MENSAJE_NOTA_LARGA.format(largo=len(texto)), {**sesion, "reserva_wizard": wizard}
+        wizard["nota"] = texto
+        wizard["opciones_actuales"] = None
+        mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+        if listo:
+            return _crear_reserva_desde_wizard(wizard, usuario, sesion)
         return mensaje, {**sesion, "reserva_wizard": wizard}
 
     if paso in ("elegir_activo", "elegir_marca", "elegir_modelo"):
@@ -3025,10 +3172,11 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             ), {**sesion, "reserva_wizard": None}
 
         if valor == "confirmar":
-            if wizard.get("sale_de_barranquilla") is None:
-                # Sesión de Redis de antes de esta pregunta, ya parada en
-                # "confirmar" -- se le hace la pregunta que le falta en vez
-                # de crear la reserva sin ese dato.
+            if wizard.get("sale_de_barranquilla") is None or wizard.get("quiere_nota") is None:
+                # Sesión de Redis de antes de una de estas preguntas
+                # (sale_de_barranquilla o nota), ya parada en "confirmar" --
+                # se le hace la pregunta que le falta en vez de crear la
+                # reserva sin ese dato.
                 mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
                 if listo:
                     return _crear_reserva_desde_wizard(wizard, usuario, sesion)
@@ -3059,6 +3207,8 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             wizard.update(modalidad=None, tamano_grupo=None, integrantes=[], grupo_confirmado=False)
         elif valor in ("cambiar_sale_barranquilla", "cambiar_area"):
             wizard.update(sale_de_barranquilla=None)
+        elif valor == "cambiar_nota":
+            wizard.update(quiere_nota=None, nota=None)
 
         mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
         if listo:
@@ -3273,6 +3423,12 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
         "sale_de_barranquilla",
         # area_metropolitana: sesiones de Redis de antes del renombre.
         "area_metropolitana",
+        # "nota_preguntar": mismo motivo que "sale_de_barranquilla" -- "no"
+        # responde "¿quieres dejar una nota?" (= sin nota), no "cancela la
+        # reserva". "nota_texto" NO se agrega acá: se maneja aparte abajo,
+        # porque ahí ni siquiera "cancelar"/"cerrar" deben cortar el wizard
+        # (ver el chequeo siguiente).
+        "nota_preguntar",
         # A propósito NO se agrega "elegir_alternativa" acá: ese paso no
         # tiene ninguna opción que empiece por "no" (sus opciones son
         # nombres de activos, "Volver al resumen" o "Elegir otro tipo de
@@ -3284,6 +3440,16 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
         # "no" terminaría "eligiendo" esa cámara en vez de cancelar.
     ):
         palabras_cancelar = {"cancelar", "cancela", "cerrar"}
+
+    # "nota_texto" es texto LIBRE: el usuario está escribiendo la nota en sí,
+    # así que ninguna palabra debe cancelar el wizard (una nota que diga
+    # "cancelar si llueve" no puede matar la reserva). No alcanza con meter
+    # este paso en la tupla de arriba, porque esa tupla igual deja activo
+    # {"cancelar", "cancela", "cerrar"} -- acá se vacía del todo. Quien
+    # quiera abortar de verdad lo hace con la opción "Cancelar" del resumen,
+    # dos pasos después.
+    if wizard is not None and wizard.get("paso") == "nota_texto":
+        palabras_cancelar = set()
 
     if wizard is not None and set(_normalizar(texto_usuario).split()) & palabras_cancelar:
         return (

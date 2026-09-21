@@ -162,6 +162,10 @@ export type Sesion = {
   // Fecha mínima de inicio (YYYY-MM-DD) calculada por el backend desde
   // creado_en, con festivos de Colombia. null si no sale de Barranquilla.
   fecha_minima_seguro: string | null
+  // Nota libre y opcional de la reserva completa (no de cada activo). null
+  // = sin nota. Máximo 300 caracteres (recursos_service.NOTA_MAX_CARACTERES
+  // en el bot, VARCHAR(300) en el esquema).
+  nota: string | null
   inicio: string | null
   fin: string | null
   estado: EstadoReserva
@@ -212,6 +216,7 @@ export function actualizarReservaGrupo(
     tamano_grupo?: number | null
     integrantes?: string[]
     sale_de_barranquilla?: boolean
+    nota?: string | null
   }
 ) {
   return request<Sesion[]>(`/reservas/grupo/${grupoId}`, {
@@ -287,6 +292,7 @@ export type NuevaReserva = {
   modalidad: Modalidad
   integrantes?: string[]
   sale_de_barranquilla: boolean
+  nota?: string
   notificar: boolean
 }
 
