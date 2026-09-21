@@ -73,7 +73,10 @@ services:
       flask-app:
         condition: service_started
     ports:
-      - "3000:3000"
+      # Solo localhost: /send hace que el numero de la LACS envie mensajes.
+      # Flask le habla por la red interna de Docker (http://baileys-bot:3000),
+      # que no pasa por este puerto publicado.
+      - "127.0.0.1:3000:3000"
     volumes:
       - baileys_sessions:/app/sessions
     environment:

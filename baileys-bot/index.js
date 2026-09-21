@@ -7,6 +7,7 @@ const {
 const { Boom } = require("@hapi/boom");
 const QRCode = require("qrcode");
 const axios = require("axios");
+const crypto = require("crypto");
 
 // Configuración desde variables de entorno
 const FLASK_WEBHOOK_URL = process.env.FLASK_WEBHOOK_URL || "http://flask-app:5000/webhook/whatsapp";
@@ -241,9 +242,29 @@ async function connectToWhatsApp() {
 }
 
 // Servidor HTTP simple para recibir comandos de envío de mensajes
+// Autenticacion del endpoint de envio. Sin esto, cualquiera con acceso de
+// red al puerto 3000 puede hacer que el numero de la LACS mande mensajes
+// arbitrarios suplantando a la institucion (ver docs/SEGURIDAD.md).
+// Comparacion en tiempo constante para no filtrar la clave byte a byte.
+// Fail-closed: si FLASK_API_KEY no esta configurada no se envia nada, en
+// vez de quedar abierto de par en par.
+function claveValida(recibida) {
+  if (!FLASK_API_KEY) return false;
+  const recibidaBuf = Buffer.from(String(recibida || ""));
+  const esperadaBuf = Buffer.from(FLASK_API_KEY);
+  if (recibidaBuf.length !== esperadaBuf.length) return false;
+  return crypto.timingSafeEqual(recibidaBuf, esperadaBuf);
+}
+
 const http = require("http");
 const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/send") {
+    if (!claveValida(req.headers["x-api-key"])) {
+      console.warn("POST /send rechazado: x-api-key ausente o invalida");
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "No autorizado" }));
+      return;
+    }
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", async () => {
@@ -312,5 +333,11 @@ connectToWhatsApp().catch((err) => {
 });
 
 server.listen(3000, () => {
+  if (!FLASK_API_KEY) {
+    console.warn(
+      "⚠️  FLASK_API_KEY no configurada: POST /send rechazara TODA peticion " +
+        "(fail-closed). El bot no podra responder mensajes hasta configurarla."
+    );
+  }
   console.log("🚀 Servidor HTTP de Baileys escuchando en puerto 3000");
 });

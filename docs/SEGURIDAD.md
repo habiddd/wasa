@@ -2,7 +2,15 @@
 
 ## Ya incluido en este scaffold
 - [x] Rate limiting por número de WhatsApp (`guardrails.py`)
-- [x] Filtrado básico contra inyección de prompt
+- [x] Filtrado contra inyección de prompt (`guardrails.mensaje_es_sospechoso`).
+      Compara sobre una forma *compactada* del mensaje (sin tildes, sin
+      caracteres invisibles y sin nada que no sea letra o dígito), no sobre
+      substrings literales del texto tal cual: la primera versión se evadía
+      con solo meter un espacio de más (`"ignora  las  instrucciones"`).
+      Cubre frases en español e inglés y marcadores de plantilla de chat
+      (`<|im_start|>`, `role: system`). Los patrones que también aparecen en
+      frases legítimas del dominio ("sin restricciones de horario") solo
+      disparan en combinación, vía `REGEX_SOSPECHOSOS`.
 - [x] Whitelist de intents permitidos
 - [x] Auditoría de cada interacción (tabla `auditoria_bot`)
 - [x] Usuario de base de datos separado para la app (no usa el superusuario
@@ -62,6 +70,13 @@
       usuario que venía probando el bot (incluyendo forzar a mano el paso
       de confirmación con sus ids reales) — en ambos casos, cero filas
       modificadas (ver `docs/SESION_2026-08-31.md`)
+- [x] `POST /send` de `baileys-bot` valida `x-api-key` contra `FLASK_API_KEY`
+      con comparación en tiempo constante, y falla cerrado si la clave no
+      está configurada (`claveValida` en `baileys-bot/index.js`). El puerto
+      3000 ya se publica solo en `127.0.0.1`, igual que postgres/flask --
+      Flask le habla por la red interna de Docker, que no pasa por el puerto
+      publicado. Antes, cualquiera con acceso de red a ese puerto podía
+      hacer que el número de la LACS enviara mensajes arbitrarios.
 
 ## Pendiente antes de producción con datos reales de la LACS
 
@@ -73,13 +88,6 @@
 - [ ] Backups automáticos del volumen de Postgres (`pg_dump` programado).
 - [ ] Límite de recursos por contenedor en `docker-compose.yml` (memory/cpu)
       para que un pico no tumbe el servidor completo.
-- [ ] El puerto 3000 de `baileys-bot` se publica sin restricción
-      (`"3000:3000"`, a diferencia de postgres/flask que usan
-      `127.0.0.1:...`), y su endpoint `POST /send` no valida ningún API key
-      pese a que Flask sí lo envía. Cualquiera con acceso de red a ese
-      puerto puede hacer que el número de la LACS envíe mensajes arbitrarios.
-      Corregir: bindear a `127.0.0.1` y validar `x-api-key` en `/send`
-      dentro de `baileys-bot/index.js`.
 - [ ] `/webhook/whatsapp` y `/webhook/qr` en Flask reciben el header
       `x-api-key` pero nunca lo comparan contra `WHATSAPP_API_KEY` — hoy el
       riesgo es bajo porque Flask solo escucha en `127.0.0.1`, pero si se
