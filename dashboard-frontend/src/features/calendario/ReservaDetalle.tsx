@@ -23,6 +23,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+// El acta es de la reserva, no del calendario: vive en features/reservas y
+// este detalle -- que es el mismo modal en las dos pestañas -- la reusa.
+import { BotonActaPdf } from "@/features/reservas/BotonActaPdf"
 import {
   actualizarReserva,
   actualizarReservaGrupo,
@@ -922,6 +925,10 @@ function Contenido({
             onDecidir={(reserva, accion) => pedirDecision({ reserva, accion })}
           />
           <DialogFooter>
+            {/* Mismo criterio que el botón de la tabla de Reservas: el acta es
+                del grupo completo y con varios números (reservas legadas, de
+                antes del carrito) se usa el primero. */}
+            <BotonActaPdf grupoId={evento.numeros[0] ?? null} variante="boton" />
             <Button size="sm" variant="destructive" onClick={solicitarEliminacion}>
               <Trash2 />
               Eliminar reserva

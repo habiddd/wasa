@@ -93,15 +93,16 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   si es de un solo activo, el recurso) vía
   `PATCH /dashboard/api/reservas/<id>` o
   `PATCH /dashboard/api/reservas/bloque`, que mueve todas las líneas de la
-  reserva en una sola transacción. Todos los horarios se muestran en hora
+  reserva en una sola transacción. Ese modal también tiene el botón "Ver
+  acta" (ver "Reservas"). Todos los horarios se muestran en hora
   local de la LACS (`America/Bogota`), sin importar la zona del equipo desde
   el que se abra el dashboard. Se refresca solo cada 60s.
 - **Reservas**: la misma lista de sesiones en tabla (o tarjetas en pantallas
   angostas), filtrable por estado y por si necesita seguro. Cada fila tiene
-  un botón para descargar el **acta de entrega y devolución** en PDF (todos
-  los datos de la reserva más los 4 cuadros de firma de entrega/devolución),
-  generado por el backend a partir de `GET
-  /dashboard/api/reservas/grupo/<id>/pdf`.
+  un botón que abre el **acta de entrega y devolución** en un modal con la
+  vista previa del PDF (todos los datos de la reserva más los 4 cuadros de
+  firma de entrega/devolución) y un botón para descargarla. La genera el
+  backend en `GET /dashboard/api/reservas/grupo/<id>/pdf`.
 - **Usuarios**: submenú desplegable de dos entradas, mismo patrón que
   "Servicios". "Usuarios" lista los usuarios que completaron el registro
   por WhatsApp (`registro_completo=True` -- deja afuera contactos a medio

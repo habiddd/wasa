@@ -1346,6 +1346,20 @@ retirar y regresar los activos de una reserva.
   partir un cuadro de firma entre dos hojas. La cédula del titular se deja
   siempre en blanco para escribirla a mano junto a la firma, aunque ya
   conste en `usuario.cedula` -- es lo que le da valor probatorio al acta.
+- **Se ve antes de descargarla.** El botón no baja el archivo de una: abre
+  un modal (`features/reservas/BotonActaPdf.tsx`) con el PDF en un `iframe`
+  y un botón "Descargar PDF", para revisar que los datos estén bien antes de
+  imprimir. Está en tres sitios: la tabla y las tarjetas de "Reservas" (como
+  icono) y el pie del detalle de la reserva (como botón "Ver acta"), que es
+  el mismo `ReservaDetalle` en "Calendario" y en "Reservas" -- de ahí que el
+  componente reciba `variante` y que `features/calendario` lo importe desde
+  `features/reservas`. El blob se pide en cada apertura y se suelta al cerrar
+  -- el object URL está atado al blob con un `useEffect`, no al clic, para
+  que se revoque también si la fila se desmonta en una recarga del panel. El
+  botón y el modal van envueltos en un `<span>` que corta la propagación:
+  los eventos de un portal de React burbujean por el árbol de React, así que
+  sin eso un clic dentro del modal llegaría a la fila y abriría además el
+  detalle de la reserva.
 - **Fechas en hora local de la LACS.** Usa el mismo
   `recursos_service.ZONA_HORARIA_LACS` que el resto del proyecto y
   normaliza a UTC antes de convertir los `datetime` que puedan llegar

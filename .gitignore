@@ -10,6 +10,8 @@ instance/
 .mcp.json
 .vscode
 .playwright/
+# Capturas y descargas que deja el MCP de Playwright al verificar el dashboard.
+.playwright-mcp/
 # Dashboard frontend (React + shadcn/ui) — ver dashboard-frontend/
 dashboard-frontend/node_modules/
 dashboard-frontend/dist/
