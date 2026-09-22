@@ -177,6 +177,56 @@ export function fetchSesiones() {
   return request<Sesion[]>("/reservas")
 }
 
+// Ventanas del selector temporal del panel de Reservas. El recorte lo hace el
+// backend (ver VENTANAS_RESERVAS en dashboard.py): pedir solo la ventana visible
+// evita que Flask serialice el histórico entero cada 30 s en cada pestaña abierta.
+export type VentanaReservas = "24h" | "7d" | "30d" | "1a" | "todas"
+
+export type ReservasEnVentana = {
+  reservas: Sesion[]
+  truncado: boolean
+  total: number
+  ventana: VentanaReservas
+}
+
+export function fetchReservasVentana(ventana: VentanaReservas) {
+  return request<ReservasEnVentana>(`/reservas?ventana=${ventana}`)
+}
+
+// La conversación de WhatsApp de una sesión NO viaja dentro de `Sesion`: el
+// listado trae hasta 500 filas de golpe y el hilo solo interesa cuando
+// alguien abre una en concreto, así que se pide aparte, bajo demanda, desde
+// ConversacionSesionDialog.
+export type MotivoConversacion = "ok" | "sin_conversacion" | "sin_mensajes"
+
+export type MensajeConversacion = {
+  id: number
+  entrante: string | null
+  respuesta: string | null
+  intent: string | null
+  permitido: boolean
+  motivo_bloqueo: string | null
+  estado_envio: string
+  creado_en: string | null
+  // true solo en el mensaje más cercano al instante en que se creó la
+  // reserva (ver heurística del hueco en dashboard.py) -- el frontend pinta
+  // ahí el separador "Aquí se creó la reserva".
+  es_ancla: boolean
+}
+
+export type ConversacionSesion = {
+  reserva_id: number
+  telefono: string | null
+  origen: string
+  motivo: MotivoConversacion
+  truncada: boolean
+  mensajes: MensajeConversacion[]
+}
+
+export function fetchConversacionSesion(reservaId: number) {
+  return request<ConversacionSesion>(`/reservas/${reservaId}/conversacion`)
+}
+
 // Fecha mínima de inicio HOY para una reserva que sale de Barranquilla (5
 // días hábiles, festivos de Colombia calculados por el backend) -- la usa
 // el formulario de edición en ReservaDetalle.tsx.

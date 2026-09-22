@@ -35,12 +35,12 @@ import {
 import { EstadoEventoBadge } from "@/features/calendario/EstadoBadge"
 import { IconoTipo } from "@/features/calendario/IconoTipo"
 import { ReservaDetalle } from "@/features/calendario/ReservaDetalle"
-import { usePolling } from "@/hooks/use-polling"
-import { fetchSesiones, type EstadoReserva, type ReservaCreada } from "@/lib/api"
+import { type EstadoReserva, type ReservaCreada, type VentanaReservas } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 import { BotonActaPdf } from "./BotonActaPdf"
 import { NuevaReservaDialog } from "./NuevaReservaDialog"
+import { useReservasVentana } from "./use-reservas-ventana"
 
 const FILTRO_STORAGE_KEY = "dashboard-lacs-reservas-estado"
 
@@ -78,6 +78,32 @@ function seguroInicial(): boolean {
   }
   return false
 }
+
+const VENTANA_STORAGE_KEY = "dashboard-lacs-reservas-ventana"
+
+const VENTANAS: { valor: VentanaReservas; etiqueta: string }[] = [
+  { valor: "24h", etiqueta: "Últimas 24 horas" },
+  { valor: "7d", etiqueta: "Última semana" },
+  { valor: "30d", etiqueta: "Último mes" },
+  { valor: "1a", etiqueta: "Último año" },
+  { valor: "todas", etiqueta: "Todas" },
+]
+
+// "30d" por defecto: cubre el uso normal sin que la vista inicial arrastre el
+// histórico entero (ver useReservasVentana y docs/ARQUITECTURA.md).
+function ventanaInicial(): VentanaReservas {
+  try {
+    const guardado = localStorage.getItem(VENTANA_STORAGE_KEY)
+    if (guardado && VENTANAS.some((v) => v.valor === guardado)) return guardado as VentanaReservas
+  } catch {
+    // localStorage no disponible
+  }
+  return "30d"
+}
+
+// Debe coincidir con MAX_RESERVAS_VENTANA en dashboard.py: es el tope de
+// seguridad de "todas", no un recorte esperado (ver useReservasVentana).
+const TOPE_RESERVAS_VENTANA = 5000
 
 // Más recientes arriba: las próximas y las de hoy son las que se consultan.
 function porInicioDesc(a: EventoCalendario, b: EventoCalendario) {
@@ -284,7 +310,8 @@ function TablaReservas({ eventos, onSeleccionar }: PropsVista) {
 
 export function ReservasPanel() {
   const { activos, reload: recargarActivos } = useActivosContext()
-  const { data, error, loading, reload } = usePolling(fetchSesiones, 30000)
+  const [ventana, setVentana] = useState<VentanaReservas>(ventanaInicial)
+  const { reservas, cargando, refrescando, error, truncado, reload } = useReservasVentana(ventana)
   const [filtro, setFiltro] = useState<FiltroEstado>(filtroInicial)
   const [soloSeguro, setSoloSeguro] = useState<boolean>(seguroInicial)
   const [idSeleccionado, setIdSeleccionado] = useState<number | null>(null)
@@ -296,7 +323,7 @@ export function ReservasPanel() {
     recargarActivos()
   }, [recargarActivos])
 
-  const ubicadas = useMemo(() => ubicarReservas(data ?? []), [data])
+  const ubicadas = useMemo(() => ubicarReservas(reservas), [reservas])
 
   // Igual que el calendario, se filtra por línea antes de agrupar: una
   // reserva con estados mixtos aparece en cada filtro con las líneas que
@@ -361,6 +388,15 @@ export function ReservasPanel() {
     }
   }
 
+  function cambiarVentana(nuevo: VentanaReservas) {
+    setVentana(nuevo)
+    try {
+      localStorage.setItem(VENTANA_STORAGE_KEY, nuevo)
+    } catch {
+      // localStorage no disponible
+    }
+  }
+
   function seleccionar(evento: EventoCalendario) {
     setIdSeleccionado(evento.reservas[0].id)
   }
@@ -401,11 +437,26 @@ export function ReservasPanel() {
                       resaltar ? "font-semibold text-warning" : "text-muted-foreground"
                     )}
                   >
-                    {data ? cantidad : "–"}
+                    {cargando ? "–" : cantidad}
                   </span>
                 </SelectItem>
               )
             })}
+          </SelectContent>
+        </Select>
+
+        {/* Recorta en el servidor (ver useReservasVentana); los contadores de
+            arriba pasan a contar solo dentro de esta ventana. */}
+        <Select value={ventana} onValueChange={(v) => cambiarVentana(v as VentanaReservas)}>
+          <SelectTrigger size="sm" className="min-w-40" aria-label="Filtrar por periodo">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {VENTANAS.map(({ valor, etiqueta }) => (
+              <SelectItem key={valor} value={valor}>
+                {etiqueta}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
@@ -427,9 +478,19 @@ export function ReservasPanel() {
             Necesita seguro
           </Label>
         </div>
+
+        {/* Sutil a propósito: nunca reemplaza la tabla por skeletons si ya
+            hay algo que mostrar (ver useReservasVentana, `refrescando`). */}
+        {refrescando && <p className="text-xs text-muted-foreground">Actualizando…</p>}
       </div>
 
-      {loading && !data && (
+      {truncado && (
+        <p className="text-xs text-warning">
+          Mostrando las {TOPE_RESERVAS_VENTANA} reservas más recientes; hay más histórico.
+        </p>
+      )}
+
+      {cargando && (
         <div className="space-y-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-10 w-full" />
@@ -437,11 +498,11 @@ export function ReservasPanel() {
         </div>
       )}
 
-      {error && !data && (
+      {error && reservas.length === 0 && (
         <p className="text-sm text-destructive">No se pudieron cargar las reservas: {error}</p>
       )}
 
-      {data && eventos.length === 0 && (
+      {!cargando && !(error && reservas.length === 0) && eventos.length === 0 && (
         <p className="rounded-md border p-4 text-sm text-muted-foreground">
           {filtro === "por_confirmar" && !soloSeguro
             ? "No hay reservas pendientes de confirmación."
@@ -451,7 +512,7 @@ export function ReservasPanel() {
         </p>
       )}
 
-      {data && eventos.length > 0 && (
+      {!cargando && !(error && reservas.length === 0) && eventos.length > 0 && (
         <>
           {filtro === "por_confirmar" && (
             <p className="text-sm text-muted-foreground">

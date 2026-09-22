@@ -478,24 +478,71 @@ def _fecha_query(nombre: str) -> datetime | None:
     return _fecha_iso(crudo) if crudo else None
 
 
+# Ventanas del selector temporal del panel de Reservas. None = sin recorte.
+# El recorte es solo hacia atrás (`fin > now() - delta`): lo que todavía no ha
+# terminado sale SIEMPRE, sea cual sea la ventana, porque el panel se usa sobre
+# todo para vigilar lo que viene.
+VENTANAS_RESERVAS = {
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+    "1a": timedelta(days=365),
+    "todas": None,
+}
+# Válvula de seguridad de "todas": no es un recorte esperado, es un tope para
+# que el panel avise en vez de mentir si el histórico se dispara.
+MAX_RESERVAS_VENTANA = 5000
+
+
 @bp.route("/api/reservas")
 def api_reservas():
-    # Sesiones de uso (reservas) de cada usuario. Sin parámetros devuelve las
-    # últimas 500 por fecha de creación (sub-panel "Sesiones" dentro de
-    # Usuarios). Con ?desde/?hasta devuelve las que *solapan* ese rango,
-    # ordenadas por inicio: es lo que necesita el calendario, porque una
-    # reserva de varios días debe aparecer aunque empiece antes del periodo
-    # visible. Trae usuario/recurso con joinedload para no hacer una query
-    # por fila.
+    # Sesiones de uso (reservas) de cada usuario, con TRES modos mutuamente
+    # excluyentes:
+    # - Sin parámetros: últimas 500 por fecha de creación (sub-panel
+    #   "Sesiones" dentro de Usuarios). Devuelve una LISTA.
+    # - ?desde/?hasta: las que *solapan* ese rango, ordenadas por inicio -- es
+    #   lo que necesita el calendario, porque una reserva de varios días debe
+    #   aparecer aunque empiece antes del periodo visible. Devuelve una LISTA.
+    # - ?ventana=24h|7d|30d|1a|todas: recorte por ventana temporal para el
+    #   panel de Reservas (ver VENTANAS_RESERVAS). Devuelve un OBJETO, no una
+    #   lista, porque además de las filas hace falta decir si se truncó -- los
+    #   otros dos modos siguen devolviendo lista para no romper a sus
+    #   consumidores (fetchSesiones, fetchReservasRango).
+    # Trae usuario/recurso con joinedload para no hacer una query por fila.
     try:
         desde, hasta = _fecha_query("desde"), _fecha_query("hasta")
     except ValueError:
         return jsonify({"error": "Los parámetros 'desde' y 'hasta' deben ser fechas ISO-8601."}), 400
 
+    ventana = request.args.get("ventana")
+    if ventana is not None:
+        if desde or hasta:
+            return jsonify({"error": "'ventana' no se puede combinar con 'desde'/'hasta'."}), 400
+        if ventana not in VENTANAS_RESERVAS:
+            return jsonify({
+                "error": f"'ventana' debe ser una de: {', '.join(sorted(VENTANAS_RESERVAS))}."
+            }), 400
+
     consulta = Reserva.query.options(
         joinedload(Reserva.usuario), joinedload(Reserva.recurso),
         joinedload(Reserva.grupo).joinedload(ReservaGrupo.integrantes),
     )
+
+    if ventana is not None:
+        delta = VENTANAS_RESERVAS[ventana]
+        if delta is not None:
+            consulta = consulta.filter(Reserva.fin > datetime.now(timezone.utc) - delta)
+        # Pedimos una fila de más que el tope para poder distinguir "hay
+        # exactamente el tope" de "hay más y se truncó" sin un COUNT aparte.
+        reservas = consulta.order_by(Reserva.inicio.desc()).limit(MAX_RESERVAS_VENTANA + 1).all()
+        truncado = len(reservas) > MAX_RESERVAS_VENTANA
+        reservas = reservas[:MAX_RESERVAS_VENTANA]
+        return jsonify({
+            "reservas": [_serializar_reserva(r) for r in reservas],
+            "truncado": truncado,
+            "total": len(reservas),
+            "ventana": ventana,
+        })
 
     if desde or hasta:
         if hasta:
@@ -524,6 +571,129 @@ def api_reservas_ocupados():
         return jsonify({"error": "Los parámetros 'inicio' y 'fin' deben ser fechas ISO-8601."}), 400
 
     return jsonify({"ocupados": sorted(recursos_service.ids_ocupados_en_rango(inicio, fin))})
+
+
+# Dos mensajes del mismo número separados por más de esto son conversaciones
+# distintas: es el hueco que usamos para recortar el hilo que terminó en una
+# reserva, ya que auditoria_bot no guarda a qué reserva pertenece cada mensaje.
+HUECO_CONVERSACION = timedelta(minutes=30)
+# Topes de seguridad para que un número muy activo no devuelva su historial entero.
+VENTANA_MAX_CONVERSACION = timedelta(hours=24)
+MAX_MENSAJES_CONVERSACION = 100
+
+
+def _serializar_mensaje_conversacion(m: AuditoriaBot, ancla_id: int) -> dict:
+    return {
+        "id": m.id,
+        "entrante": m.mensaje_entrante,
+        "respuesta": m.respuesta_enviada,
+        "intent": m.intent_detectado,
+        "permitido": m.permitido,
+        "motivo_bloqueo": m.motivo_bloqueo,
+        "estado_envio": m.estado_envio,
+        "creado_en": m.creado_en.isoformat() if m.creado_en else None,
+        "es_ancla": m.id == ancla_id,
+    }
+
+
+@bp.route("/api/reservas/<int:reserva_id>/conversacion")
+def api_conversacion_reserva(reserva_id):
+    """Reconstruye el hilo de WhatsApp que dio lugar a una reserva.
+
+    No hay FK entre `Reserva` y `auditoria_bot`: el único nexo posible es
+    `telefono_wa` + tiempo. Partimos de `reserva.creado_en` como "ancla" (el
+    instante en que se confirmó la reserva) y expandimos hacia atrás y hacia
+    adelante mientras los mensajes consecutivos del mismo teléfono queden
+    separados por menos de `HUECO_CONVERSACION`: un hueco mayor significa que
+    la persona volvió a escribir por otro motivo, ya en otra conversación.
+    Se llama solo al abrir el modal de una sesión (nunca junto al listado de
+    `/api/reservas`, que puede traer 500 filas), así que el costo de esta
+    heurística no afecta la carga normal del panel.
+    """
+    reserva = Reserva.query.options(joinedload(Reserva.usuario)).get(reserva_id)
+    if reserva is None:
+        return jsonify({"error": "La reserva indicada no existe."}), 404
+
+    # Las reservas creadas desde el dashboard (o sin usuario/fecha de
+    # creación por algún dato viejo) simplemente no tienen hilo de WhatsApp:
+    # no es un error, el modal lo muestra como estado vacío.
+    if reserva.canal_origen != "whatsapp" or reserva.usuario is None or reserva.creado_en is None:
+        return jsonify({
+            "reserva_id": reserva.id,
+            "telefono": reserva.usuario.telefono_wa if reserva.usuario else None,
+            "origen": reserva.canal_origen,
+            "motivo": "sin_conversacion",
+            "truncada": False,
+            "mensajes": [],
+        })
+
+    # Mismo patrón defensivo que `_serializar_reserva`: `creado_en` puede
+    # llegar naive de filas viejas, y hay que compararlo con datetimes aware.
+    ancla = reserva.creado_en if reserva.creado_en.tzinfo else reserva.creado_en.replace(tzinfo=timezone.utc)
+    telefono = reserva.usuario.telefono_wa
+
+    candidatos = (
+        AuditoriaBot.query.filter(
+            AuditoriaBot.telefono_wa == telefono,
+            AuditoriaBot.creado_en >= ancla - VENTANA_MAX_CONVERSACION,
+            AuditoriaBot.creado_en <= ancla + VENTANA_MAX_CONVERSACION,
+        )
+        .order_by(AuditoriaBot.creado_en.asc())
+        .all()
+    )
+
+    if not candidatos:
+        return jsonify({
+            "reserva_id": reserva.id,
+            "telefono": telefono,
+            "origen": reserva.canal_origen,
+            "motivo": "sin_mensajes",
+            "truncada": False,
+            "mensajes": [],
+        })
+
+    def normalizada(m: AuditoriaBot) -> datetime:
+        return m.creado_en if m.creado_en.tzinfo else m.creado_en.replace(tzinfo=timezone.utc)
+
+    # Mensaje más cercano a la creación de la reserva: es el punto de partida
+    # del recorte por huecos y el que el frontend marca como "es_ancla".
+    idx_ancla = min(range(len(candidatos)), key=lambda i: abs(normalizada(candidatos[i]) - ancla))
+
+    inicio = idx_ancla
+    while inicio > 0 and normalizada(candidatos[inicio]) - normalizada(candidatos[inicio - 1]) <= HUECO_CONVERSACION:
+        inicio -= 1
+    fin = idx_ancla
+    while (
+        fin < len(candidatos) - 1
+        and normalizada(candidatos[fin + 1]) - normalizada(candidatos[fin]) <= HUECO_CONVERSACION
+    ):
+        fin += 1
+
+    hilo = candidatos[inicio : fin + 1]
+    truncada = False
+    if len(hilo) > MAX_MENSAJES_CONVERSACION:
+        # Nos quedamos con los más cercanos al ancla: recortamos del extremo
+        # (inicio o final) que esté más lejos de ella hasta llegar al tope.
+        truncada = True
+        idx_ancla_hilo = idx_ancla - inicio
+        while len(hilo) > MAX_MENSAJES_CONVERSACION:
+            dist_inicio = idx_ancla_hilo - 0
+            dist_fin = len(hilo) - 1 - idx_ancla_hilo
+            if dist_inicio >= dist_fin:
+                hilo = hilo[1:]
+                idx_ancla_hilo -= 1
+            else:
+                hilo = hilo[:-1]
+
+    ancla_id = candidatos[idx_ancla].id
+    return jsonify({
+        "reserva_id": reserva.id,
+        "telefono": telefono,
+        "origen": reserva.canal_origen,
+        "motivo": "ok",
+        "truncada": truncada,
+        "mensajes": [_serializar_mensaje_conversacion(m, ancla_id) for m in hilo],
+    })
 
 
 def _desc_activo(recurso: Recurso) -> str:

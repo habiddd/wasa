@@ -1318,6 +1318,50 @@ validaciones de forma que ya tenía `api_actualizar_reserva_grupo`
   usuario, estado) la ocultan, la reserva se crea igual pero el modal no se
   abre.
 
+### Filtro temporal del panel de Reservas
+
+`GET /dashboard/api/reservas?ventana=24h|7d|30d|1a|todas` (`api_reservas`,
+`app/routes/dashboard.py`) añade un tercer modo al endpoint de reservas, para
+el selector de periodo del panel de Reservas (`ReservasPanel.tsx`,
+`useReservasVentana`).
+
+- **El recorte es solo hacia atrás.** `WHERE fin > now() - intervalo`, sin
+  cota superior: una reserva futura aparece siempre, en cualquier ventana. El
+  panel sirve sobre todo para vigilar lo que viene -- si "últimas 24 h"
+  escondiera lo de mañana, el filtro sería inútil. Por eso la ventana no es un
+  rango cerrado como el `desde/hasta` del calendario, que sí tiene ambas
+  cotas.
+- **Se pide al servidor, no se filtra en cliente sobre el mismo payload.**
+  Medido en el contenedor: `/api/reservas` completo son 87 filas, 49,9 KB,
+  9,7 ms, de los cuales el SQL son solo 0,06 ms -- el costo dominante es
+  `_serializar_reserva` en Python, y ese costo se paga cada 30 s por cada
+  pestaña del dashboard abierta. Pedir solo la ventana visible reduce a la vez
+  la serialización en Flask y el `JSON.parse` + reagrupado en el navegador.
+- **Estrechar la ventana no pide nada; ensanchar sí.** `useReservasVentana`
+  guarda la última respuesta junto con la ventana con la que se pidió. Los
+  datos de una ventana más estrecha que la cacheada son un subconjunto de la
+  que ya está en memoria, así que se recortan en cliente al instante (misma
+  regla `fin > ahora - delta` que el backend). Al ensanchar, sigue mostrando
+  lo cacheado mientras llega la respuesta nueva (`refrescando`), sin pantalla
+  en blanco ni skeleton de cero.
+- **Polling adaptativo: 30 s para 24h/7d/30d, 120 s para 1a/todas.** El
+  histórico viejo es inmutable; refrescarlo cada 30 s es gasto puro.
+- **`?ventana=` devuelve un objeto (`{reservas, truncado, total, ventana}`),
+  no una lista.** Los otros dos modos del mismo endpoint -- sin parámetros
+  (pestaña Sesiones, `fetchSesiones`) y `?desde/?hasta` (calendario,
+  `fetchReservasRango`) -- siguen devolviendo una lista tal cual, para no
+  romper a esos dos consumidores. `ventana` y `desde/hasta` son mutuamente
+  excluyentes (400 si llegan juntos).
+- **"Todas" tiene un tope de seguridad (`MAX_RESERVAS_VENTANA` = 5000), no un
+  recorte esperado.** El endpoint sin parámetros ya cortaba en 500 en
+  silencio; eso deja de ser aceptable cuando el filtro invita a pedir el
+  histórico entero, así que `truncado` en la respuesta le avisa al panel
+  (línea discreta bajo los filtros) en vez de mentir con una lista incompleta
+  sin decirlo.
+- **`idx_reservas_fin` (`postgres/init/02-schema.sql`)** existe para cuando la
+  tabla de reservas crezca: hoy, con unas pocas decenas de filas, Postgres
+  sigue prefiriendo un seq scan y el índice no cambia nada medible.
+
 ### Acta de entrega y devolución (PDF)
 
 `GET /dashboard/api/reservas/grupo/<grupo_id>/pdf` (`api_acta_reserva_grupo`,
@@ -1364,6 +1408,42 @@ retirar y regresar los activos de una reserva.
   `recursos_service.ZONA_HORARIA_LACS` que el resto del proyecto y
   normaliza a UTC antes de convertir los `datetime` que puedan llegar
   naive de la BD, igual que `_serializar_reserva`.
+
+### Conversación de una sesión (Usuarios → Sesiones)
+
+`GET /dashboard/api/reservas/<reserva_id>/conversacion` (`api_conversacion_reserva`,
+`app/routes/dashboard.py`) reconstruye el hilo de WhatsApp que terminó en una
+reserva, para verlo desde un modal al hacer clic en una fila de la pestaña
+"Sesiones" (`features/usuarios/ConversacionSesionDialog.tsx`).
+
+- **Aparte del listado, pedido solo al abrir el modal.** `GET /api/reservas`
+  ya devuelve hasta 500 filas para pintar la tabla de "Sesiones"; meter ahí
+  el hilo completo de cada una multiplicaría esa respuesta por nada, porque
+  el hilo solo interesa cuando alguien abre una sesión concreta. El
+  frontend monta `ConversacionSesionDialog` únicamente mientras hay una
+  sesión seleccionada, así que su `useEffect` llama al endpoint al abrir y
+  se desmonta sin dejar nada pendiente al cerrar -- el polling de 30 s del
+  listado nunca lo toca.
+- **Hace falta una heurística porque no hay FK.** `auditoria_bot` no guarda
+  `reserva_id` (ver "Flujo de un mensaje entrante" más arriba): el único nexo
+  entre una reserva y sus mensajes es `telefono_wa` + tiempo. El endpoint
+  ancla la búsqueda en `Reserva.creado_en` y expande hacia atrás y hacia
+  adelante mientras los mensajes consecutivos del mismo teléfono queden
+  separados por menos de 30 minutos (`HUECO_CONVERSACION`); un hueco mayor
+  se toma como el arranque de otra conversación. Como tope de seguridad,
+  nunca mira más allá de 24 h del ancla ni devuelve más de 100 mensajes
+  (si hay que recortar, se quedan los más cercanos al ancla y la respuesta
+  marca `"truncada": true`).
+- **Límites conocidos de la heurística.** Si la misma persona hace dos
+  reservas seguidas dentro de la misma conversación, ambas muestran el
+  mismo hilo -- es correcto, es literalmente la misma conversación. Los
+  mensajes bloqueados antes de identificar al usuario pueden haberse
+  auditado bajo un LID distinto a `usuarios.telefono_wa` y no aparecer en
+  el hilo.
+- **Reservas de `canal_origen='dashboard'` no tienen hilo.** El endpoint
+  responde 200 con `"motivo": "sin_conversacion"` (no es un error) y el
+  modal lo muestra como estado vacío explícito, en vez de intentar buscar
+  mensajes que nunca existieron.
 
 ## Excepciones: lista negra de fechas
 

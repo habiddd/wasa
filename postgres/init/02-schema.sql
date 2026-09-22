@@ -520,6 +520,11 @@ ALTER TABLE reserva_grupos ADD COLUMN IF NOT EXISTS nota VARCHAR(300);
 CREATE INDEX IF NOT EXISTS idx_auditoria_telefono_fecha ON auditoria_bot (telefono_wa, creado_en);
 CREATE INDEX IF NOT EXISTS idx_auditoria_mensaje_id ON auditoria_bot (mensaje_id);
 
+-- El panel de Reservas filtra por ventana temporal con `fin > now() - intervalo`
+-- (ver api_reservas, parámetro ?ventana=). idx_reservas_recurso_rango no sirve:
+-- empieza por recurso_id, así que un filtro solo por fecha lo ignora.
+CREATE INDEX IF NOT EXISTS idx_reservas_fin ON reservas (fin);
+
 -- Lista negra de fechas (pestaña "Excepciones" del dashboard): días en que
 -- el bot NO acepta reservas. Ver app/fechas_bloqueadas_service.py.
 -- Reglas generales: UNA sola fila (id = 1). dias_semana_bloqueados usa la
