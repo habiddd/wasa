@@ -14,6 +14,10 @@ Piezas nuevas: `app/avisos_reservas.py` (el corazón: `barrer()`),
 `reserva_avisos`, la columna `reservas.entrega_tardia`, y los cambios de
 `actas_service` que dejan firmar la ENTREGA de un grupo en `no_show`.
 
+Quedó verificado de punta a punta contra el stack real, incluido el camino
+completo `no_show → entrega tardía → completada` firmado en el navegador (ver
+"Verificación"), y commiteado en `f515870`.
+
 ## Por qué un ticker + barrido perezoso, y no un cron
 
 Se descartó sumar APScheduler, Celery o un contenedor nuevo: el volumen de
@@ -170,6 +174,13 @@ borraron al terminar cada prueba.
 `no_show`. La mayoría (24 de 27, por tipo de aviso) salieron con
 `motivo='vencido'` sin mandar nada, como esperaba el plan.
 
+Esas 27 fueron el motivo por el que el corte de frescura se diseñó ANTES de
+escribir una línea de código: se contaron al planear, y sin el corte el
+primer tick les habría disparado hasta 81 WhatsApp de golpe. El usuario
+aclaró después que eran estudiantes dummy de prueba, así que el susto no era
+real esta vez -- pero el mecanismo se queda, porque la próxima base con
+reservas viejas vivas puede no ser de prueba. Ver `docs/SEGURIDAD.md`.
+
 **Aparte, algo que vale la pena que el usuario sepa** (no es una de "las 27"
 dummy, es dato real): dos grupos del propio número de pruebas manual del
 usuario (`573045246117`, "Habid abdala") tenían reservas `confirmada` reales
@@ -255,4 +266,5 @@ verificación de arriba es por API/DB directa y por logs.
   apaga el ticker pero no el barrido perezoso. Anotado como pendiente en
   `docs/SEGURIDAD.md`, junto con el rodeo que sí funciona
   (`AVISO_VENTANA_MIN=0`).
-- Nada de esto está commiteado -- el usuario no lo pidió.
+- El código se commiteó en `f515870` ("Implementa el ciclo de avisos de
+  WhatsApp y no-show automático para reservas"), después de la verificación.
