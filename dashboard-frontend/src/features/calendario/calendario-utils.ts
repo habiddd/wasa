@@ -177,6 +177,8 @@ export type EventoCalendario = {
   porConfirmar: boolean
   /** Reserva parcial: mezcla activos confirmados y pendientes. */
   parcial: boolean
+  /** true si alguna línea está "entregada" con `fin` ya pasado (ver Sesion.retrasada). */
+  retrasada: boolean
   /** null cuando el evento mezcla activos y lugares. */
   tipo: TipoRecurso | null
 }
@@ -184,11 +186,18 @@ export type EventoCalendario = {
 // Con qué estado se pinta un evento cuyas líneas no coinciden: manda el más
 // vigente, porque es el que le importa a quien mira el calendario. Pendiente
 // va primero: una reserva parcial es algo que la LACS todavía tiene que atender.
+// "entregada" va justo después de "confirmada": un préstamo ya en manos del
+// usuario es más vigente que cualquier cosa que no exija acción inmediata.
+// "devuelta_tarde" se agrupa con "completada": la reserva ya cerró, aunque
+// con una incidencia que el badge de "Retrasada" no cubre aquí (esa marca es
+// para "entregada" vigente, ver EstadoEventoBadge).
 const PRIORIDAD_ESTADO: EstadoReserva[] = [
   "pendiente",
   "confirmada",
+  "entregada",
   "no_show",
   "completada",
+  "devuelta_tarde",
   "cancelada",
   "denegada",
 ]
@@ -227,6 +236,7 @@ export function agruparEnEventos(reservas: ReservaUbicada[]): EventoCalendario[]
       estadosMixtos: estados.size > 1,
       porConfirmar: estados.has("pendiente"),
       parcial: estados.has("pendiente") && estados.has("confirmada"),
+      retrasada: lineas.some((l) => l.retrasada),
       tipo: tipos.size === 1 ? (primera.recurso_tipo ?? null) : null,
     })
   }
@@ -441,12 +451,22 @@ export const NOMBRES_DIA = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 // Por lo mismo, pendiente comparte el ámbar de no_show pero con borde
 // punteado y sin relleno: todavía no es una reserva firme. Denegada comparte
 // el rojo de cancelada, sin relleno.
+//
+// "entregada" (préstamo vivo, en manos del usuario) y "devuelta_tarde"
+// (cerrada, pero con incidencia) son estados nuevos y no hay token azul en
+// index.css -- se decidió no inventar uno. "entregada" usa el primario
+// sólido (variant "default" del Badge, `bg-primary`): es el color más
+// "presente" que ya existe en la paleta, coherente con que es el estado más
+// vigente después de lo que exige acción de la LACS (ver PRIORIDAD_ESTADO).
+// "devuelta_tarde" parte del gris neutro de "completada" (ya cerró) con un
+// borde ámbar encima, para que se lea "terminada, pero...": el retraso queda
+// como matiz, no como estado dominante.
 export const ESTILO_ESTADO: Record<
   EstadoReserva,
   {
     chip: string
     barra: string
-    badge: "success" | "secondary" | "destructive" | "warning" | "outline"
+    badge: "success" | "secondary" | "destructive" | "warning" | "outline" | "default"
     badgeClase?: string
   }
 > = {
@@ -482,10 +502,31 @@ export const ESTILO_ESTADO: Record<
     barra: "bg-warning",
     badge: "warning",
   },
+  entregada: {
+    chip: "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20",
+    barra: "bg-primary",
+    badge: "default",
+  },
+  devuelta_tarde: {
+    chip: "border-warning bg-muted text-muted-foreground hover:bg-muted/70",
+    barra: "bg-muted-foreground",
+    badge: "secondary",
+    badgeClase: "border-warning",
+  },
 }
 
 export function estiloDe(estado: EstadoReserva) {
   return ESTILO_ESTADO[estado] ?? ESTILO_ESTADO.completada
+}
+
+// Etiquetas en español para los estados nuevos, cuyo valor crudo ("entregada",
+// "devuelta_tarde") ya es legible pero "devuelta_tarde" no lo es tal cual sale
+// de la BD -- el resto de estados se pinta crudo en badges/leyenda (ver
+// EstadoReservaBadge, LEYENDA en CalendarioPanel) y no hace falta tocarlos.
+export function etiquetaEstado(estado: EstadoReserva) {
+  if (estado === "entregada") return "Entregada"
+  if (estado === "devuelta_tarde") return "Devuelta tarde"
+  return estado
 }
 
 export function etiquetaReserva(reserva: Sesion) {

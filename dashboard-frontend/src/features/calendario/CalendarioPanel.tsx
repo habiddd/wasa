@@ -41,16 +41,25 @@ import { VistaTiempo } from "./VistaTiempo"
 const PREFIJO_STORAGE = "dashboard-lacs-calendario-"
 const REFRESCO_MS = 60000
 
-type FiltroEstado = "vigentes" | "todas" | EstadoReserva
+// "retrasada" no es un estado de línea (ver el mismo comentario en
+// ReservasPanel): es un pseudo-filtro sobre evento.retrasada, derivado de
+// estado == "entregada" && fin < ahora.
+type FiltroEstado = "vigentes" | "todas" | "retrasada" | EstadoReserva
 type FiltroTipo = "todos" | "equipo" | "espacio"
 const USUARIO_SIN_CODIGO = "__sin_codigo__"
 
+// Mismos filtros y mismo orden que ReservasPanel.FILTROS: es el mismo
+// concepto de estado, solo que acá vive en un <Select> en vez de una barra
+// de chips.
 const ESTADOS: { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: "vigentes", etiqueta: "Sin canceladas ni denegadas" },
   { valor: "todas", etiqueta: "Todos los estados" },
   { valor: "confirmada", etiqueta: "Confirmadas" },
+  { valor: "entregada", etiqueta: "Entregadas" },
+  { valor: "retrasada", etiqueta: "Retrasadas" },
   { valor: "pendiente", etiqueta: "Pendientes de confirmación" },
   { valor: "completada", etiqueta: "Completadas" },
+  { valor: "devuelta_tarde", etiqueta: "Devueltas tarde" },
   { valor: "cancelada", etiqueta: "Canceladas" },
   { valor: "denegada", etiqueta: "Denegadas" },
   { valor: "no_show", etiqueta: "No show" },
@@ -58,8 +67,10 @@ const ESTADOS: { valor: FiltroEstado; etiqueta: string }[] = [
 
 const LEYENDA: EstadoReserva[] = [
   "confirmada",
+  "entregada",
   "pendiente",
   "completada",
+  "devuelta_tarde",
   "cancelada",
   "denegada",
   "no_show",
@@ -173,6 +184,10 @@ export function CalendarioPanel() {
         if (filtroEstado === "vigentes") {
           return reserva.estado !== "cancelada" && reserva.estado !== "denegada"
         }
+        // A diferencia de los demás valores de FiltroEstado, "retrasada" no
+        // compara contra `reserva.estado`: es el campo derivado que manda el
+        // backend (ver Sesion.retrasada / actas_service.esta_retrasada).
+        if (filtroEstado === "retrasada") return reserva.retrasada
         if (filtroEstado !== "todas") return reserva.estado === filtroEstado
         return true
       }),

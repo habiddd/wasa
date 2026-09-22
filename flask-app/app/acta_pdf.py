@@ -21,7 +21,9 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.platypus import (
+    Flowable,
     HRFlowable,
     KeepTogether,
     Paragraph,
@@ -52,6 +54,8 @@ _ESTADOS_LEGIBLES = {
     "cancelada": "Cancelada",
     "completada": "Completada",
     "no_show": "No show",
+    "entregada": "Entregada",
+    "devuelta_tarde": "Devuelta tarde",
 }
 
 _CANALES_LEGIBLES = {"whatsapp": "WhatsApp", "dashboard": "Dashboard"}
@@ -133,12 +137,129 @@ def _tabla_datos(pares: list[tuple[str, str]]) -> Table:
     return tabla
 
 
-def _celda_firma(titulo_fila: str, rol: str, subtitulo: str | None) -> list:
+class _Ancla(Flowable):
+    """Marca invisible que anota su posición absoluta en el momento del
+    `build`: reportlab coloca los flowables al construir el documento, así
+    que la posición solo se conoce aquí dentro (no se puede calcular antes a
+    mano -- depende de cuánto texto trajo cada sección previa). Alto y ancho
+    en 0 para no ocupar espacio real en el layout: es puramente un punto de
+    referencia. `canv.absolutePosition(0, 0)` devuelve la posición en puntos
+    desde la esquina inferior izquierda de la PÁGINA -- el mismo sistema de
+    coordenadas que usa pdf-lib en el navegador (ver
+    dashboard-frontend/src/features/reservas/actas-pdf.ts), así que las
+    coordenadas que se guardan acá se usan tal cual del otro lado, sin
+    invertir ejes ni convertir orígenes.
+
+    `despl_x` corre el ancla hacia la derecha antes de guardarla -- lo usan
+    las anclas de fecha y de C.C. para apuntar ya al primer hueco escribible
+    de la línea (después de la etiqueta "Fecha y hora " / "C.C. "), no al
+    inicio del párrafo. Antes ese desplazamiento lo calculaba el NAVEGADOR
+    midiendo el ancho de la etiqueta con la misma fuente/tamaño -- obligaba a
+    mantener la cadena literal de la etiqueta igual en dos archivos y en dos
+    lenguajes (reportlab acá, pdf-lib en actas-pdf.ts), y eso ya causó un bug
+    por desalineación en una iteración anterior. Calculando el
+    desplazamiento acá, con `stringWidth`, el backend entrega la coordenada
+    final y el navegador solo dibuja en `ancla.x` sin saber nada de la
+    etiqueta."""
+
+    def __init__(self, clave: str, destino: dict, ancho: float, alto: float, *, despl_x: float = 0.0):
+        super().__init__()
+        self.width = 0
+        self.height = 0
+        self._clave, self._destino = clave, destino
+        self._ancho, self._alto = ancho, alto
+        self._despl_x = despl_x
+
+    def draw(self):
+        x, y = self.canv.absolutePosition(0, 0)
+        x += self._despl_x
+        self._destino[self._clave] = {
+            "pagina": self.canv.getPageNumber(),
+            "x": round(x, 2), "y": round(y, 2),
+            "ancho": round(self._ancho, 2), "alto": round(self._alto, 2),
+        }
+
+
+# Ancho real del hueco de firma dentro de una celda de `tabla_firmas`: la
+# celda mide _ANCHO_UTIL/2, pero LEFTPADDING/RIGHTPADDING de 9pt (ver
+# TableStyle de `tabla_firmas` más abajo) le restan 18pt, y el HRFlowable de
+# la raya ocupa el 85% de lo que queda -- este cálculo tiene que replicar
+# exactamente esos dos números o la caja que reciba pdf-lib no coincidiría
+# con la raya que se ve en el PDF. Verificado a ojo con un script suelto que
+# genera un acta real, estampa un rectángulo en cada ancla y mira el PDF
+# resultante (no está en el repo -- ver la verificación de esta tarea): con
+# este ancho, el rectángulo queda centrado sobre la raya de "Firma".
+_ANCHO_FIRMA = 0.85 * (_ANCHO_UTIL / 2 - 18)
+# Alto del hueco en blanco reservado para firmar a mano -- lo pide el flujo
+# físico del acta, no es relleno visual. La zona de firma que se reporta en
+# `anclas[clave]` es más alta que esto: además de este hueco incluye la raya
+# y la etiqueta "Firma" (ver el bloque `__top`/`__bottom` más abajo), para
+# que el recorte de fondo que ve quien firma (recorte-acta.ts) traiga la
+# raya sobre la que escribir en vez de salir en blanco.
+_ALTO_FIRMA = 2 * cm
+# Ancho útil de la línea de C.C./Fecha dentro de la celda: mismo ancho de
+# celda que _ANCHO_FIRMA pero sin el recorte del 85% (esas líneas de texto no
+# necesitan ese margen), y el alto de una línea de _FIRMA_PIE (fontSize 8.5,
+# leading 11).
+_ANCHO_FECHA = _ANCHO_UTIL / 2 - 18
+_ALTO_FECHA = 11
+# Cuántos guiones lleva "Fecha y hora ____...": se probaron varios valores
+# con `stringWidth` y se generó el PDF real para elegir uno que deje la línea
+# con un margen cómodo dentro de _ANCHO_FECHA (con 30, sobran ~63pt de 257pt
+# -- ni se corta ni queda una raya ridículamente corta) -- verificado
+# mirando el PDF, no a ojo de cálculo. Si se cambia la etiqueta o el tamaño
+# de letra, hay que volver a comprobarlo.
+_GUIONES_FECHA = 30
+
+# Ancho de las etiquetas "Fecha y hora " y "C.C. " con la fuente/tamaño real
+# de la línea (_FIRMA_PIE) -- lo que antes medía el NAVEGADOR con
+# `widthOfTextAtSize` para correr la fecha a la derecha de su etiqueta (ver
+# el historial de actas-pdf.ts). Migrado acá: el backend entrega la ancla ya
+# desplazada al primer hueco escribible (ver `_Ancla.despl_x`) y el navegador
+# deja de necesitar la cadena literal de la etiqueta -- ya hubo un bug por
+# mantener esa cadena sincronizada en dos archivos y dos lenguajes a la vez.
+_ANCHO_ETIQUETA_FECHA = stringWidth("Fecha y hora ", _FIRMA_PIE.fontName, _FIRMA_PIE.fontSize)
+_ANCHO_ETIQUETA_CC = stringWidth("C.C. ", _FIRMA_PIE.fontName, _FIRMA_PIE.fontSize)
+
+
+def _celda_firma(
+    titulo_fila: str, rol: str, subtitulo: str | None, clave: str, destino: dict, cedula: str | None = None
+) -> list:
     """Contenido de un cuadro de firma: título (ENTREGA/DEVOLUCIÓN), rol,
     titular preimpreso si aplica, espacio para firmar a mano y los campos que
-    se llenan en el momento. La cédula SIEMPRE queda en blanco -- aunque ya
-    la tengamos en `usuario.cedula`, escribirla a mano junto a la firma es lo
-    que le da valor probatorio al acta."""
+    se llenan en el momento.
+
+    `cedula`, cuando viene con valor, se imprime en la línea de C.C. (petición
+    explícita del usuario: antes esta línea quedaba SIEMPRE en blanco a
+    propósito, para que se llenara a mano junto con la firma -- esa decisión
+    quedó revocada, ahora el servidor la imprime porque ya la tiene en
+    `usuario.cedula` y así también sale impresa en el acta que se archiva en
+    papel). Solo la reciben los dos cuadros del USUARIO -- los del
+    administrador siguen con la línea en blanco, porque esa cédula la teclea
+    quien firma en el diálogo del dashboard y la estampa el navegador (ver
+    `..._cc` más abajo y actas-pdf.ts). Si `cedula` es `None` o vacía (hay
+    usuarios sin cédula cargada), se conserva la línea con guiones.
+
+    `clave` es el nombre con el que esta caja de firma queda en `destino` (el
+    dict de anclas que arma `generar_acta_con_anclas`): `clave` para la zona
+    de firma, `clave + "_fecha"` para el hueco de la fecha y `clave + "_cc"`
+    para el hueco de la C.C. (siempre se genera, aunque el cuadro del usuario
+    ya venga impreso -- el administrador sí la necesita al firmar).
+
+    La zona de firma (`clave`) se arma con dos anclas AUXILIARES (`clave +
+    "__top"` y `clave + "__bottom"`) que `generar_acta_con_anclas` combina en
+    una sola después del `build()`, y que se borran del diccionario final:
+    son un cálculo intermedio, no algo que el navegador deba conocer. Esa
+    zona incluye a propósito la raya de "Firma" y su etiqueta -- no solo el
+    hueco en blanco de encima -- porque si el recorte de fondo que ve quien
+    firma (recorte-acta.ts) terminara justo en el borde del hueco, saldría
+    completamente en blanco: no traería ninguna raya sobre la que firmar, y
+    pdf.js no aportaría nada frente a simplemente no mostrar nada."""
+    if cedula:
+        linea_cc = f"C.C. {_esc(cedula)}"
+    else:
+        linea_cc = "C.C. " + "_" * 22
+
     contenido = [
         Paragraph(_esc(titulo_fila), _FIRMA_TITULO_FILA),
         Paragraph(_esc(rol), _FIRMA_ROL),
@@ -148,20 +269,56 @@ def _celda_firma(titulo_fila: str, rol: str, subtitulo: str | None) -> list:
     contenido += [
         # Alto para firmar a mano -- lo pide el flujo físico del acta, no es
         # relleno visual.
-        Spacer(1, 2 * cm),
+        Spacer(1, _ALTO_FIRMA),
+        # Marca el borde superior de la zona de firma reportada: su "y" es la
+        # raya (justo antes del HRFlowable); `generar_acta_con_anclas` le suma
+        # _ALTO_FIRMA para que el borde superior real incluya también el
+        # hueco en blanco de encima (ver el docstring de esta función).
+        _Ancla(f"{clave}__top", destino, 0, 0),
         HRFlowable(width="85%", thickness=0.75, color=colors.black, hAlign="CENTER"),
         Paragraph("Firma", _FIRMA_PIE_CENTRADO),
+        # Marca el borde inferior de la zona de firma: justo DESPUÉS del
+        # párrafo "Firma", así la zona reportada cubre la raya y la etiqueta
+        # completas (ver A5 del plan) en vez de cortarlas por la mitad.
+        _Ancla(f"{clave}__bottom", destino, 0, 0),
         Spacer(1, 0.15 * cm),
-        Paragraph("C.C. " + "_" * 22, _FIRMA_PIE),
+        Paragraph(linea_cc, _FIRMA_PIE),
+        # despl_x corre el ancla hasta el primer hueco escribible después de
+        # "C.C. " -- ver el docstring de _Ancla. Ancho: lo que le queda a la
+        # línea después de la etiqueta.
+        _Ancla(f"{clave}_cc", destino, _ANCHO_FECHA - _ANCHO_ETIQUETA_CC, _ALTO_FECHA, despl_x=_ANCHO_ETIQUETA_CC),
         Spacer(1, 0.1 * cm),
-        Paragraph("Fecha ____ / ____ / ________", _FIRMA_PIE),
+        Paragraph("Fecha y hora " + "_" * _GUIONES_FECHA, _FIRMA_PIE),
+        # Mismo criterio que la ancla de C.C., con la etiqueta "Fecha y
+        # hora " -- ver el docstring de _Ancla sobre por qué el desplazamiento
+        # se calcula acá y no en el navegador.
+        _Ancla(
+            f"{clave}_fecha",
+            destino,
+            _ANCHO_FECHA - _ANCHO_ETIQUETA_FECHA,
+            _ALTO_FECHA,
+            despl_x=_ANCHO_ETIQUETA_FECHA,
+        ),
     ]
     return contenido
 
 
-def generar_acta(reservas: list[Reserva]) -> bytes:
+def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
     """PDF del acta de entrega y devolución para todas las líneas de un mismo
-    `grupo_id` (ya ordenadas por quien llama, ver `_reservas_del_grupo`)."""
+    `grupo_id` (ya ordenadas por quien llama, ver `_reservas_del_grupo`), más
+    el diccionario de anclas de firma (ver `_Ancla`) que el navegador usa con
+    pdf-lib para saber dónde estampar cada firma (y, solo para el
+    administrador, su cédula) y con pdf.js para recortar el fondo de la zona
+    de firma (ver dashboard-frontend/src/features/reservas/recorte-acta.ts).
+    Claves: `entrega_usuario`, `entrega_admin`, `devolucion_usuario`,
+    `devolucion_admin`, cada una con `_fecha` (el hueco de la línea "Fecha y
+    hora", ya desplazado más allá de la etiqueta) y `_cc` (el hueco de la
+    línea "C.C.", igual de desplazado) -- 12 en total. A mano solo queda la
+    firma: la cédula del usuario ya viene impresa (ver `_celda_firma`) y la
+    fecha la estampa el navegador (ver actas-pdf.ts), así que `_fecha` y
+    `_cc` son huecos que el navegador rellena sin necesitar medir nada del
+    lado del PDF."""
+    anclas: dict = {}
     primera = reservas[0]
     grupo = primera.grupo
     usuario = primera.usuario
@@ -321,14 +478,22 @@ def generar_acta(reservas: list[Reserva]) -> bytes:
     )
     subtitulo_usuario = f"Titular: {nombre_titular}" if nombre_titular else None
 
+    # La cédula solo se imprime en los cuadros del USUARIO -- la del
+    # administrador se teclea en el diálogo de firma del dashboard y la
+    # estampa el navegador sobre el hueco `..._admin_cc` (ver _celda_firma).
+    cedula_usuario = usuario.cedula if usuario else None
     datos_firmas = [
         [
-            _celda_firma("ENTREGA", "Usuario", subtitulo_usuario),
-            _celda_firma("ENTREGA", "Administrador (LACS)", None),
+            _celda_firma(
+                "ENTREGA", "Usuario", subtitulo_usuario, "entrega_usuario", anclas, cedula=cedula_usuario
+            ),
+            _celda_firma("ENTREGA", "Administrador (LACS)", None, "entrega_admin", anclas),
         ],
         [
-            _celda_firma("DEVOLUCIÓN", "Usuario", subtitulo_usuario),
-            _celda_firma("DEVOLUCIÓN", "Administrador (LACS)", None),
+            _celda_firma(
+                "DEVOLUCIÓN", "Usuario", subtitulo_usuario, "devolucion_usuario", anclas, cedula=cedula_usuario
+            ),
+            _celda_firma("DEVOLUCIÓN", "Administrador (LACS)", None, "devolucion_admin", anclas),
         ],
     ]
     tabla_firmas = Table(datos_firmas, colWidths=[_ANCHO_UTIL / 2, _ANCHO_UTIL / 2])
@@ -348,4 +513,40 @@ def generar_acta(reservas: list[Reserva]) -> bytes:
     ]))
 
     doc.build(historia)
-    return buffer.getvalue()
+
+    # Las anclas __top/__bottom solo existen para calcular la zona de firma
+    # completa de cada cuadro -- se combinan acá en `anclas[clave]` y se
+    # borran del diccionario final para no filtrar un detalle interno (el
+    # nombre exacto de esas claves temporales) al navegador.
+    #
+    # `arriba["y"]` es la raya de "Firma" (donde se colocó la ancla __top,
+    # justo antes del HRFlowable) y `arriba["y"] + _ALTO_FIRMA` es el borde
+    # superior real: el hueco en blanco reservado para firmar queda POR
+    # ENCIMA de la raya en el flujo del documento. `abajo["y"]` (la ancla
+    # __bottom, colocada justo después del Paragraph "Firma") es el borde
+    # inferior -- así la zona reportada incluye la raya y su etiqueta, no
+    # solo el hueco en blanco (ver el docstring de _celda_firma sobre por qué
+    # importa: si no, el recorte de fondo saldría en blanco).
+    for clave in ("entrega_usuario", "entrega_admin", "devolucion_usuario", "devolucion_admin"):
+        arriba = anclas.pop(f"{clave}__top")
+        abajo = anclas.pop(f"{clave}__bottom")
+        anclas[clave] = {
+            "pagina": arriba["pagina"],
+            "x": arriba["x"],
+            "y": abajo["y"],
+            # Redondeado a 2 decimales igual que el resto de las anclas (ver
+            # _Ancla.draw) -- sin esto, "ancho" saldría con el float crudo de
+            # _ANCHO_FIRMA en vez de la misma representación que el resto del
+            # JSON.
+            "ancho": round(_ANCHO_FIRMA, 2),
+            "alto": round((arriba["y"] + _ALTO_FIRMA) - abajo["y"], 2),
+        }
+
+    return buffer.getvalue(), anclas
+
+
+def generar_acta(reservas: list[Reserva]) -> bytes:
+    """Compatibilidad con los llamadores que solo necesitan el PDF, sin las
+    anclas de firma (ej. la vista previa del acta base antes de firmar)."""
+    pdf, _anclas = generar_acta_con_anclas(reservas)
+    return pdf

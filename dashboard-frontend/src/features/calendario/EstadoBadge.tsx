@@ -26,6 +26,11 @@ export function EstadoReservaBadge({
  * "confirmada" -- lo que se ve como si estuviera confirmada sin más. En vez
  * de eso, "estados mixtos" tiene su propio color: naranja sólido, para que
  * se note que hay que revisar la reserva línea por línea.
+ *
+ * "Retrasada" se pinta APARTE, no en vez de "entregada": el estado real
+ * sigue siendo "entregada" (el equipo sigue prestado) y el retraso es un
+ * dato adicional -- que además es derivado, no un estado persistido (ver
+ * Sesion.retrasada) -- que le importa a quien mira el calendario.
  */
 export function EstadoEventoBadge({ evento }: { evento: EventoCalendario }) {
   if (evento.estadosMixtos && !evento.parcial) {
@@ -40,5 +45,10 @@ export function EstadoEventoBadge({ evento }: { evento: EventoCalendario }) {
       </Badge>
     )
   }
-  return <EstadoReservaBadge estado={evento.estado} etiqueta={etiquetaEstadoEvento(evento)} />
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <EstadoReservaBadge estado={evento.estado} etiqueta={etiquetaEstadoEvento(evento)} />
+      {evento.retrasada && <Badge variant="destructive">Retrasada</Badge>}
+    </span>
+  )
 }

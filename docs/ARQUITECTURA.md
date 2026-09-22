@@ -1379,8 +1379,13 @@ el selector de periodo del panel de Reservas (`ReservasPanel.tsx`,
 ### Acta de entrega y devolución (PDF)
 
 `GET /dashboard/api/reservas/grupo/<grupo_id>/pdf` (`api_acta_reserva_grupo`,
-`app/acta_pdf.py`) genera en el momento el acta que se imprime y se firma al
-retirar y regresar los activos de una reserva.
+`app/acta_pdf.py`) devuelve el acta que se firma al retirar y al regresar los
+activos de una reserva. Si la reserva ya tiene actas guardadas sirve **la
+última** con `send_file`, sin volver a pasar por reportlab; si todavía no hay
+ninguna, la genera en el momento. `?base=1` fuerza siempre el acta recién
+generada. Servir el archivo guardado no es solo correcto (es el documento que
+se firmó, no una reconstrucción) sino además más barato que lo que había
+antes, que regeneraba el PDF en cada apertura del modal.
 
 - **Se genera en Flask, no en el navegador.** El acta es un documento
   administrativo que se firma en papel y se archiva: generarla en el
@@ -1401,9 +1406,16 @@ retirar y regresar los activos de una reserva.
   DEVOLUCIÓN abajo; Usuario / Administrador (LACS) en columnas. Es una sola
   `Table` de reportlab envuelta en `KeepTogether`, para que si no alcanza el
   espacio en la página actual, salte completa a la siguiente en vez de
-  partir un cuadro de firma entre dos hojas. La cédula del titular se deja
-  siempre en blanco para escribirla a mano junto a la firma, aunque ya
-  conste en `usuario.cedula` -- es lo que le da valor probatorio al acta.
+  partir un cuadro de firma entre dos hojas.
+- **La cédula del titular va impresa, no escrita a mano.** La primera versión
+  la dejaba en blanco a propósito, con el argumento de que escribirla a mano
+  junto a la firma es lo que le da valor probatorio al acta. Quien usa el
+  dashboard pidió lo contrario después de probarlo: ahora se imprime desde
+  `usuario.cedula` al generar el acta, así que también sale puesta en la copia
+  que se imprime para firmar en papel. Si ese usuario no tiene cédula cargada
+  (la columna es nullable), la línea vuelve a salir con sus guiones. La del
+  administrador sí queda en blanco en el acta base: no está en la base de
+  datos, la teclea quien firma (ver más abajo).
 - **Se ve antes de descargarla.** El botón no baja el archivo de una: abre
   un modal (`features/reservas/BotonActaPdf.tsx`) con el PDF en un `iframe`
   y un botón "Descargar PDF", para revisar que los datos estén bien antes de
@@ -1422,6 +1434,189 @@ retirar y regresar los activos de una reserva.
   `recursos_service.ZONA_HORARIA_LACS` que el resto del proyecto y
   normaliza a UTC antes de convertir los `datetime` que puedan llegar
   naive de la BD, igual que `_serializar_reserva`.
+
+### Ciclo de estados de una reserva
+
+El acta dejó de ser un papel suelto: es **el comprobante que mueve la reserva
+de un estado al siguiente**. Sin acta registrada no hay cambio de estado.
+
+```
+pendiente ──(la LACS aprueba)──────────> confirmada
+confirmada ──(acta de ENTREGA)─────────> entregada
+confirmada ──(manual)──────────────────> no_show
+entregada ──(acta de DEVOLUCIÓN, a tiempo)──> completada
+entregada ──(acta de DEVOLUCIÓN, tarde)─────> devuelta_tarde
+entregada + fin ya pasó ──> se MUESTRA "Retrasada" (derivado, no se guarda)
+```
+
+- **`entregada` ocupa el activo.** Está en
+  `recursos_service.ESTADOS_QUE_OCUPAN` junto a `confirmada` y `pendiente`, y
+  también dentro del `EXCLUDE` de no solapamiento en
+  `postgres/init/02-schema.sql`. Las dos listas tienen que decir lo mismo: si
+  se cambia una hay que cambiar la otra, o la base dejaría pasar solapamientos
+  que la aplicación cree estar impidiendo.
+- **`retrasada` no es un estado, es un cálculo.** `actas_service.esta_retrasada`
+  lo deriva de `estado == 'entregada' AND fin < ahora`, y
+  `_serializar_reserva` lo expone como el campo booleano `retrasada`. Se
+  descartó guardarlo en una columna justamente para no meter un cron ni un
+  worker que recorriera las reservas vencidas: un estado persistido que
+  depende del reloj se desincroniza en cuanto ese proceso falla, y aquí no
+  hace falta. El panel lo pinta como un badge rojo **encima** del de
+  `entregada`, no en lugar de él: el estado real sigue siendo "entregada" y el
+  retraso es información añadida.
+- **`devuelta_tarde` sí se guarda.** Es un estado final alternativo a
+  `completada`, y se fija en el instante de la devolución comparando con `fin`
+  (`actas_service.aplicar_transicion`). Se persiste porque la métrica del
+  retraso tiene que sobrevivir a la devolución: una vez el equipo vuelve,
+  `retrasada` deja de ser verdad por definición, y sin este estado el dato se
+  perdería.
+- **Los tres estados que exige acta están cerrados en la API.**
+  `_ESTADOS_SOLO_CON_ACTA = {"entregada", "completada", "devuelta_tarde"}`:
+  los tres endpoints de edición (`PATCH /reservas/<id>`,
+  `PATCH /reservas/grupo/<id>` y `PATCH /reservas/bloque`) responden **409** si
+  alguien intenta ponerlos a mano, y el selector de estado del detalle ya no
+  los ofrece. Es una regla de negocio explícita, no una limitación técnica: la
+  única puerta a esos estados es registrar el comprobante. La salida de
+  emergencia, si hace falta, es subir un PDF firmado desde fuera.
+- **Agregar un activo a una reserva ya entregada.** El `PATCH` de grupo con
+  `recurso_ids` hace nacer la línea nueva como `confirmada`, no heredando el
+  estado del resto: si no, un equipo añadido después quedaría marcado como
+  entregado sin que nadie hubiera firmado nunca por él.
+- **`no_show` sigue siendo manual.** Automatizarlo pedía el mismo proceso de
+  fondo que se evitó para `retrasada`, y marcar que alguien no apareció es un
+  juicio del administrador, no un vencimiento de reloj.
+
+**Límite conocido:** una reserva `entregada` y retrasada deja de bloquear su
+activo, porque el `EXCLUDE` trabaja sobre `tstzrange(inicio, fin)` y ese rango
+ya pasó. El bot podría prestarle ese equipo a otra persona mientras sigue
+físicamente fuera. El dashboard lo señala con el badge "Retrasada", pero nada
+lo impide a nivel de datos.
+
+### Firmar el acta en pantalla
+
+`features/reservas/FirmarActaDialog.tsx` es un asistente de tres pasos:
+**primero firma el usuario, después el administrador**, y el tercer paso
+muestra el PDF ya compuesto antes de guardarlo, junto al estado al que pasará
+la reserva y la fecha y hora exactas que van a quedar impresas.
+
+- **El PDF firmado se compone en el navegador, con `pdf-lib`.** Es una
+  decisión deliberada de quien mantiene el proyecto, tomada sabiendo el
+  compromiso: el servidor guarda como comprobante un PDF cuyo contenido no
+  puede verificar. Las razones fueron que al dashboard solo entra el
+  administrador, que la vía de "subir un PDF firmado desde otro dispositivo"
+  acepta un PDF arbitrario de todas formas, y que el costo de CPU debía
+  quedarse fuera de los contenedores porque el despliegue puede escalar. Ver
+  `docs/SEGURIDAD.md` para el análisis completo de esa decisión.
+- **A mano solo va la firma.** La cédula del usuario la imprime el servidor;
+  la del administrador se teclea en un campo del paso 2 y la estampa el
+  navegador; la fecha y hora se ponen solas. Hubo una iteración intermedia en
+  la que el lienzo cubría el cuadro entero para escribir la cédula a pulso, y
+  se descartó tras probarla: escribir números con el ratón es incómodo y el
+  resultado se ve peor que el texto impreso.
+- **La fecha se congela al abrir el diálogo**, no al componer el PDF ni al
+  guardarlo, y se replica en los dos cuadros del momento que se firma. Así la
+  devolución lleva la fecha del momento en que se pidió firmarla, no la que
+  quedó impresa en la entrega. Formato `22/09/2026, 3:45 p. m.`, construido
+  con `Intl.DateTimeFormat("es-CO")` fijando la zona de la LACS -- no con
+  `getHours()`, que daría la hora del navegador si alguien abre el dashboard
+  desde otro huso.
+- **El lienzo muestra de fondo la franja real del acta.** `recorte-acta.ts`
+  renderiza el PDF con pdf.js y recorta la zona de firma, para que la persona
+  vea la raya sobre la que firmar en vez de un rectángulo vacío. Esa zona se
+  definió a propósito incluyendo la raya y la etiqueta "Firma": si cubriera
+  solo el hueco en blanco de encima, el recorte saldría blanco y pdf.js no
+  aportaría nada.
+- **El documento se va firmando por encima.** La devolución se estampa sobre
+  el PDF que ya trae las firmas de entrega, no sobre el acta base. Efecto
+  secundario visible: la cabecera del acta de devolución sigue diciendo
+  "Estado: Confirmada", porque ese texto quedó congelado cuando se firmó la
+  entrega. Es correcto para un comprobante -- registra lo que se firmó, no lo
+  que pasó después.
+- **La firma se exporta sin recortar al trazo.** El PNG del lienzo va completo,
+  con fondo transparente, y se calca 1:1 sobre la zona de firma. Recortarlo al
+  bounding box de la tinta (como hacía la primera versión) movería la firma del
+  sitio donde la persona efectivamente firmó.
+
+### Anclas de firma: cómo sabe el navegador dónde estampar
+
+El bloque de firmas **flota**: cuántos activos tenga la reserva decide en qué
+punto de la página (y en qué página) acaba cayendo. Así que las coordenadas no
+se pueden calcular de antemano ni cablear a mano.
+
+`acta_pdf._Ancla` es un `Flowable` de tamaño cero que, cuando reportlab lo
+coloca durante el `build`, anota su posición con `canv.absolutePosition(0, 0)`
+más el número de página. `generar_acta_con_anclas` devuelve `(bytes, anclas)`,
+y `GET /reservas/grupo/<id>/acta/estado` se las entrega al navegador junto con
+el momento pendiente y el historial.
+
+Son **12 anclas**, tres por cada uno de los cuatro cuadros
+(`entrega_usuario`, `entrega_admin`, `devolucion_usuario`, `devolucion_admin`):
+
+| Clave | Qué marca |
+|---|---|
+| `{clave}` | La zona de firma: el hueco en blanco, la raya y la etiqueta "Firma" |
+| `{clave}_fecha` | El hueco escribible de la línea "Fecha y hora ___" |
+| `{clave}_cc` | El hueco escribible de la línea "C.C. ___" |
+
+Dos detalles que cuestan un bug si se ignoran:
+
+- **Las anclas de fecha y C.C. vienen ya desplazadas** más allá de su etiqueta,
+  con el `ancho` restante. La primera versión las entregaba apuntando al inicio
+  de la línea y era el navegador quien medía el ancho de la palabra `"Fecha "`
+  para correrse -- con esa cadena literal duplicada en Python y en TypeScript.
+  Ahora el desplazamiento lo calcula el backend con
+  `pdfmetrics.stringWidth`, y cambiar la etiqueta del acta no puede desalinear
+  nada del otro lado.
+- **reportlab y pdf-lib comparten sistema de coordenadas** (origen en la
+  esquina inferior izquierda, en puntos), así que las anclas se usan tal cual
+  al estampar, sin invertir el eje Y. El canvas 2D del navegador sí tiene el
+  origen arriba, y por eso la inversión aparece **solo** en `recorte-acta.ts`,
+  donde se recorta la imagen de fondo.
+
+El navegador escribe la fecha y la cédula del administrador **blanqueando
+antes el hueco** con un rectángulo blanco: sin eso, el texto cae encima de los
+guiones preimpresos y queda tachado e ilegible.
+
+### Histórico de actas (`reserva_actas` + volumen `actas_pdf`)
+
+Cada firma y cada subida genera un **archivo nuevo**; nunca se sobrescribe
+nada. El acta "vigente" es simplemente la fila más reciente del grupo.
+
+- Los PDF viven en el volumen `actas_pdf`, montado en `/app/actas` dentro de
+  `flask-app` (`ACTAS_DIR`), organizados en `<grupo_id>/<timestamp>-<momento>-<origen>.pdf`.
+  Es un volumen con nombre y no un bind mount porque son el histórico
+  probatorio: tienen que sobrevivir a un `docker compose down` y a cualquier
+  reconstrucción de la imagen.
+- `reserva_actas` guarda los metadatos: `momento` (`entrega`/`devolucion`),
+  `origen` (`firmada` en pantalla / `subida` desde fuera), la ruta relativa,
+  `sha256`, `bytes`, las `anclas` (JSONB) que se usaron para ese archivo y
+  `firmado_por`. La FK es `ON DELETE CASCADE` hacia `reserva_grupos` para que
+  borrar una reserva siga funcionando; los archivos en disco **no** se borran,
+  que es justamente el punto de un histórico.
+- Las anclas se guardan **por versión** y no se recalculan: la firma siguiente
+  se estampa sobre ese archivo concreto, así que tiene que usar sus
+  coordenadas aunque la reserva haya cambiado después.
+- `POST /reservas/grupo/<id>/actas` (multipart) valida el momento contra
+  `momento_siguiente` (409 si no coincide), la cabecera `%PDF-` y el tamaño, y
+  hace el guardado y la transición de estado en **un solo `commit`**. Si el
+  commit falla, borra el archivo recién escrito para no dejar huérfanos.
+- `GET /reservas/grupo/<id>/actas/<acta_id>/pdf` descarga una versión
+  histórica; comprueba que el acta pertenezca a ese grupo y que la ruta
+  resuelta quede dentro de `ACTAS_DIR`.
+
+Dos ajustes de infraestructura que hicieron falta y son fáciles de perder:
+
+- `client_max_body_size 25m` en la `location /dashboard/api/` de
+  `dashboard-frontend/nginx.conf`. El límite por defecto de nginx es 1 MB y
+  rechazaría con un 413 cualquier acta con firmas incrustadas, antes de que
+  llegara a Flask.
+- El tipo MIME de `.mjs`, añadido a la tabla global de nginx desde el
+  `Dockerfile` del frontend. nginx 1.27 no lo trae y servía el worker de
+  pdf.js como `application/octet-stream`; el navegador rechaza un módulo ES
+  con ese MIME, pdf.js caía a su "fake worker" y el fondo del lienzo salía en
+  blanco, con un único error en consola como toda pista. Se añade a la tabla
+  global y no a una `location` con su propio bloque `types` porque ese bloque
+  **reemplaza** la tabla heredada en lugar de ampliarla.
 
 ### Conversación de una sesión (Usuarios → Sesiones)
 

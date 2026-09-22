@@ -69,10 +69,21 @@ MARGEN_INICIO_PASADO = timedelta(minutes=5)
 # routes/dashboard.api_confirmar_reserva_grupo). Una reserva con activos
 # confirmados y pendientes a la vez es una "reserva parcial".
 ESTADO_PENDIENTE = "pendiente"
+# El usuario ya tiene el equipo en sus manos (se llega solo registrando el
+# acta de ENTREGA -- ver actas_service.aplicar_transicion). Sigue ocupando el
+# activo igual que 'confirmada'/'pendiente': el préstamo sigue vivo hasta la
+# devolución.
+ESTADO_ENTREGADA = "entregada"
+# Alternativa persistida a 'completada' cuando el acta de DEVOLUCIÓN se
+# registra después de `fin` -- se fija una sola vez, en el momento de la
+# devolución (ver actas_service.aplicar_transicion), así que la métrica de
+# atrasos queda para siempre sin necesitar ningún cron ni worker.
+ESTADO_DEVUELTA_TARDE = "devuelta_tarde"
 # Estados que apartan el activo en su horario. El pendiente también, si no
-# otro estudiante podría reservarlo mientras la LACS decide. Debe coincidir
-# con el WHERE del EXCLUDE reservas_no_solapamiento (postgres/init/02-schema.sql).
-ESTADOS_QUE_OCUPAN = ("confirmada", ESTADO_PENDIENTE)
+# otro estudiante podría reservarlo mientras la LACS decide; 'entregada'
+# también, porque el activo sigue físicamente prestado. Debe coincidir con el
+# WHERE del EXCLUDE reservas_no_solapamiento (postgres/init/02-schema.sql).
+ESTADOS_QUE_OCUPAN = ("confirmada", ESTADO_PENDIENTE, ESTADO_ENTREGADA)
 # La LACS le negó ese activo al estudiante (ver
 # routes/dashboard.api_decidir_reserva). No ocupa el activo: queda libre
 # para otra reserva en ese horario.

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 from app.extensions import db
 
@@ -141,10 +141,18 @@ class Reserva(db.Model):
     recurso_id = db.Column(db.Integer, db.ForeignKey("recursos.id"), nullable=False)
     inicio = db.Column(db.DateTime(timezone=True), nullable=False)
     fin = db.Column(db.DateTime(timezone=True), nullable=False)
-    # 'confirmada' | 'pendiente' | 'denegada' | 'cancelada' | 'completada' |
-    # 'no_show'. 'pendiente': el activo requiere confirmación y la LACS aún no
-    # la da (ver recursos_service.ESTADOS_QUE_OCUPAN); 'denegada': la LACS no
-    # lo aprobó y el activo quedó libre.
+    # 'confirmada' | 'pendiente' | 'denegada' | 'cancelada' | 'entregada' |
+    # 'completada' | 'devuelta_tarde' | 'no_show'. 'pendiente': el activo
+    # requiere confirmación y la LACS aún no la da (ver
+    # recursos_service.ESTADOS_QUE_OCUPAN); 'denegada': la LACS no lo aprobó y
+    # el activo quedó libre. 'entregada': el usuario ya tiene el equipo (solo
+    # se llega registrando el acta de ENTREGA, nunca a mano -- ver
+    # routes/dashboard._ESTADOS_SOLO_CON_ACTA); sigue ocupando el activo.
+    # 'completada'/'devuelta_tarde': acta de DEVOLUCIÓN registrada a tiempo o
+    # tarde respectivamente (se decide una sola vez, al firmar la devolución,
+    # comparando con `fin` -- ver actas_service.aplicar_transicion). "retrasada"
+    # NO es un valor de esta columna: es derivado (estado='entregada' AND
+    # fin < now()), ver actas_service.esta_retrasada.
     estado = db.Column(db.String(20), nullable=False, default="confirmada")
     canal_origen = db.Column(db.String(20), nullable=False, default="whatsapp")
     # Número de reserva (ver ReservaGrupo): lo comparten todas las reservas
@@ -199,3 +207,41 @@ class FechaExcepcion(db.Model):
     motivo = db.Column(db.String(200))
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
     actualizado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+
+class ReservaActa(db.Model):
+    """Una fila por cada acta de entrega/devolución firmada en pantalla o
+    subida (ver app/actas_service.py) -- el histórico completo, nunca se
+    sobrescribe un archivo. Espejo exacto de postgres/init/02-schema.sql."""
+    __tablename__ = "reserva_actas"
+
+    id = db.Column(db.Integer, primary_key=True)
+    # ondelete="CASCADE" tiene que declararse también acá (no solo en el
+    # esquema): sin `passive_deletes=True` en la relación de abajo,
+    # SQLAlchemy intenta desconectar la fila hija poniendo grupo_id=NULL
+    # antes de dejar que Postgres aplique el ON DELETE CASCADE real -- y esa
+    # columna es NOT NULL, así que ese intento revienta con un IntegrityError
+    # (verificado en el contenedor al probar api_eliminar_reserva_grupo con
+    # actas ya guardadas). Con las dos cosas, SQLAlchemy ni siquiera carga
+    # las filas hijas al borrar el grupo: deja que la base las borre en cascada.
+    grupo_id = db.Column(
+        db.Integer, db.ForeignKey("reserva_grupos.id", ondelete="CASCADE"), nullable=False
+    )
+    momento = db.Column(db.String(12), nullable=False)   # 'entrega' | 'devolucion'
+    origen = db.Column(db.String(10), nullable=False)    # 'firmada' | 'subida'
+    archivo = db.Column(db.String(255), nullable=False)  # ruta relativa dentro de ACTAS_DIR
+    sha256 = db.Column(db.String(64), nullable=False)
+    bytes = db.Column(db.Integer, nullable=False)
+    # Anclas de firma tal cual las usó el navegador para estampar ESTE
+    # archivo -- no se recalculan después, ver comentario en el schema.
+    anclas = db.Column(JSONB)
+    firmado_por = db.Column(db.String(150))
+    creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    # passive_deletes=True: ver el comentario de `grupo_id` arriba -- sin
+    # esto, api_eliminar_reserva_grupo fallaba con un IntegrityError al
+    # borrar un grupo que ya tenía actas guardadas.
+    grupo = db.relationship(
+        "ReservaGrupo",
+        backref=db.backref("actas", order_by="ReservaActa.creado_en", passive_deletes=True),
+    )

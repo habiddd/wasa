@@ -85,8 +85,8 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   reservas del mismo usuario y horario se muestran como **un solo evento**
   (una sola reserva puede cubrir varios activos: una cámara y sus lentes),
   etiquetado como "Cámara Canon EOS R +2". El color indica el estado
-  (confirmada / completada / cancelada / no_show) y el ícono si es un activo
-  o un lugar. Se puede filtrar por tipo, por recurso concreto y por estado
+  (confirmada / entregada / completada / devuelta_tarde / cancelada /
+  denegada / no_show) y el ícono si es un activo o un lugar. Se puede filtrar por tipo, por recurso concreto y por estado
   (por defecto oculta las canceladas), y al hacer clic en un evento se abre
   un modal con su **número de reserva**, el usuario, el horario y la lista
   de activos, desde donde se puede **editar** la reserva (horario, estado y,
@@ -98,11 +98,34 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   local de la LACS (`America/Bogota`), sin importar la zona del equipo desde
   el que se abra el dashboard. Se refresca solo cada 60s.
 - **Reservas**: la misma lista de sesiones en tabla (o tarjetas en pantallas
-  angostas), filtrable por estado y por si necesita seguro. Cada fila tiene
-  un botón que abre el **acta de entrega y devolución** en un modal con la
-  vista previa del PDF (todos los datos de la reserva más los 4 cuadros de
-  firma de entrega/devolución) y un botón para descargarla. La genera el
-  backend en `GET /dashboard/api/reservas/grupo/<id>/pdf`.
+  angostas), filtrable por estado (incluidas "Entregadas", "Retrasadas" y
+  "Devueltas tarde") y por si necesita seguro. Cada fila tiene un botón que
+  abre el **acta de entrega y devolución** en un modal con la vista previa
+  del PDF (todos los datos de la reserva más los 4 cuadros de firma de
+  entrega/devolución), el botón de descarga y el historial de versiones
+  firmadas.
+
+  Desde ese modal se registra el acta, que es lo que mueve la reserva por su
+  ciclo de estados:
+
+  ```
+  confirmada ──(acta de ENTREGA)──> entregada ──(acta de DEVOLUCIÓN)──> completada
+                                                                     └─> devuelta_tarde
+  ```
+
+  Hay dos formas de registrarla: **firmar en pantalla** (un asistente de tres
+  pasos — primero firma el usuario, después el administrador, y el tercero
+  muestra el PDF compuesto antes de guardarlo) o **subir un PDF ya firmado**
+  desde otro dispositivo. A mano solo va la firma: la cédula del usuario la
+  imprime el servidor, la del administrador se teclea, y la fecha y hora se
+  ponen solas. Una reserva entregada cuyo horario ya venció se marca como
+  "Retrasada" mientras el equipo siga fuera.
+
+  Esos tres estados **no se pueden fijar a mano** desde el selector: la única
+  puerta es el acta, que es el comprobante de que el equipo cambió de manos.
+
+  Cada firma o subida guarda un archivo nuevo en el volumen `actas_pdf`; no se
+  sobrescribe nunca ninguna versión. Ver `docs/ARQUITECTURA.md` para el detalle.
 - **Usuarios**: submenú desplegable de dos entradas, mismo patrón que
   "Servicios". "Usuarios" lista los usuarios que completaron el registro
   por WhatsApp (`registro_completo=True` -- deja afuera contactos a medio
@@ -182,8 +205,11 @@ Si en el futuro quieres migrar a la API oficial de Meta:
   evadan), whitelist de intents, y auditoría de cada interacción en la
   tabla `auditoria_bot`.
 - Esquema de datos base: `usuarios`, `recursos` (equipos/espacios),
-  `reservas`, `secuencias_confirmacion` (para tu flujo de confirmación de equipos),
+  `reservas`, `reserva_actas` (histórico de actas firmadas),
+  `secuencias_confirmacion` (para tu flujo de confirmación de equipos),
   `auditoria_bot` — ver `postgres/init/02-schema.sql`.
+- Actas de entrega y devolución en PDF, firmables en pantalla, que son las
+  que mueven la reserva por su ciclo de estados (ver sección 5).
 - Dos endpoints de analítica de ejemplo (`/api/analytics/...`) como base
   de tu back-office.
 - Dashboard interno en `/dashboard` con estado de servicios, QR y
@@ -211,6 +237,7 @@ Si en el futuro quieres migrar a la API oficial de Meta:
 ```
 lacs-reservas-bot/
 ├── docker-compose.yml       # Postgres + Redis + Baileys + Flask + dashboard-frontend
+│                            # (volumen actas_pdf: histórico de actas firmadas)
 ├── .env.example
 ├── postgres/init/           # esquema inicial (se ejecuta 1 sola vez)
 ├── baileys-bot/
@@ -223,6 +250,8 @@ lacs-reservas-bot/
 │   │   ├── models.py
 │   │   ├── guardrails.py
 │   │   ├── estado_bot.py     # último QR recibido (compartido webhook/dashboard)
+│   │   ├── acta_pdf.py       # genera el acta (reportlab) y sus anclas de firma
+│   │   ├── actas_service.py  # actas en disco + transiciones de estado
 │   │   ├── whatsapp_client.py
 │   │   ├── llm_client.py
 │   │   └── routes/

@@ -12,19 +12,22 @@ de /dashboard/api/ hacia acá -- este blueprint ya no sirve HTML ni assets.
 
 import base64
 import io
+import json
 import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import qrcode
 import requests
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app import (
     acta_pdf,
+    actas_service,
     estado_bot,
     fechas_bloqueadas_service,
     guardrails,
@@ -40,6 +43,7 @@ from app.models import (
     FechaExcepcion,
     Recurso,
     Reserva,
+    ReservaActa,
     ReservaGrupo,
     ReservaGrupoIntegrante,
     Usuario,
@@ -416,7 +420,12 @@ def api_eliminar_usuario(usuario_id):
     return "", 204
 
 
-def _serializar_reserva(r: Reserva) -> dict:
+def _serializar_reserva(r: Reserva, ahora: datetime | None = None) -> dict:
+    """`ahora` es opcional y se recibe calculado UNA sola vez por el
+    llamador (nunca `datetime.now()` por fila): este serializador corre en
+    listados grandes (hasta 2000 filas, ver `api_reservas`) y un reloj por
+    fila es gasto de CPU evitable en un contenedor que se quiere liviano."""
+    ahora = ahora or datetime.now(timezone.utc)
     return {
         "id": r.id,
         "usuario_id": r.usuario_id,
@@ -454,6 +463,9 @@ def _serializar_reserva(r: Reserva) -> dict:
         "inicio": r.inicio.isoformat() if r.inicio else None,
         "fin": r.fin.isoformat() if r.fin else None,
         "estado": r.estado,
+        # Derivado, no una columna (ver comentario de Reserva.estado en
+        # models.py): el equipo sigue afuera y ya pasó `fin`.
+        "retrasada": actas_service.esta_retrasada(r, ahora),
         "canal_origen": r.canal_origen,
         "creado_en": r.creado_en.isoformat() if r.creado_en else None,
     }
@@ -528,17 +540,22 @@ def api_reservas():
         joinedload(Reserva.grupo).joinedload(ReservaGrupo.integrantes),
     )
 
+    # Una sola vez por request, no un now() por fila dentro de
+    # `_serializar_reserva` (ver su comentario): este endpoint puede devolver
+    # hasta 2000 filas.
+    ahora = datetime.now(timezone.utc)
+
     if ventana is not None:
         delta = VENTANAS_RESERVAS[ventana]
         if delta is not None:
-            consulta = consulta.filter(Reserva.fin > datetime.now(timezone.utc) - delta)
+            consulta = consulta.filter(Reserva.fin > ahora - delta)
         # Pedimos una fila de más que el tope para poder distinguir "hay
         # exactamente el tope" de "hay más y se truncó" sin un COUNT aparte.
         reservas = consulta.order_by(Reserva.inicio.desc()).limit(MAX_RESERVAS_VENTANA + 1).all()
         truncado = len(reservas) > MAX_RESERVAS_VENTANA
         reservas = reservas[:MAX_RESERVAS_VENTANA]
         return jsonify({
-            "reservas": [_serializar_reserva(r) for r in reservas],
+            "reservas": [_serializar_reserva(r, ahora) for r in reservas],
             "truncado": truncado,
             "total": len(reservas),
             "ventana": ventana,
@@ -553,7 +570,7 @@ def api_reservas():
     else:
         reservas = consulta.order_by(Reserva.creado_en.desc()).limit(500).all()
 
-    return jsonify([_serializar_reserva(r) for r in reservas])
+    return jsonify([_serializar_reserva(r, ahora) for r in reservas])
 
 
 @bp.route("/api/reservas/ocupados")
@@ -844,7 +861,31 @@ def api_crear_reserva():
 _CAMPOS_EDITABLES_RESERVA = {"inicio", "fin", "estado", "recurso_id"}
 
 # Ver el comentario de la columna `estado` en postgres/init/02-schema.sql.
-_ESTADOS_RESERVA = {"confirmada", "pendiente", "cancelada", "completada", "no_show", "denegada"}
+_ESTADOS_RESERVA = {
+    "confirmada", "pendiente", "cancelada", "entregada", "completada",
+    "devuelta_tarde", "no_show", "denegada",
+}
+
+# Estados a los que SOLO se puede llegar registrando el acta correspondiente
+# (ver actas_service.aplicar_transicion) -- nunca a mano desde el selector de
+# estado del dashboard. Es una regla de negocio explícita que pidió el
+# usuario, no una limitación técnica: simular una entrega o una devolución
+# sin el acta real le quitaría todo el valor probatorio al historial.
+_ESTADOS_SOLO_CON_ACTA = {"entregada", "completada", "devuelta_tarde"}
+_MENSAJES_ESTADO_SOLO_ACTA = {
+    "entregada": "A 'entregada' solo se llega registrando el acta de entrega (firmada o subida).",
+    "completada": "A 'completada' solo se llega registrando el acta de devolución (firmada o subida).",
+    "devuelta_tarde": "A 'devuelta tarde' solo se llega registrando el acta de devolución fuera de plazo (firmada o subida).",
+}
+
+
+def _rechazar_estado_solo_con_acta(datos: dict) -> str | None:
+    """Mensaje de error si `datos` intenta poner a mano un estado de
+    `_ESTADOS_SOLO_CON_ACTA`, o None si no aplica. Se llama ANTES de
+    `_preparar_cambios_reserva` (que devuelve siempre 400) porque este caso
+    es un 409: el estado en sí es válido, lo que se rechaza es el camino
+    para llegar a él sin pasar por el acta."""
+    return _MENSAJES_ESTADO_SOLO_ACTA.get(datos.get("estado"))
 
 # Constraints de reservas (postgres/init/02-schema.sql) traducidas a mensajes
 # legibles. El solapamiento lo impide Postgres con un EXCLUDE gist que solo
@@ -904,10 +945,13 @@ def _error_integridad_reserva(exc: IntegrityError) -> str:
 @bp.route("/api/reservas/<int:reserva_id>", methods=["PATCH"])
 def api_actualizar_reserva(reserva_id):
     reserva = Reserva.query.get_or_404(reserva_id)
+    datos = request.get_json(silent=True) or {}
 
-    cambios, error = _preparar_cambios_reserva(
-        request.get_json(silent=True) or {}, _CAMPOS_EDITABLES_RESERVA
-    )
+    error = _rechazar_estado_solo_con_acta(datos)
+    if error:
+        return jsonify({"error": error}), 409
+
+    cambios, error = _preparar_cambios_reserva(datos, _CAMPOS_EDITABLES_RESERVA)
     if error:
         return jsonify({"error": error}), 400
 
@@ -984,6 +1028,11 @@ def _validar_nota(valor) -> tuple[str | None, str | None]:
 def api_actualizar_reserva_grupo(grupo_id):
     """Actualiza horario/estado y activos de una reserva completa atomically."""
     datos = request.get_json(silent=True) or {}
+
+    error = _rechazar_estado_solo_con_acta(datos)
+    if error:
+        return jsonify({"error": error}), 409
+
     recurso_ids = datos.pop("recurso_ids", None)
     tiene_tipo_uso = "tipo_uso" in datos
     tipo_uso_nuevo = datos.pop("tipo_uso", None)
@@ -1100,6 +1149,13 @@ def api_actualizar_reserva_grupo(grupo_id):
             estado_nuevo = (
                 "confirmada"
                 if reserva_base.estado == recursos_service.ESTADO_PENDIENTE
+                # Un activo agregado ahora nunca "heredó" haber sido
+                # entregado/devuelto: si la base ya está en un estado de
+                # _ESTADOS_SOLO_CON_ACTA, la línea nueva nace 'confirmada' y
+                # queda a la espera de su PROPIA acta de entrega -- lo
+                # contrario dejaría un equipo marcado como entregado sin que
+                # nadie lo haya firmado nunca.
+                else "confirmada" if reserva_base.estado in _ESTADOS_SOLO_CON_ACTA
                 else reserva_base.estado
             )
         inicio_nuevo = cambios.get("inicio", reserva_base.inicio)
@@ -1203,21 +1259,202 @@ def _reservas_del_grupo(grupo_id: int) -> list[Reserva]:
     )
 
 
+def _serializar_acta(a: ReservaActa) -> dict:
+    return {
+        "id": a.id,
+        "momento": a.momento,
+        "origen": a.origen,
+        "bytes": a.bytes,
+        "sha256": a.sha256,
+        "firmado_por": a.firmado_por,
+        "creado_en": a.creado_en.isoformat() if a.creado_en else None,
+    }
+
+
+def _ruta_acta_si_valida(acta: ReservaActa) -> Path | None:
+    """Resuelve `acta.archivo` contra ACTAS_DIR y comprueba que el resultado
+    quede DENTRO de esa carpeta y que el archivo exista -- nunca se construye
+    la ruta a partir de algo que venga del request (acá `acta` ya salió de
+    una fila propia de la base, pero la comprobación queda igual como defensa
+    en profundidad: si `archivo` llegara a guardarse mal algún día, esto
+    evita servir cualquier archivo del sistema)."""
+    actas_dir = Path(current_app.config["ACTAS_DIR"]).resolve()
+    ruta = (actas_dir / acta.archivo).resolve()
+    if not ruta.is_relative_to(actas_dir) or not ruta.is_file():
+        return None
+    return ruta
+
+
 @bp.route("/api/reservas/grupo/<int:grupo_id>/pdf")
 def api_acta_reserva_grupo(grupo_id):
-    """Acta de entrega y devolución en PDF de la reserva completa (ver
-    acta_pdf.generar_acta) -- un archivo por `grupo_id`, no por activo, para
-    que quien firma lo haga una sola vez por todo lo que se lleva."""
+    """Acta de entrega y devolución en PDF de la reserva completa -- un
+    archivo por `grupo_id`, no por activo, para que quien firma lo haga una
+    sola vez por todo lo que se lleva.
+
+    Si ya hay un acta guardada (firmada en pantalla o subida), se sirve ESE
+    archivo tal cual -- es el que se va actualizando en la página a medida
+    que se registra cada momento, y de paso ahorra recomponer el PDF con
+    reportlab en cada apertura (antes se regeneraba siempre). `?base=1`
+    fuerza el acta recién generada, para depurar la plantilla sin mirar una
+    firma vieja."""
     reservas = _reservas_del_grupo(grupo_id)
     if not reservas:
         return jsonify({"error": "Esa reserva no existe."}), 404
 
-    pdf = acta_pdf.generar_acta(reservas)
-    return Response(
-        pdf,
-        mimetype="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="reserva-{grupo_id}.pdf"'},
+    ultima_acta = None if request.args.get("base") == "1" else actas_service.ultima(grupo_id)
+    ruta = _ruta_acta_si_valida(ultima_acta) if ultima_acta is not None else None
+
+    if ruta is not None:
+        respuesta = send_file(
+            ruta, mimetype="application/pdf", as_attachment=True,
+            download_name=f"reserva-{grupo_id}.pdf",
+        )
+    else:
+        # Sin acta guardada (o el archivo desapareció del disco -- volumen
+        # movido, borrado a mano) se cae al acta base recién generada, en vez
+        # de romper la descarga.
+        pdf = acta_pdf.generar_acta(reservas)
+        respuesta = Response(
+            pdf,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="reserva-{grupo_id}.pdf"'},
+        )
+
+    respuesta.headers["X-Content-Type-Options"] = "nosniff"
+    return respuesta
+
+
+@bp.route("/api/reservas/grupo/<int:grupo_id>/acta/estado")
+def api_estado_acta_grupo(grupo_id):
+    """Lo que el navegador necesita antes de mostrar el modal de firma: qué
+    falta registrar (`momento_siguiente`), con qué anclas estampar la
+    próxima firma y el historial de versiones ya guardadas.
+
+    Las anclas son las de la ÚLTIMA acta guardada si existe -- no se
+    recalculan, la firma siguiente se estampa sobre ESE archivo (ver el
+    comentario de `reserva_actas.anclas` en el esquema). Si todavía no hay
+    ninguna acta, se generan las del acta base recién compuesta: son las que
+    va a usar la PRIMERA firma."""
+    reservas = _reservas_del_grupo(grupo_id)
+    if not reservas:
+        return jsonify({"error": "Esa reserva no existe."}), 404
+
+    ultima_acta = actas_service.ultima(grupo_id)
+    if ultima_acta is not None:
+        anclas = ultima_acta.anclas or {}
+    else:
+        _pdf, anclas = acta_pdf.generar_acta_con_anclas(reservas)
+
+    historial = (
+        ReservaActa.query.filter_by(grupo_id=grupo_id)
+        .order_by(ReservaActa.creado_en.desc(), ReservaActa.id.desc())
+        .all()
     )
+    return jsonify({
+        "momento_siguiente": actas_service.momento_siguiente(reservas),
+        "tiene_acta": ultima_acta is not None,
+        "anclas": anclas,
+        "historial": [_serializar_acta(a) for a in historial],
+    })
+
+
+@bp.route("/api/reservas/grupo/<int:grupo_id>/actas/<int:acta_id>/pdf")
+def api_acta_historica_pdf(grupo_id, acta_id):
+    """Descarga una versión histórica concreta del acta (no necesariamente
+    la última) -- lo usa el Historial del modal de actas."""
+    acta = ReservaActa.query.filter_by(id=acta_id, grupo_id=grupo_id).first()
+    if acta is None:
+        return jsonify({"error": "Esa versión del acta no existe."}), 404
+
+    ruta = _ruta_acta_si_valida(acta)
+    if ruta is None:
+        return jsonify({"error": "El archivo de esa acta no está disponible."}), 404
+
+    respuesta = send_file(
+        ruta, mimetype="application/pdf", as_attachment=True,
+        download_name=f"reserva-{grupo_id}-{acta.momento}-{acta.id}.pdf",
+    )
+    respuesta.headers["X-Content-Type-Options"] = "nosniff"
+    return respuesta
+
+
+@bp.route("/api/reservas/grupo/<int:grupo_id>/actas", methods=["POST"])
+def api_crear_acta_grupo(grupo_id):
+    """Registra una firma hecha en pantalla o una subida de acta externa --
+    la ÚNICA puerta por la que una reserva llega a 'entregada'/'completada'/
+    'devuelta_tarde' (ver _ESTADOS_SOLO_CON_ACTA). `multipart/form-data`:
+    `archivo` (el PDF), `momento` ('entrega'|'devolucion'), `origen`
+    ('firmada'|'subida'), `anclas` (JSON en texto, opcional -- las que usó el
+    navegador para estampar, solo tiene sentido con origen='firmada') y
+    `firmado_por` (texto, opcional).
+
+    Guarda el archivo y cambia el estado de las líneas en la MISMA
+    transacción (un solo commit): si falla, se borra el archivo recién
+    escrito para no dejar huérfanos en disco."""
+    reservas = _reservas_del_grupo(grupo_id)
+    if not reservas:
+        return jsonify({"error": "Esa reserva no existe."}), 404
+
+    momento = request.form.get("momento")
+    if momento not in (actas_service.MOMENTO_ENTREGA, actas_service.MOMENTO_DEVOLUCION):
+        return jsonify({"error": "'momento' debe ser 'entrega' o 'devolucion'."}), 400
+
+    origen = request.form.get("origen")
+    if origen not in ("firmada", "subida"):
+        return jsonify({"error": "'origen' debe ser 'firmada' o 'subida'."}), 400
+
+    siguiente = actas_service.momento_siguiente(reservas)
+    if momento != siguiente:
+        if siguiente is None:
+            mensaje = "Esta reserva ya no tiene activos por entregar."
+        elif siguiente == actas_service.MOMENTO_ENTREGA:
+            mensaje = "Esta reserva todavía no tiene registrada el acta de entrega."
+        else:
+            mensaje = "Esta reserva ya fue entregada; falta registrar la devolución, no una nueva entrega."
+        return jsonify({"error": mensaje}), 409
+
+    archivo = request.files.get("archivo")
+    if archivo is None or not archivo.filename:
+        return jsonify({"error": "Falta el archivo PDF del acta."}), 400
+    datos = archivo.read()
+
+    anclas = None
+    anclas_crudo = request.form.get("anclas")
+    if anclas_crudo:
+        try:
+            anclas = json.loads(anclas_crudo)
+        except (TypeError, ValueError):
+            return jsonify({"error": "'anclas' debe ser JSON válido."}), 400
+
+    firmado_por = (request.form.get("firmado_por") or "").strip() or None
+
+    try:
+        acta = actas_service.guardar(grupo_id, momento, origen, datos, anclas, firmado_por)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    cambiadas, error = actas_service.aplicar_transicion(reservas, momento)
+    if error:
+        # No debería pasar (ya se validó momento == siguiente arriba), pero
+        # cubre la carrera de dos requests concurrentes registrando la misma
+        # acta: el segundo llega con las líneas ya cambiadas por el primero.
+        db.session.rollback()
+        (Path(current_app.config["ACTAS_DIR"]) / acta.archivo).unlink(missing_ok=True)
+        return jsonify({"error": error}), 409
+
+    try:
+        db.session.commit()
+    except IntegrityError as exc:
+        db.session.rollback()
+        (Path(current_app.config["ACTAS_DIR"]) / acta.archivo).unlink(missing_ok=True)
+        return jsonify({"error": _error_integridad_reserva(exc)}), 400
+
+    actualizadas = _reservas_del_grupo(grupo_id)
+    ahora = datetime.now(timezone.utc)
+    return jsonify({
+        "reservas": [_serializar_reserva(r, ahora) for r in actualizadas],
+        "acta": _serializar_acta(acta),
+    }), 201
 
 
 def _avisar_estudiante(usuario: Usuario, texto: str, intent: str) -> bool:
@@ -1264,6 +1501,10 @@ def api_actualizar_reservas_bloque():
     ids = datos.get("ids")
     if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
         return jsonify({"error": "Debes indicar los ids de las reservas a editar."}), 400
+
+    error = _rechazar_estado_solo_con_acta(datos)
+    if error:
+        return jsonify({"error": error}), 409
 
     cambios, error = _preparar_cambios_reserva(
         {campo: valor for campo, valor in datos.items() if campo != "ids"},

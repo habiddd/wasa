@@ -24,6 +24,25 @@
       autenticación del dashboard: cambio de horario, estado y activos de una
       reserva se aplican por `grupo_id` en una sola transacción; la eliminación
       completa exige confirmación explícita en un popup antes del `DELETE`.
+- [x] Los estados `entregada`, `completada` y `devuelta_tarde` no se pueden
+      fijar a mano: los tres endpoints de edición responden 409
+      (`_ESTADOS_SOLO_CON_ACTA` en `routes/dashboard.py`). La única vía es
+      registrar el acta firmada, que es el comprobante de que el equipo
+      cambió de manos.
+- [x] Subida de actas acotada: se valida la cabecera `%PDF-`, el tamaño contra
+      `ACTAS_MAX_BYTES` (10 MiB por defecto) y `MAX_CONTENT_LENGTH` de Flask, y
+      el `momento` contra el que realmente toca (409 si no coincide). El
+      guardado en disco y la transición de estado van en un solo `commit`; si
+      falla, se borra el archivo recién escrito.
+- [x] Descarga de actas históricas sin salto de directorio: se comprueba que
+      el acta pertenezca al `grupo_id` pedido y que la ruta resuelta quede
+      dentro de `ACTAS_DIR` antes de servir nada. La ruta nunca se construye
+      con algo que venga del request.
+- [x] SHA-256 de cada versión del acta guardado en `reserva_actas`, y ningún
+      archivo se sobrescribe jamás: cada firma o subida crea uno nuevo, así que
+      el histórico es verificable a posteriori.
+- [x] Actas servidas con `Content-Disposition: attachment` y
+      `X-Content-Type-Options: nosniff`.
 - [x] Registro obligatorio antes de dejar reservar/consultar nada: el
       primer mensaje de un número dispara un flujo paso a paso (nombre
       completo, código de estudiante, cédula) y hasta que no está completo
@@ -116,6 +135,37 @@
       para producción o reemplazarse por una cancelación lógica/auditable;
       el flujo actual elimina las líneas de `reservas` y su `reserva_grupos`
       después de la confirmación del administrador.
+
+### Riesgo aceptado: el contenido del acta firmada no se verifica
+
+No es un pendiente por hacer, es una decisión tomada a sabiendas. Queda escrita
+aquí para que nadie la descubra por sorpresa más adelante.
+
+**Qué pasa.** El PDF firmado se compone **en el navegador** con pdf-lib y se
+sube ya terminado. El servidor solo comprueba que empiece por `%PDF-` y que no
+pase del tamaño máximo: no puede saber si el cuerpo del acta es el que él
+generó. Con las credenciales del dashboard —o con un XSS en la SPA, o con un
+`curl`— se puede subir un acta con otra lista de equipos, otras fechas u otro
+usuario, y el sistema la guardará como el comprobante de la entrega.
+
+**Por qué se aceptó.** Al dashboard solo entra quien administra la LACS, y la
+opción de "subir un PDF firmado desde otro dispositivo" —que es un requisito
+del flujo real— acepta un PDF arbitrario de todas formas. Cerrar solo el
+camino de la firma en pantalla no habría cerrado el otro. Además se quiso
+mantener el costo de composición fuera de los contenedores, pensando en
+escalar.
+
+**La alternativa, si algún día cambia el criterio.** Componer en el servidor
+(reportlab + pypdf): el navegador manda solo los PNG de firma y Flask
+reconstruye el cuerpo del acta desde la base de datos, con lo que el contenido
+pasa a ser auténtico por construcción. Cuesta ~200 ms de CPU por firma, unas
+2-4 veces por reserva. Con eso, el camino de firma en pantalla queda fuerte y
+solo el de subida sigue siendo confiado — que es una posición bastante mejor
+que tener los dos confiados.
+
+**Qué NO mitiga esto.** Ni el SHA-256 ni el historial: sirven para detectar que
+un archivo cambió después de guardarse, no para saber si el contenido era
+legítimo cuando entró.
 
 ### Modelo / LLM
 - [x] El LLM nunca debe ser el que decide disponibilidad o ejecuta la

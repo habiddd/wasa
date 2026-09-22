@@ -14,6 +14,12 @@ volumes:
     name: cpa-reservas-bot_redis_data
   baileys_sessions:
     name: cpa-reservas-bot_baileys_sessions
+  # Nace con este proyecto (lacs-reservas-bot), sin `name` fijo -- a
+  # diferencia de los tres de arriba, no viene de antes. Volumen con nombre
+  # (no un bind mount) porque los PDF firmados son el histórico probatorio
+  # de cada entrega/devolución y tienen que sobrevivir a `docker compose
+  # down` y a cualquier reconstrucción de la imagen de flask-app.
+  actas_pdf:
 
 services:
 
@@ -104,11 +110,19 @@ services:
         condition: service_started
     ports:
       - "127.0.0.1:5000:5000"
+    volumes:
+      - actas_pdf:/app/actas
     environment:
       FLASK_ENV: ${FLASK_ENV:-production}
       SECRET_KEY: ${FLASK_SECRET_KEY}
       DATABASE_URL: postgresql://${APP_DB_USER:-reservas_user}:${APP_DB_PASSWORD:-changeme_app}@postgres:5432/${APP_DB_NAME:-reservas_db}
       REDIS_URL: redis://redis:6379/0
+
+      # Actas de entrega/devolución firmadas o subidas (ver
+      # app/actas_service.py) -- ACTAS_DIR debe calzar con el punto de
+      # montaje del volumen `actas_pdf` de arriba.
+      ACTAS_DIR: /app/actas
+      ACTAS_MAX_BYTES: ${ACTAS_MAX_BYTES:-10485760}
 
       # Baileys (servicio de WhatsApp no oficial)
       WHATSAPP_API_URL: http://baileys-bot:3000

@@ -140,11 +140,27 @@ CREATE TABLE IF NOT EXISTS reservas (
     recurso_id      INTEGER NOT NULL REFERENCES recursos(id),
     inicio          TIMESTAMPTZ NOT NULL,
     fin             TIMESTAMPTZ NOT NULL,
-    -- confirmada | pendiente | denegada | cancelada | completada | no_show.
+    -- confirmada | pendiente | denegada | cancelada | entregada | completada |
+    -- devuelta_tarde | no_show.
     -- 'pendiente' es un activo con recursos.requiere_confirmacion que espera
     -- a que la LACS lo apruebe desde el dashboard; ocupa el activo igual que
     -- una confirmada (ver reservas_no_solapamiento). 'denegada': la LACS no lo
     -- aprobó; no ocupa el activo.
+    -- 'entregada': el usuario ya tiene el equipo en sus manos (se llega solo
+    -- registrando el acta de ENTREGA, firmada en pantalla o subida -- nunca a
+    -- mano desde el selector de estado, ver _ESTADOS_SOLO_CON_ACTA en
+    -- routes/dashboard.py). Sigue ocupando el activo (ver
+    -- reservas_no_solapamiento). 'completada': se registró el acta de
+    -- DEVOLUCIÓN a tiempo (now() <= fin en ese momento). 'devuelta_tarde': la
+    -- devolución se registró después de `fin` -- alternativa persistida a
+    -- 'completada' para que la métrica de atrasos quede para siempre, sin
+    -- necesitar ningún cron ni worker (se decide una sola vez, al firmar la
+    -- devolución).
+    -- OJO: "retrasada" (el equipo sigue afuera y ya pasó `fin`) NO es un
+    -- estado de esta columna -- es derivado en caliente comparando
+    -- estado='entregada' AND fin < now() (ver actas_service.esta_retrasada).
+    -- No se persiste porque cambia solo con el paso del tiempo, sin que nadie
+    -- accione nada; guardarlo obligaría a un worker que lo recalculara.
     estado          VARCHAR(20) NOT NULL DEFAULT 'confirmada',
     canal_origen    VARCHAR(20) NOT NULL DEFAULT 'whatsapp',
     -- Número de reserva: lo comparten todos los activos confirmados juntos
@@ -168,13 +184,17 @@ CREATE INDEX IF NOT EXISTS idx_reservas_recurso_rango ON reservas (recurso_id, i
 -- solapamiento; recursos_service.crear_reserva() atrapa ese error.
 -- Una reserva 'pendiente' (espera la confirmación de la LACS) también aparta
 -- el activo: si no, otro estudiante podría reservarlo mientras la LACS decide.
--- La primera versión solo cubría 'confirmada'; se recrea si todavía es esa.
+-- Un activo 'entregada' (el usuario ya lo tiene en sus manos) ocupa igual que
+-- uno confirmado -- sigue prestado hasta que se registre la devolución.
+-- La primera versión solo cubría 'confirmada'; luego se sumó 'pendiente'; se
+-- recrea si todavía le falta 'entregada' (ver ESTADOS_QUE_OCUPAN en
+-- recursos_service.py, que debe quedar en sintonía con el WHERE de abajo).
 DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM pg_constraint
         WHERE conname = 'reservas_no_solapamiento'
-          AND pg_get_constraintdef(oid) NOT LIKE '%pendiente%'
+          AND pg_get_constraintdef(oid) NOT LIKE '%entregada%'
     ) THEN
         ALTER TABLE reservas DROP CONSTRAINT reservas_no_solapamiento;
     END IF;
@@ -185,7 +205,7 @@ BEGIN
             EXCLUDE USING gist (
                 recurso_id WITH =,
                 tstzrange(inicio, fin) WITH &&
-            ) WHERE (estado IN ('confirmada', 'pendiente'));
+            ) WHERE (estado IN ('confirmada', 'pendiente', 'entregada'));
     END IF;
 END $$;
 
@@ -559,6 +579,38 @@ CREATE TABLE IF NOT EXISTS fechas_excepcion (
     actualizado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT fechas_excepcion_tipo_valido CHECK (tipo IN ('bloqueo', 'desbloqueo'))
 );
+
+-- Historial de actas de entrega/devolución firmadas o subidas (ver
+-- app/actas_service.py y app/acta_pdf.py). Una fila por CADA firma/subida --
+-- nunca se sobrescribe un archivo existente, así queda el histórico completo
+-- que pidió el usuario (quién firmó qué versión y cuándo). El PDF se compone
+-- en el navegador con pdf-lib; el servidor solo valida y guarda (decisión
+-- registrada en el plan de esta feature: el dashboard ya es de acceso
+-- restringido al administrador).
+CREATE TABLE IF NOT EXISTS reserva_actas (
+    id          SERIAL PRIMARY KEY,
+    -- ON DELETE CASCADE: api_eliminar_reserva_grupo borra el grupo y no debe
+    -- romperse por esta tabla. Los PDF del disco NO se borran: son el
+    -- histórico, y su valor es justamente sobrevivir a la fila.
+    grupo_id    INTEGER NOT NULL REFERENCES reserva_grupos(id) ON DELETE CASCADE,
+    momento     VARCHAR(12) NOT NULL,  -- 'entrega' | 'devolucion'
+    origen      VARCHAR(10) NOT NULL,  -- 'firmada' (en pantalla) | 'subida' (PDF externo)
+    archivo     VARCHAR(255) NOT NULL, -- ruta RELATIVA dentro de ACTAS_DIR
+    sha256      CHAR(64) NOT NULL,
+    bytes       INTEGER NOT NULL,
+    -- Anclas de firma del PDF guardado, tal cual las usó el navegador para
+    -- estamparlo. Se guardan por versión y no se recalculan: la siguiente
+    -- firma se estampa sobre ESTE archivo, así que tiene que usar ESTAS
+    -- coordenadas aunque la reserva haya cambiado después.
+    anclas      JSONB,
+    firmado_por VARCHAR(150),          -- nombre que tecleó el admin al firmar
+    creado_en   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT reserva_actas_momento_valido CHECK (momento IN ('entrega', 'devolucion')),
+    CONSTRAINT reserva_actas_origen_valido  CHECK (origen IN ('firmada', 'subida'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_reserva_actas_grupo
+    ON reserva_actas (grupo_id, creado_en DESC);
 
 -- Este script corre con el superusuario de Postgres (ver 01-init.sql), así
 -- que las tablas de arriba quedan con OWNER postgres. GRANT ALL PRIVILEGES

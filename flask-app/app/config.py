@@ -51,3 +51,16 @@ class Config:
     # Dashboard interno (/dashboard) protegido con autenticación básica
     DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "admin")
     DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
+
+    # Actas de entrega/devolución firmadas o subidas (ver app/actas_service.py).
+    # Carpeta dentro del volumen con nombre `actas_pdf` (ver docker-compose.yml)
+    # -- tiene que sobrevivir a `docker compose down` y a reconstruir la imagen,
+    # porque son el histórico probatorio.
+    ACTAS_DIR = os.environ.get("ACTAS_DIR", "/app/actas")
+    ACTAS_MAX_BYTES = int(os.environ.get("ACTAS_MAX_BYTES", 10 * 1024 * 1024))
+    # Tope real de Flask para el body completo del multipart, no solo el PDF:
+    # el propio multipart (boundary, cabeceras de cada parte, el resto de
+    # campos del form) suma unos cuantos KB encima del archivo. Sin este
+    # margen, un PDF que sí pasa ACTAS_MAX_BYTES podría rechazarse igual con
+    # un 413 antes de que el código de la ruta llegue a validarlo.
+    MAX_CONTENT_LENGTH = ACTAS_MAX_BYTES + 1 * 1024 * 1024

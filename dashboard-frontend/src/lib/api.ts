@@ -116,7 +116,11 @@ export function eliminarUsuario(id: number) {
 // "pendiente": el activo requiere confirmación y la LACS todavía no la da.
 // Una reserva con activos confirmados y pendientes a la vez es "parcial"
 // (ver calendario-utils, EventoCalendario.parcial). "denegada": la LACS no
-// aprobó ese activo y quedó libre.
+// aprobó ese activo y quedó libre. "entregada"/"devuelta_tarde": solo se
+// llega a ellos registrando el acta correspondiente (ver actas-pdf.ts,
+// FirmarActaDialog y BotonActaPdf) -- el selector de estado del dashboard no
+// permite ponerlos a mano. "retrasada" NO es un estado: es derivado
+// (`entregada` con `fin` ya pasado) y viaja en `Sesion.retrasada`.
 export type EstadoReserva =
   | "confirmada"
   | "pendiente"
@@ -124,6 +128,8 @@ export type EstadoReserva =
   | "cancelada"
   | "completada"
   | "no_show"
+  | "entregada"
+  | "devuelta_tarde"
 
 // Toda reserva es particular o para una asignatura; en ese caso lleva el
 // NRC (identificador de la asignatura que cursa el estudiante).
@@ -169,6 +175,10 @@ export type Sesion = {
   inicio: string | null
   fin: string | null
   estado: EstadoReserva
+  // Derivado por el backend (estado == "entregada" && fin < ahora), no una
+  // columna: no hace falta cron ni worker, se calcula al serializar. Ver
+  // actas_service.esta_retrasada.
+  retrasada: boolean
   canal_origen: string
   creado_en: string | null
 }
@@ -290,6 +300,97 @@ export async function descargarActaPdf(grupoId: number): Promise<Blob> {
     throw new Error((data && data.error) || `HTTP ${resp.status}`)
   }
   return resp.blob()
+}
+
+// --- Actas firmadas ------------------------------------------------------
+// El PDF firmado se compone en el navegador con pdf-lib (ver
+// features/reservas/actas-pdf.ts): el backend solo valida y guarda. Este
+// bloque es el contrato con `/dashboard/api/reservas/grupo/<id>/acta*`.
+
+export type MomentoActa = "entrega" | "devolucion"
+export type OrigenActa = "firmada" | "subida"
+
+// Dónde va cada firma dentro del PDF base, en puntos desde la esquina
+// inferior izquierda -- mismo sistema de coordenadas que reportlab usó para
+// componer el PDF (ver acta_pdf.py, _Ancla) y que pdf-lib usa para leerlo, así
+// que no hay que invertir nada al estampar.
+export type AnclaFirma = { pagina: number; x: number; y: number; ancho: number; alto: number }
+
+export type ActaRegistrada = {
+  id: number
+  momento: MomentoActa
+  origen: OrigenActa
+  bytes: number
+  sha256: string
+  firmado_por: string | null
+  creado_en: string | null
+}
+
+export type EstadoActa = {
+  // null: la reserva ya está cerrada (completada/devuelta tarde/cancelada/
+  // etc.) y no queda nada por firmar.
+  momento_siguiente: MomentoActa | null
+  tiene_acta: boolean
+  // 12 claves: entrega_usuario, entrega_admin, devolucion_usuario,
+  // devolucion_admin -- cada una es la zona de firma (la raya de "Firma" con
+  // su etiqueta, usa recorte-acta.ts para el fondo del lienzo y
+  // actas-pdf.ts para estampar el trazo), más "..._fecha" y "..._cc": los
+  // huecos donde escribir la fecha y la cédula del administrador, YA
+  // desplazados más allá de su etiqueta por el backend (ver
+  // acta_pdf._Ancla.despl_x) -- el frontend no mide ningún texto, solo
+  // dibuja en `ancla.x`. Ya no hay "..._caja": el lienzo volvió a ser solo
+  // la franja de firma, no el cuadro completo. La cédula del USUARIO no
+  // viaja acá -- la imprime el servidor directo en el PDF (ver
+  // acta_pdf._celda_firma). Las anclas son las de la última acta guardada
+  // si existe, si no las del acta base recién generada.
+  anclas: Record<string, AnclaFirma>
+  historial: ActaRegistrada[]
+}
+
+export function obtenerEstadoActa(grupoId: number) {
+  return request<EstadoActa>(`/reservas/grupo/${grupoId}/acta/estado`)
+}
+
+// Igual que descargarActaPdf: respuesta binaria, no pasa por `request<T>`.
+export async function descargarActaHistorica(grupoId: number, actaId: number): Promise<Blob> {
+  const resp = await fetch(`${BASE}/reservas/grupo/${grupoId}/actas/${actaId}/pdf`)
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => null)
+    throw new Error((data && data.error) || `HTTP ${resp.status}`)
+  }
+  return resp.blob()
+}
+
+// multipart/form-data a mano: `request<T>` siempre manda
+// Content-Type: application/json cuando hay body, y un FormData necesita que
+// el navegador ponga su propio boundary -- si se fija el header a mano el
+// multipart queda mal formado y Flask no separa los campos.
+export async function registrarActa(
+  grupoId: number,
+  datos: {
+    archivo: Blob
+    momento: MomentoActa
+    origen: OrigenActa
+    anclas?: Record<string, AnclaFirma>
+    firmadoPor?: string
+  }
+): Promise<{ reservas: Sesion[]; acta: ActaRegistrada }> {
+  const formData = new FormData()
+  formData.append("archivo", datos.archivo, "acta.pdf")
+  formData.append("momento", datos.momento)
+  formData.append("origen", datos.origen)
+  if (datos.anclas) formData.append("anclas", JSON.stringify(datos.anclas))
+  if (datos.firmadoPor) formData.append("firmado_por", datos.firmadoPor)
+
+  const resp = await fetch(`${BASE}/reservas/grupo/${grupoId}/actas`, {
+    method: "POST",
+    body: formData,
+  })
+  const data = await resp.json().catch(() => null)
+  if (!resp.ok) {
+    throw new Error((data && data.error) || `HTTP ${resp.status}`)
+  }
+  return data as { reservas: Sesion[]; acta: ActaRegistrada }
 }
 
 // La LACS aprueba los activos pendientes y el backend le avisa al estudiante

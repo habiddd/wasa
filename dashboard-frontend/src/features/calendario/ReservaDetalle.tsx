@@ -60,10 +60,14 @@ import { IconoTipo } from "./IconoTipo"
 import { IntegrantesEditor, TAMANO_GRUPO_MAX, TAMANO_GRUPO_MIN } from "./IntegrantesEditor"
 import { AvisosFechasReserva, useAvisosFechasReserva } from "./use-avisos-fechas"
 
+// "completada" sale de esta lista y "entregada"/"devuelta_tarde" nunca
+// entran: los tres solo se alcanzan registrando el acta (ver BotonActaPdf /
+// FirmarActaDialog), nunca a mano desde este selector -- el backend rechaza
+// con 409 cualquier intento de ponerlos así (ver dashboard.py,
+// _ESTADOS_SOLO_CON_ACTA).
 const ESTADOS: EstadoReserva[] = [
   "confirmada",
   "pendiente",
-  "completada",
   "cancelada",
   "denegada",
   "no_show",
@@ -675,6 +679,9 @@ function FormularioEdicion({
             ))}
           </SelectContent>
         </Select>
+        <p className="text-xs text-muted-foreground">
+          Entregada, completada y devuelta tarde se registran con el acta, no desde acá.
+        </p>
         {evento.porConfirmar && (
           <p className="text-xs text-muted-foreground">
             Para confirmar o denegar lo pendiente y avisarle al estudiante por WhatsApp, usa los
@@ -928,7 +935,14 @@ function Contenido({
             {/* Mismo criterio que el botón de la tabla de Reservas: el acta es
                 del grupo completo y con varios números (reservas legadas, de
                 antes del carrito) se usa el primero. */}
-            <BotonActaPdf grupoId={evento.numeros[0] ?? null} variante="boton" />
+            <BotonActaPdf
+              grupoId={evento.numeros[0] ?? null}
+              reservas={evento.reservas}
+              usuarioNombre={evento.usuarioNombre}
+              fin={evento.fin}
+              variante="boton"
+              onRegistrada={onGuardado}
+            />
             <Button size="sm" variant="destructive" onClick={solicitarEliminacion}>
               <Trash2 />
               Eliminar reserva

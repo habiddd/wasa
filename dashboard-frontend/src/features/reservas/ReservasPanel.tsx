@@ -46,13 +46,19 @@ const FILTRO_STORAGE_KEY = "dashboard-lacs-reservas-estado"
 
 // "por_confirmar" no es un estado de línea: junta las reservas que tienen
 // algún activo pendiente de la LACS (parciales o pendientes del todo).
-type FiltroEstado = "todas" | "por_confirmar" | EstadoReserva
+// "retrasada" tampoco: es el mismo pseudo-filtro, pero sobre
+// evento.retrasada (derivado de estado == "entregada" && fin < ahora, ver
+// calendario-utils) -- no hay una columna "retrasada" que filtrar en la BD.
+type FiltroEstado = "todas" | "por_confirmar" | "retrasada" | EstadoReserva
 
 const FILTROS: { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: "todas", etiqueta: "Todas" },
   { valor: "por_confirmar", etiqueta: "Por confirmar" },
   { valor: "confirmada", etiqueta: "Confirmadas" },
+  { valor: "entregada", etiqueta: "Entregadas" },
+  { valor: "retrasada", etiqueta: "Retrasadas" },
   { valor: "completada", etiqueta: "Completadas" },
+  { valor: "devuelta_tarde", etiqueta: "Devueltas tarde" },
   { valor: "cancelada", etiqueta: "Canceladas" },
   { valor: "denegada", etiqueta: "Denegadas" },
   { valor: "no_show", etiqueta: "No show" },
@@ -190,6 +196,9 @@ function SaleDeBarranquilla({ evento, className }: { evento: EventoCalendario; c
 type PropsVista = {
   eventos: EventoCalendario[]
   onSeleccionar: (evento: EventoCalendario) => void
+  // Refresca el listado en cuanto se registra un acta (ver BotonActaPdf):
+  // el estado de la reserva cambió y no hay por qué esperar al sondeo.
+  onActaRegistrada: () => void
 }
 
 // --- Vistas ----------------------------------------------------------------
@@ -197,7 +206,7 @@ type PropsVista = {
 // así también se adaptan cuando el sidebar se abre o se retrae.
 
 /** Pantallas angostas: una tarjeta por reserva, sin columnas. */
-function ListaReservas({ eventos, onSeleccionar }: PropsVista) {
+function ListaReservas({ eventos, onSeleccionar, onActaRegistrada }: PropsVista) {
   return (
     <ul className="divide-y rounded-md border">
       {eventos.map((evento) => {
@@ -226,7 +235,13 @@ function ListaReservas({ eventos, onSeleccionar }: PropsVista) {
                 {dia} · {horas}
               </span>
             </button>
-            <BotonActaPdf grupoId={grupoIdDe(evento)} />
+            <BotonActaPdf
+              grupoId={grupoIdDe(evento)}
+              reservas={evento.reservas}
+              usuarioNombre={evento.usuarioNombre}
+              fin={evento.fin}
+              onRegistrada={onActaRegistrada}
+            />
           </li>
         )
       })}
@@ -239,7 +254,7 @@ function ListaReservas({ eventos, onSeleccionar }: PropsVista) {
  * espacio; si no, van en una línea bajo los activos. Creada es lo primero
  * que sobra.
  */
-function TablaReservas({ eventos, onSeleccionar }: PropsVista) {
+function TablaReservas({ eventos, onSeleccionar, onActaRegistrada }: PropsVista) {
   return (
     <div className="rounded-md border">
       <Table>
@@ -297,7 +312,13 @@ function TablaReservas({ eventos, onSeleccionar }: PropsVista) {
                   {creada(evento)}
                 </TableCell>
                 <TableCell>
-                  <BotonActaPdf grupoId={grupoIdDe(evento)} />
+                  <BotonActaPdf
+                    grupoId={grupoIdDe(evento)}
+                    reservas={evento.reservas}
+                    usuarioNombre={evento.usuarioNombre}
+                    fin={evento.fin}
+                    onRegistrada={onActaRegistrada}
+                  />
                 </TableCell>
               </TableRow>
             )
@@ -330,12 +351,14 @@ export function ReservasPanel() {
   // le corresponden.
   const eventosPorFiltro = useMemo(() => {
     const porFiltro = new Map(
-      FILTROS.filter(({ valor }) => valor !== "por_confirmar").map(({ valor }) => [
-        valor,
-        agruparEnEventos(
-          valor === "todas" ? ubicadas : ubicadas.filter((u) => u.reserva.estado === valor)
-        ).sort(porInicioDesc),
-      ])
+      FILTROS.filter(({ valor }) => valor !== "por_confirmar" && valor !== "retrasada").map(
+        ({ valor }) => [
+          valor,
+          agruparEnEventos(
+            valor === "todas" ? ubicadas : ubicadas.filter((u) => u.reserva.estado === valor)
+          ).sort(porInicioDesc),
+        ]
+      )
     )
     // "Por confirmar" es una lista de pendientes por atender: va la reserva
     // completa (para ver también qué quedó confirmado) y la más próxima
@@ -343,6 +366,13 @@ export function ReservasPanel() {
     porFiltro.set(
       "por_confirmar",
       (porFiltro.get("todas") ?? []).filter((e) => e.porConfirmar).sort(porInicioAsc)
+    )
+    // "Retrasada" tampoco es un estado de línea (ver el comentario de
+    // FiltroEstado): se calcula igual que "por_confirmar", sobre el evento
+    // ya agrupado.
+    porFiltro.set(
+      "retrasada",
+      (porFiltro.get("todas") ?? []).filter((e) => e.retrasada).sort(porInicioAsc)
     )
     return porFiltro
   }, [ubicadas])
@@ -521,10 +551,10 @@ export function ReservasPanel() {
             </p>
           )}
           <div className="@2xl:hidden">
-            <ListaReservas eventos={eventos} onSeleccionar={seleccionar} />
+            <ListaReservas eventos={eventos} onSeleccionar={seleccionar} onActaRegistrada={reload} />
           </div>
           <div className="hidden @2xl:block">
-            <TablaReservas eventos={eventos} onSeleccionar={seleccionar} />
+            <TablaReservas eventos={eventos} onSeleccionar={seleccionar} onActaRegistrada={reload} />
           </div>
         </>
       )}
