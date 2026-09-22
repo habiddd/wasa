@@ -24,6 +24,13 @@ def create_app(config_class: type = Config) -> Flask:
 
         registrar_cli(app)
 
+        # Hilo de fondo que dispara el no-show automático y los avisos de
+        # recogida (ver app/ticker.py y app/avisos_reservas.py). Va después
+        # de db.create_all() para no competir con la creación de tablas.
+        from app import ticker
+
+        ticker.iniciar(app)
+
     @app.route("/health")
     def health():
         return jsonify({"status": "ok"})

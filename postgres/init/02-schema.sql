@@ -156,11 +156,25 @@ CREATE TABLE IF NOT EXISTS reservas (
     -- 'completada' para que la métrica de atrasos quede para siempre, sin
     -- necesitar ningún cron ni worker (se decide una sola vez, al firmar la
     -- devolución).
+    -- 'no_show': a diferencia de los demás estados de esta columna, este SÍ lo
+    -- pone solo un worker -- el barrido de app/avisos_reservas.py (hilo
+    -- "ticker" dentro de flask-app + barrido perezoso sobre /api/reservas),
+    -- cuando una 'confirmada' sigue sin acta de entrega NO_SHOW_MARGEN_MIN
+    -- minutos después de `inicio`. Sigue siendo un estado a mano también: la
+    -- LACS puede ponerlo o quitarlo desde el selector (ver
+    -- _ESTADOS_SOLO_CON_ACTA, que NO lo incluye), y si lo revierte a
+    -- 'confirmada' el barrido no lo vuelve a marcar (la fila de aviso
+    -- (grupo_id, 'no_show') en reserva_avisos ya quedó creada para siempre,
+    -- ver el comentario de esa tabla más abajo).
     -- OJO: "retrasada" (el equipo sigue afuera y ya pasó `fin`) NO es un
     -- estado de esta columna -- es derivado en caliente comparando
     -- estado='entregada' AND fin < now() (ver actas_service.esta_retrasada).
     -- No se persiste porque cambia solo con el paso del tiempo, sin que nadie
     -- accione nada; guardarlo obligaría a un worker que lo recalculara.
+    -- "entrega_tardia" (columna aparte, más abajo) TAMPOCO es un estado: es
+    -- una bandera sobre 'entregada' para el estudiante que llegó tarde pero
+    -- dentro de su ventana -- se decidió así, y no como un estado nuevo, para
+    -- que sobreviva intacta a la devolución (que sí cambia `estado`).
     estado          VARCHAR(20) NOT NULL DEFAULT 'confirmada',
     canal_origen    VARCHAR(20) NOT NULL DEFAULT 'whatsapp',
     -- Número de reserva: lo comparten todos los activos confirmados juntos
@@ -611,6 +625,59 @@ CREATE TABLE IF NOT EXISTS reserva_actas (
 
 CREATE INDEX IF NOT EXISTS idx_reserva_actas_grupo
     ON reserva_actas (grupo_id, creado_en DESC);
+
+-- Entrega tardía: el estudiante recogió después de NO_SHOW_MARGEN_MIN minutos
+-- de `inicio` (el margen de no-show) pero todavía DENTRO de su ventana (antes
+-- de `fin`), así que igual se le entrega -- ver actas_service.aplicar_transicion
+-- y app/avisos_reservas.py. Es una bandera sobre el estado 'entregada', NO un
+-- estado nuevo, justamente para que sobreviva al paso siguiente (la
+-- devolución, que sí cambia `estado` a 'completada'/'devuelta_tarde'): si
+-- fuera un estado, se perdería la marca de que la entrega fue tardía en
+-- cuanto se devolviera el equipo. El horario de la reserva NO se extiende
+-- por la demora: `fin` queda igual que siempre.
+ALTER TABLE reservas ADD COLUMN IF NOT EXISTS entrega_tardia BOOLEAN NOT NULL DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS idx_reservas_estado_inicio ON reservas (estado, inicio);
+
+-- Avisos automáticos de WhatsApp del ciclo de no-show (ver
+-- app/avisos_reservas.py): 'previo' (30 min antes de `inicio`), 'hora' (a la
+-- hora exacta) y 'no_show' (a los NO_SHOW_MARGEN_MIN minutos de `inicio` sin
+-- acta de entrega -- ese aviso es el que además cambia `estado` a 'no_show').
+-- Una fila por (grupo, tipo), la ponga el ticker (hilo de fondo) o el barrido
+-- perezoso del listado de reservas, lo que llegue primero.
+--
+-- El UNIQUE de abajo es la garantía REAL de que un aviso no se manda dos
+-- veces, no una optimización: gunicorn corre con --workers 2 (ver
+-- flask-app/Dockerfile), así que hay DOS procesos con su propio hilo ticker
+-- corriendo el mismo barrido en paralelo. El lock de Redis
+-- (avisos_reservas.intentar_lock) evita que los dos trabajen a la vez en el
+-- caso normal, pero Redis puede estar caído o el lock puede vencer a mitad de
+-- una corrida larga -- ahí es Postgres, con este UNIQUE, quien de verdad
+-- impide la fila duplicada (el segundo INSERT revienta con IntegrityError y
+-- ese worker hace rollback y sigue, ver avisos_reservas.barrer).
+--
+-- `enviado=false` con `motivo='vencido'` significa que el momento ideal del
+-- aviso ya pasó hace más de AVISO_VENTANA_MIN minutos cuando el barrido lo
+-- encontró (ej. el contenedor estuvo caído un rato) -- la fila se crea igual,
+-- sin mandar nada, para no reintentarlo nunca en el siguiente tick. Un "te
+-- recuerdo que recoges en 30 min" que llega dos horas tarde es información
+-- incorrecta, no un aviso tardío. `motivo='error_envio'` es que sí se
+-- intentó a tiempo pero Baileys/WhatsApp lo rechazó.
+--
+-- Nota importante: como la fila (grupo_id, 'no_show') queda para siempre, si
+-- la LACS revierte a mano un 'no_show' a 'confirmada' desde el dashboard, el
+-- barrido YA NO vuelve a marcarlo ni a re-notificar -- es coherente con que
+-- el UNIQUE se lee como "este aviso ya se resolvió una vez para este grupo".
+CREATE TABLE IF NOT EXISTS reserva_avisos (
+    id        SERIAL PRIMARY KEY,
+    grupo_id  INTEGER NOT NULL REFERENCES reserva_grupos(id) ON DELETE CASCADE,
+    tipo      VARCHAR(20) NOT NULL,   -- previo | hora | no_show
+    enviado   BOOLEAN NOT NULL DEFAULT false,
+    motivo    VARCHAR(30),            -- NULL si salió bien; 'vencido' | 'error_envio'
+    creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT reserva_avisos_tipo_valido CHECK (tipo IN ('previo','hora','no_show')),
+    CONSTRAINT reserva_avisos_unico UNIQUE (grupo_id, tipo)
+);
 
 -- Este script corre con el superusuario de Postgres (ver 01-init.sql), así
 -- que las tablas de arriba quedan con OWNER postgres. GRANT ALL PRIVILEGES

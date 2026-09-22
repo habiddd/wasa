@@ -109,20 +109,31 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   ciclo de estados:
 
   ```
-  confirmada ──(acta de ENTREGA)──> entregada ──(acta de DEVOLUCIÓN)──> completada
-                                                                     └─> devuelta_tarde
+  confirmada ──(acta de ENTREGA)──────────────> entregada ──(acta de DEVOLUCIÓN)──> completada
+      │                                              ▲                          └─> devuelta_tarde
+      └─(sin recoger, automático 30 min después)──> no_show ──(acta de ENTREGA, si su horario sigue vigente)┘
   ```
 
-  Hay dos formas de registrarla: **firmar en pantalla** (un asistente de tres
-  pasos — primero firma el usuario, después el administrador, y el tercero
-  muestra el PDF compuesto antes de guardarlo) o **subir un PDF ya firmado**
-  desde otro dispositivo. A mano solo va la firma: la cédula del usuario la
-  imprime el servidor, la del administrador se teclea, y la fecha y hora se
-  ponen solas. Una reserva entregada cuyo horario ya venció se marca como
-  "Retrasada" mientras el equipo siga fuera.
+  Hay dos formas de registrar el acta: **firmar en pantalla** (un asistente de
+  tres pasos — primero firma el usuario, después el administrador, y el
+  tercero muestra el PDF compuesto antes de guardarlo) o **subir un PDF ya
+  firmado** desde otro dispositivo. A mano solo va la firma: la cédula del
+  usuario la imprime el servidor, la del administrador se teclea, y la fecha
+  y hora se ponen solas. Una reserva entregada cuyo horario ya venció se
+  marca como "Retrasada" mientras el equipo siga fuera.
+
+  **No-show automático**: una `confirmada` que nadie recoge pasa sola a
+  `no_show` 30 minutos después de su hora de inicio (configurable,
+  `NO_SHOW_MARGEN_MIN`), con avisos de WhatsApp al estudiante 30 min antes, a
+  la hora, y al marcar el no-show. Si el estudiante llega tarde pero su
+  horario todavía no terminó, se le puede entregar igual — queda marcada
+  como **"Entrega tardía"** (bandera `entrega_tardia`, no un estado nuevo:
+  sobrevive a la devolución) y el horario no se extiende por la demora. Ver
+  `docs/ARQUITECTURA.md`, sección "No-show automático y avisos de recogida".
 
   Esos tres estados **no se pueden fijar a mano** desde el selector: la única
   puerta es el acta, que es el comprobante de que el equipo cambió de manos.
+  `no_show` sí se puede poner o quitar a mano, además de llegar solo.
 
   Cada firma o subida guarda un archivo nuevo en el volumen `actas_pdf`; no se
   sobrescribe nunca ninguna versión. Ver `docs/ARQUITECTURA.md` para el detalle.

@@ -1056,6 +1056,48 @@ def mensaje_decision_lacs(decidida: Reserva, reservas: list[Reserva]) -> str:
     return "\n".join(lineas)
 
 
+def mensaje_aviso_previo(reservas: list[Reserva]) -> str:
+    """WhatsApp que manda el barrido AVISO_PREVIO_MIN minutos ANTES de
+    `inicio` (ver avisos_reservas.AVISO_PREVIO): recuerda que ya casi es hora
+    de recoger, antes de que el margen de no-show empiece a correr. Mismo
+    formateo de fecha/hora que mensaje_reserva_confirmada."""
+    primera = reservas[0]
+    inicio_local = primera.inicio.astimezone(ZONA_HORARIA_LACS)
+    minutos = current_app.config.get("AVISO_PREVIO_MIN", 30)
+    return (
+        f"⏰ Recordatorio: en {minutos} minutos empieza tu reserva N.º {primera.grupo_id} "
+        f"({_formatear_fecha_hora(inicio_local)}). Te esperamos en la LACS a recoger "
+        f"{_nombres_con_cantidad(reservas)}."
+    )
+
+
+def mensaje_hora_recogida(reservas: list[Reserva]) -> str:
+    """WhatsApp que manda el barrido A LA HORA exacta de `inicio` (ver
+    avisos_reservas.AVISO_HORA): el margen de no-show ya empezó a correr."""
+    primera = reservas[0]
+    margen = current_app.config.get("NO_SHOW_MARGEN_MIN", 30)
+    return (
+        f"🕐 Ya es la hora de tu reserva N.º {primera.grupo_id}: "
+        f"{_nombres_con_cantidad(reservas)}. Pasa por la LACS a recoger -- si no te "
+        f"presentas en los próximos {margen} minutos, el equipo queda libre para otra persona."
+    )
+
+
+def mensaje_no_show(reservas: list[Reserva]) -> str:
+    """WhatsApp que manda el barrido al marcar el no-show (ver
+    avisos_reservas.AVISO_NO_SHOW): la reserva se liberó, pero si el
+    estudiante todavía está dentro de su horario puede pasar igual y se le
+    entrega -- queda como "entrega tardía" (ver
+    actas_service.aplicar_transicion), sin que el horario se extienda."""
+    primera = reservas[0]
+    fin_local = primera.fin.astimezone(ZONA_HORARIA_LACS)
+    return (
+        f"⚠️ Tu reserva N.º {primera.grupo_id} ({_nombres_con_cantidad(reservas)}) se liberó "
+        "por no presentarte a tiempo. Si todavía estás dentro de tu horario "
+        f"(hasta las {_formatear_hora(fin_local)}), puedes pasar por la LACS igual y te lo entregamos."
+    )
+
+
 PALABRAS_CANCELAR = {"no", "cancelar", "cancela", "cerrar"}
 
 _DIAS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")

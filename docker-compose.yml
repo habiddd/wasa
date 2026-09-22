@@ -152,6 +152,19 @@ services:
       # Dashboard interno (/dashboard), protegido con autenticación básica
       DASHBOARD_USER: ${DASHBOARD_USER:-admin}
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+
+      # Ciclo de avisos y no-show automático (ver app/avisos_reservas.py y
+      # app/ticker.py): una 'confirmada' sin acta de entrega pasa sola a
+      # 'no_show' NO_SHOW_MARGEN_MIN minutos después de `inicio`.
+      NO_SHOW_MARGEN_MIN: ${NO_SHOW_MARGEN_MIN:-30}
+      AVISO_PREVIO_MIN: ${AVISO_PREVIO_MIN:-30}
+      # Corte de frescura: pasados estos minutos del momento ideal de un
+      # aviso, ya no se manda (se registra como 'vencido') -- así el
+      # contenedor puede estar caído un rato sin que al volver se disparen
+      # recordatorios de recogida con horas de retraso.
+      AVISO_VENTANA_MIN: ${AVISO_VENTANA_MIN:-120}
+      BARRIDO_INTERVALO_SEG: ${BARRIDO_INTERVALO_SEG:-60}
+      BARRIDO_ACTIVO: ${BARRIDO_ACTIVO:-1}
     networks:
       - backend
 

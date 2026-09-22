@@ -64,3 +64,25 @@ class Config:
     # margen, un PDF que sí pasa ACTAS_MAX_BYTES podría rechazarse igual con
     # un 413 antes de que el código de la ruta llegue a validarlo.
     MAX_CONTENT_LENGTH = ACTAS_MAX_BYTES + 1 * 1024 * 1024
+
+    # Ciclo de avisos y no-show automático (ver app/avisos_reservas.py y
+    # app/ticker.py).
+    # Minutos después de `inicio` sin acta de entrega para que una
+    # 'confirmada' pase sola a 'no_show'.
+    NO_SHOW_MARGEN_MIN = int(os.environ.get("NO_SHOW_MARGEN_MIN", 30))
+    # Minutos ANTES de `inicio` para el aviso "previo".
+    AVISO_PREVIO_MIN = int(os.environ.get("AVISO_PREVIO_MIN", 30))
+    # Corte de frescura: un aviso solo se manda si su momento ideal cayó
+    # dentro de los últimos AVISO_VENTANA_MIN minutos -- si el contenedor
+    # estuvo caído más que eso, el barrido igual deja la fila en
+    # reserva_avisos (con motivo='vencido') para no reintentarlo nunca, pero
+    # ya no manda el mensaje: un recordatorio de recogida que llega dos horas
+    # tarde es información incorrecta, no un aviso tardío.
+    AVISO_VENTANA_MIN = int(os.environ.get("AVISO_VENTANA_MIN", 120))
+    # Cada cuánto despierta el hilo ticker (ver app/ticker.py) a correr el
+    # barrido dentro del propio contenedor flask-app.
+    BARRIDO_INTERVALO_SEG = int(os.environ.get("BARRIDO_INTERVALO_SEG", 60))
+    # Apaga el hilo ticker (ej. para pruebas locales que no quieren un hilo de
+    # fondo compitiendo). El barrido perezoso del listado de reservas sigue
+    # activo igual: no depende de esta variable.
+    BARRIDO_ACTIVO = os.environ.get("BARRIDO_ACTIVO", "1") != "0"

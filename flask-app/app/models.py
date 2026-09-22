@@ -161,6 +161,13 @@ class Reserva(db.Model):
     # migración de postgres/init/02-schema.sql.
     grupo_id = db.Column(db.Integer, db.ForeignKey("reserva_grupos.id"), nullable=False)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    # Bandera, NO un estado: el estudiante recogió después del margen de
+    # no-show (NO_SHOW_MARGEN_MIN) pero todavía dentro de su ventana (antes
+    # de `fin`), así que se le entregó igual -- ver
+    # actas_service.aplicar_transicion. Vive aparte de `estado` justo para
+    # sobrevivir a la devolución (que sí cambia `estado`). El horario no se
+    # extiende por la demora: `fin` no se toca.
+    entrega_tardia = db.Column(db.Boolean, nullable=False, default=False)
 
     usuario = db.relationship("Usuario")
     recurso = db.relationship("Recurso")
@@ -244,4 +251,38 @@ class ReservaActa(db.Model):
     grupo = db.relationship(
         "ReservaGrupo",
         backref=db.backref("actas", order_by="ReservaActa.creado_en", passive_deletes=True),
+    )
+
+
+class ReservaAviso(db.Model):
+    """Una fila por cada aviso de WhatsApp del ciclo de no-show ('previo',
+    'hora', 'no_show') que ya se intentó para un grupo -- ver
+    app/avisos_reservas.py. El UNIQUE (grupo_id, tipo) del esquema es la
+    garantía real contra avisos duplicados (gunicorn corre con dos workers,
+    cada uno con su propio ticker); el lock de Redis es solo la optimización
+    para que no se pisen en el caso normal. Espejo exacto de
+    postgres/init/02-schema.sql."""
+    __tablename__ = "reserva_avisos"
+
+    id = db.Column(db.Integer, primary_key=True)
+    # ondelete="CASCADE" + passive_deletes=True en el backref de abajo, igual
+    # que ReservaActa.grupo_id -- sin las dos cosas, SQLAlchemy intenta poner
+    # grupo_id=NULL antes de dejar que Postgres borre en cascada, y esta
+    # columna es NOT NULL (ya se vivió este bug una vez con ReservaActa, no
+    # repetirlo acá).
+    grupo_id = db.Column(
+        db.Integer, db.ForeignKey("reserva_grupos.id", ondelete="CASCADE"), nullable=False
+    )
+    tipo = db.Column(db.String(20), nullable=False)  # 'previo' | 'hora' | 'no_show'
+    enviado = db.Column(db.Boolean, nullable=False, default=False)
+    # NULL si salió bien; 'vencido' (el momento ideal ya pasó hace más de
+    # AVISO_VENTANA_MIN cuando el barrido lo encontró, ej. contenedor caído
+    # un rato) | 'error_envio' (Baileys/WhatsApp lo rechazó a tiempo).
+    motivo = db.Column(db.String(30))
+    creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+
+    # passive_deletes=True: ver el comentario de `grupo_id` arriba.
+    grupo = db.relationship(
+        "ReservaGrupo",
+        backref=db.backref("avisos", order_by="ReservaAviso.creado_en", passive_deletes=True),
     )

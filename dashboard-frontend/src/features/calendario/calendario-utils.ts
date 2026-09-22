@@ -179,6 +179,8 @@ export type EventoCalendario = {
   parcial: boolean
   /** true si alguna línea está "entregada" con `fin` ya pasado (ver Sesion.retrasada). */
   retrasada: boolean
+  /** true si alguna línea se entregó tarde (ver Sesion.entrega_tardia). */
+  entregaTardia: boolean
   /** null cuando el evento mezcla activos y lugares. */
   tipo: TipoRecurso | null
 }
@@ -237,6 +239,7 @@ export function agruparEnEventos(reservas: ReservaUbicada[]): EventoCalendario[]
       porConfirmar: estados.has("pendiente"),
       parcial: estados.has("pendiente") && estados.has("confirmada"),
       retrasada: lineas.some((l) => l.retrasada),
+      entregaTardia: lineas.some((l) => l.entrega_tardia),
       tipo: tipos.size === 1 ? (primera.recurso_tipo ?? null) : null,
     })
   }

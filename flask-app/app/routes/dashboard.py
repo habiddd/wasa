@@ -28,13 +28,12 @@ from sqlalchemy.orm import joinedload
 from app import (
     acta_pdf,
     actas_service,
+    avisos_reservas,
     estado_bot,
     fechas_bloqueadas_service,
-    guardrails,
     recursos_service,
     registro_service,
     usuarios_service,
-    whatsapp_client,
 )
 from app.extensions import db, redis_client
 from app.models import (
@@ -466,6 +465,10 @@ def _serializar_reserva(r: Reserva, ahora: datetime | None = None) -> dict:
         # Derivado, no una columna (ver comentario de Reserva.estado en
         # models.py): el equipo sigue afuera y ya pasó `fin`.
         "retrasada": actas_service.esta_retrasada(r, ahora),
+        # Bandera persistida (no derivada, a diferencia de "retrasada"): el
+        # estudiante recogió después del margen de no-show pero dentro de su
+        # ventana. Ver Reserva.entrega_tardia y actas_service.aplicar_transicion.
+        "entrega_tardia": bool(r.entrega_tardia),
         "canal_origen": r.canal_origen,
         "creado_en": r.creado_en.isoformat() if r.creado_en else None,
     }
@@ -506,8 +509,29 @@ VENTANAS_RESERVAS = {
 MAX_RESERVAS_VENTANA = 5000
 
 
+def _barrido_perezoso():
+    """Empuja el no-show automático desde el propio listado de reservas (el
+    ticker de app/ticker.py es la vía principal, pero este endpoint lo pide
+    el dashboard cada 30 s y es una segunda oportunidad barata de que corra,
+    ej. justo después de levantar el contenedor). `intentar_lock` con
+    BARRIDO_INTERVALO_SEG como TTL hace que como máximo corra una vez por
+    minuto aunque lleguen decenas de requests de varias pestañas abiertas a
+    la vez -- el mismo lock que usa el ticker, así que compiten por el mismo
+    turno, no se duplican.
+
+    Nunca debe romper la respuesta del listado: un barrido fallido (Postgres
+    con hipo, lo que sea) se loguea y se ignora, el listado se sirve igual."""
+    try:
+        intervalo = current_app.config.get("BARRIDO_INTERVALO_SEG", 60)
+        if avisos_reservas.intentar_lock(intervalo):
+            avisos_reservas.barrer()
+    except Exception:  # noqa: BLE001 - el listado tiene que responder igual
+        current_app.logger.exception("Error en el barrido perezoso de avisos_reservas")
+
+
 @bp.route("/api/reservas")
 def api_reservas():
+    _barrido_perezoso()
     # Sesiones de uso (reservas) de cada usuario, con TRES modos mutuamente
     # excluyentes:
     # - Sin parámetros: últimas 500 por fecha de creación (sub-panel
@@ -1458,17 +1482,12 @@ def api_crear_acta_grupo(grupo_id):
 
 
 def _avisar_estudiante(usuario: Usuario, texto: str, intent: str) -> bool:
-    """Le escribe al estudiante sin un mensaje suyo al que responder (ver
-    whatsapp_client.jid_de) y lo deja en la auditoría como cualquier mensaje
-    del bot: así el ack de entrega de Baileys (/webhook/ack) lo encuentra por
-    mensaje_id. Devuelve si Baileys aceptó el envío."""
-    enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(whatsapp_client.jid_de(usuario), texto)
-    guardrails.registrar_interaccion(
-        usuario.telefono_wa, None, intent, texto, permitido=True,
-        mensaje_id=mensaje_id,
-        estado_envio="pendiente" if enviado else "error_http",
-    )
-    return enviado
+    """Delegación de una línea: el cuerpo se movió a
+    avisos_reservas.avisar_usuario porque el ticker de no-show (hilo de
+    fondo, ver app/ticker.py) también lo necesita y no debe importar un
+    módulo de blueprint. Se conserva esta función para no tocar a sus tres
+    llamadores actuales en este archivo."""
+    return avisos_reservas.avisar_usuario(usuario, texto, intent)
 
 
 @bp.route("/api/reservas/grupo/<int:grupo_id>", methods=["DELETE"])

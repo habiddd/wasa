@@ -135,6 +135,16 @@
       para producción o reemplazarse por una cancelación lógica/auditable;
       el flujo actual elimina las líneas de `reservas` y su `reserva_grupos`
       después de la confirmación del administrador.
+- [ ] Interruptor único para los avisos automáticos de WhatsApp. Hoy
+      `BARRIDO_ACTIVO=0` apaga el hilo ticker pero **no** el barrido
+      perezoso del listado de reservas, así que los mensajes siguen
+      saliendo. Ver la sección "El bot ahora le escribe a estudiantes sin
+      que nadie apriete nada" más abajo para el rodeo que sí funciona
+      mientras tanto.
+- [ ] Antes de apuntar a la instancia real de WhatsApp de la LACS: revisar
+      qué reservas `confirmada` con `inicio` pasado hay vivas en la base.
+      El primer barrido las procesa todas. El corte de frescura evita los
+      mensajes, pero el cambio masivo a `no_show` sí ocurre.
 
 ### Riesgo aceptado: el contenido del acta firmada no se verifica
 
@@ -166,6 +176,44 @@ que tener los dos confiados.
 **Qué NO mitiga esto.** Ni el SHA-256 ni el historial: sirven para detectar que
 un archivo cambió después de guardarse, no para saber si el contenido era
 legítimo cuando entró.
+
+### El bot ahora le escribe a estudiantes sin que nadie apriete nada
+
+Hasta el no-show automático, **todo** mensaje saliente tenía un humano o un
+mensaje entrante detrás: o el estudiante escribía y el bot respondía
+(`routes/webhook.py`), o un administrador tocaba un botón del dashboard
+(`_avisar_estudiante`). Desde `app/ticker.py` eso dejó de ser cierto: un hilo
+despierta cada 60 s y puede mandar WhatsApp por su cuenta. Es un cambio en el
+perfil de riesgo del sistema, no solo una funcionalidad más, y por eso queda
+escrito acá.
+
+**Radio de alcance.** Cada grupo de reserva puede generar como máximo tres
+mensajes (`previo`, `hora`, `no_show`), garantizado por el
+`UNIQUE (grupo_id, tipo)` de `reserva_avisos`. No hay reintentos: un envío
+fallido queda `motivo='error_envio'` y no se vuelve a intentar nunca. El techo
+por barrido es, entonces, tres mensajes por cada reserva `confirmada` cuya
+ventana de avisos esté abierta — no existe un camino por el que un bug de
+bucle mande miles.
+
+**Lo que contiene el radio.** El corte de frescura (`AVISO_VENTANA_MIN`) es lo
+que impide el escenario feo: levantar el stack después de días apagado y
+dispararle recordatorios viejos a medio padrón. Los avisos vencidos se
+registran y no se mandan. Esto se probó de verdad: en el despliegue inicial
+había 27 reservas `confirmada` con `inicio` pasado y ninguna generó mensajes.
+
+**Cómo apagarlo hoy.** No hay una perilla dedicada (ver el pendiente arriba).
+El rodeo que funciona es `AVISO_VENTANA_MIN=0`: todo aviso cuyo momento ya
+pasó cuenta como vencido, así que no sale ningún mensaje, y los cambios de
+estado a `no_show` se siguen aplicando. `BARRIDO_ACTIVO=0` **no** sirve para
+esto: solo apaga el ticker, y el listado de reservas del dashboard sigue
+llamando al mismo barrido cada 30 s.
+
+**Qué NO mitiga.** Nada de esto valida el destinatario. El número sale de
+`usuarios.telefono_wa`, que hoy es auto-servicio (ver el pendiente de
+validación del registro, más arriba): si alguien se registró con el número de
+otra persona, los avisos automáticos le llegan a esa otra persona sin que
+nadie revise. Antes el daño se limitaba a lo que un administrador mandara a
+mano; ahora es continuo.
 
 ### Modelo / LLM
 - [x] El LLM nunca debe ser el que decide disponibilidad o ejecuta la

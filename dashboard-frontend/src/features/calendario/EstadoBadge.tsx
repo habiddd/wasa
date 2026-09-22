@@ -31,6 +31,14 @@ export function EstadoReservaBadge({
  * sigue siendo "entregada" (el equipo sigue prestado) y el retraso es un
  * dato adicional -- que además es derivado, no un estado persistido (ver
  * Sesion.retrasada) -- que le importa a quien mira el calendario.
+ *
+ * "Entrega tardía" se pinta con el mismo patrón: el estudiante recogió
+ * después del margen de no-show pero dentro de su ventana (ver
+ * Sesion.entrega_tardia), y esa marca importa aparte del estado "entregada".
+ * A diferencia de "retrasada", esta SÍ es persistida -- sobrevive a la
+ * devolución -- pero visualmente se trata igual: un dato adicional sobre el
+ * estado, no un reemplazo. warning (no destructive): no es una incidencia
+ * en curso como "retrasada", es historial de cómo se entregó.
  */
 export function EstadoEventoBadge({ evento }: { evento: EventoCalendario }) {
   if (evento.estadosMixtos && !evento.parcial) {
@@ -49,6 +57,7 @@ export function EstadoEventoBadge({ evento }: { evento: EventoCalendario }) {
     <span className="inline-flex flex-wrap items-center gap-1">
       <EstadoReservaBadge estado={evento.estado} etiqueta={etiquetaEstadoEvento(evento)} />
       {evento.retrasada && <Badge variant="destructive">Retrasada</Badge>}
+      {evento.entregaTardia && <Badge variant="warning">Entrega tardía</Badge>}
     </span>
   )
 }

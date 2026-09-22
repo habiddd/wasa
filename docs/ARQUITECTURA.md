@@ -1441,11 +1441,13 @@ El acta dejó de ser un papel suelto: es **el comprobante que mueve la reserva
 de un estado al siguiente**. Sin acta registrada no hay cambio de estado.
 
 ```
-pendiente ──(la LACS aprueba)──────────> confirmada
-confirmada ──(acta de ENTREGA)─────────> entregada
-confirmada ──(manual)──────────────────> no_show
-entregada ──(acta de DEVOLUCIÓN, a tiempo)──> completada
-entregada ──(acta de DEVOLUCIÓN, tarde)─────> devuelta_tarde
+pendiente ──(la LACS aprueba)──────────────────> confirmada
+confirmada ──(acta de ENTREGA)─────────────────> entregada
+confirmada ──(NO_SHOW_MARGEN_MIN sin acta, automático)──> no_show
+confirmada ──(manual, desde el selector)───────> no_show
+no_show ──(acta de ENTREGA, dentro de la ventana)──> entregada [+ entrega_tardia]
+entregada ──(acta de DEVOLUCIÓN, a tiempo)──────> completada
+entregada ──(acta de DEVOLUCIÓN, tarde)─────────> devuelta_tarde
 entregada + fin ya pasó ──> se MUESTRA "Retrasada" (derivado, no se guarda)
 ```
 
@@ -1482,15 +1484,118 @@ entregada + fin ya pasó ──> se MUESTRA "Retrasada" (derivado, no se guarda)
   `recurso_ids` hace nacer la línea nueva como `confirmada`, no heredando el
   estado del resto: si no, un equipo añadido después quedaría marcado como
   entregado sin que nadie hubiera firmado nunca por él.
-- **`no_show` sigue siendo manual.** Automatizarlo pedía el mismo proceso de
-  fondo que se evitó para `retrasada`, y marcar que alguien no apareció es un
-  juicio del administrador, no un vencimiento de reloj.
+- **`no_show` ahora es automático (y sigue admitiendo el manual).** Ver la
+  sección siguiente, "No-show automático y avisos de recogida", para el
+  cómo y el porqué. Sigue disponible también desde el selector del
+  dashboard para el caso en que la LACS quiera marcarlo (o revertirlo) a
+  mano.
+- **`entrega_tardia` es una bandera, no un estado nuevo.** Un grupo en
+  `no_show` puede recibir su acta de ENTREGA mientras su ventana siga
+  abierta (`fin` todavía no llegó): el estudiante se demoró más del margen
+  de no-show pero sigue dentro de su horario, así que se le entrega igual.
+  Vive en la columna `Reserva.entrega_tardia`, aparte de `estado`, para que
+  la marca sobreviva al paso siguiente (la devolución, que sí cambia
+  `estado`) -- si fuera un estado se perdería al devolver el equipo. El
+  horario NO se extiende por la demora: `fin` no se toca, así que una
+  reserva de 4 horas recogida con 1 hora de retraso deja 3 horas de uso
+  real, no 4.
 
 **Límite conocido:** una reserva `entregada` y retrasada deja de bloquear su
 activo, porque el `EXCLUDE` trabaja sobre `tstzrange(inicio, fin)` y ese rango
 ya pasó. El bot podría prestarle ese equipo a otra persona mientras sigue
 físicamente fuera. El dashboard lo señala con el badge "Retrasada", pero nada
 lo impide a nivel de datos.
+
+### No-show automático y avisos de recogida (`app/avisos_reservas.py`, `app/ticker.py`)
+
+Una reserva `confirmada` que nadie recoge no se queda así para siempre:
+`NO_SHOW_MARGEN_MIN` minutos después de `inicio` (default 30) pasa sola a
+`no_show`, con tres avisos de WhatsApp al estudiante por el camino:
+
+- **`previo`**: `AVISO_PREVIO_MIN` minutos ANTES de `inicio` (default 30).
+- **`hora`**: a la hora exacta de `inicio`.
+- **`no_show`**: a los `NO_SHOW_MARGEN_MIN` minutos de `inicio` sin acta de
+  entrega -- este es el que además cambia el estado. Le dice al estudiante
+  que la reserva se liberó y que, si todavía está dentro de su horario,
+  puede pasar por la LACS igual (ver `entrega_tardia` arriba).
+
+**Qué lo empuja: un ticker más un barrido perezoso, no un cron.** Se
+descartó sumar APScheduler, Celery o un contenedor nuevo -- el volumen de
+esta app no lo justifica. En cambio:
+
+- **El ticker** (`app/ticker.py`): un `threading.Thread(daemon=True)` que se
+  lanza en `create_app` y despierta cada `BARRIDO_INTERVALO_SEG` segundos
+  (default 60) a correr `avisos_reservas.barrer()`. Duerme primero y barre
+  después, para no pegarle a la base mientras Postgres todavía está
+  levantando en el arranque del contenedor.
+- **El barrido perezoso**: `GET /dashboard/api/reservas` (el listado que el
+  dashboard consulta cada 30 s) también llama a `barrer()` de paso, como
+  segunda vía -- útil, por ejemplo, justo después de levantar el contenedor
+  y antes de que el ticker complete su primer sueño.
+
+Ambos llaman exactamente a la misma función `barrer()`.
+
+**Dos capas contra avisos duplicados.** `gunicorn` corre con `--workers 2`
+(ver `flask-app/Dockerfile`), así que hay DOS procesos, cada uno con su
+propio hilo ticker, más el barrido perezoso disparándose desde cualquier
+request:
+
+1. **`avisos_reservas.intentar_lock`**: un lock de Redis (`SET NX EX`) que
+   hace que, en el caso normal, un solo proceso corra el barrido por
+   intervalo. Es la OPTIMIZACIÓN -- ahorra trabajo repetido.
+2. **El `UNIQUE (grupo_id, tipo)` de `reserva_avisos`** (ver
+   `postgres/init/02-schema.sql`): la garantía REAL. Si el lock vence a
+   mitad de una corrida larga, o Redis está caído (`intentar_lock` devuelve
+   `False` y loguea, nunca lanza), dos workers pueden llegar a intentar el
+   mismo aviso -- el segundo `INSERT` revienta con `IntegrityError`, ese
+   worker hace `rollback()` y sigue con el resto del lote.
+
+**Qué garantiza exactamente el `UNIQUE`, y qué no.** Garantiza que un aviso
+se REGISTRA una sola vez. No garantiza del todo que el WhatsApp se MANDE una
+sola vez: en `barrer()` el envío ocurre antes del `commit`, porque la fila
+guarda el resultado del envío (`enviado`, `motivo='error_envio'`). Queda una
+carrera estrecha -- los dos workers tendrían que pasar el lock a la vez, es
+decir con Redis caído o con el lock vencido a mitad de corrida -- en la que
+ambos mandarían el mensaje y solo uno insertaría la fila. El estudiante
+recibiría el aviso dos veces; el estado y el histórico quedarían correctos
+igual.
+
+Se dejó así a propósito: invertir el orden (insertar primero, mandar
+después) cerraría la carrera pero haría imposible registrar si Baileys
+aceptó el envío, que es justo lo que hace depurable el camino
+`motivo='error_envio'`. Entre "un estudiante puede recibir un recordatorio
+repetido en un escenario de Redis caído" y "nunca sabemos si los avisos
+están saliendo", se eligió lo primero. Si algún día hace falta cerrarla,
+la forma es insertar la fila con `enviado=false` dentro de su propia
+transacción, mandar, y hacer un `UPDATE` después.
+
+**Corte de frescura (`AVISO_VENTANA_MIN`, default 120 min).** Un aviso solo
+se ENVÍA si su momento ideal cayó dentro de los últimos `AVISO_VENTANA_MIN`
+minutos. Existe porque el barrido tiene que poder correr después de que el
+contenedor estuvo caído un rato sin mandar avisos falsos: un "te recuerdo
+que recoges en 30 min" que sale dos horas tarde no es un aviso tardío, es
+información incorrecta. Si el momento ya venció, la fila de
+`reserva_avisos` se crea igual con `enviado=false, motivo='vencido'`, para
+no reintentarlo nunca en el siguiente tick. El cambio de estado a
+`no_show` SÍ se aplica aunque el aviso esté vencido: el estado es un hecho
+(el activo se liberó), el mensaje es una cortesía con fecha de vencimiento.
+
+**Reversión manual = aviso resuelto para siempre.** Como la fila
+`(grupo_id, 'no_show')` en `reserva_avisos` queda para siempre, si la LACS
+revierte a mano un `no_show` a `confirmada` desde el dashboard, el barrido
+**no** lo vuelve a marcar ni a re-notificar: el `UNIQUE` se lee como "este
+aviso ya se resolvió una vez para este grupo", no como "todavía falta
+mandarlo".
+
+**Perillas (todas en `docker-compose.yml`, servicio `flask-app`):**
+
+| Variable | Default | Qué hace |
+| --- | --- | --- |
+| `NO_SHOW_MARGEN_MIN` | `30` | Minutos después de `inicio` para marcar `no_show`. El deadline real es `min(inicio + margen, fin)`: una reserva más corta que el margen no puede vencer después de haber terminado. |
+| `AVISO_PREVIO_MIN` | `30` | Minutos antes de `inicio` para el aviso `previo`. |
+| `AVISO_VENTANA_MIN` | `120` | Corte de frescura (arriba). |
+| `BARRIDO_INTERVALO_SEG` | `60` | Cada cuánto despierta el ticker. También es el TTL del lock de Redis. |
+| `BARRIDO_ACTIVO` | `1` | `0` apaga el hilo ticker. **No apaga el barrido perezoso**: el listado de reservas lo sigue llamando, así que esto NO es un interruptor para dejar de mandar WhatsApp. Para eso, ver `docs/SEGURIDAD.md`. |
 
 ### Firmar el acta en pantalla
 

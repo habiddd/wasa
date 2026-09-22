@@ -116,15 +116,37 @@ def ultima(grupo_id: int) -> ReservaActa | None:
     )
 
 
-def momento_siguiente(reservas: list[Reserva]) -> str | None:
+def _fin_aware(reserva: Reserva) -> datetime:
+    """`fin` puede llegar naive de una fila vieja -- mismo patrón defensivo
+    que el resto del módulo (ver esta_retrasada)."""
+    return reserva.fin if reserva.fin.tzinfo else reserva.fin.replace(tzinfo=timezone.utc)
+
+
+def momento_siguiente(reservas: list[Reserva], ahora: datetime | None = None) -> str | None:
     """Qué acta falta por registrar para este grupo, o None si ya está
-    cerrada (nada que firmar: todo cancelada/denegada/no_show/completada/
-    devuelta_tarde). Si hubiera líneas en ambos estados a la vez (mezcla
-    rara, ej. edición manual concurrente), gana 'entrega' -- es el paso que
-    lógicamente va primero."""
+    cerrada (nada que firmar: todo cancelada/denegada/completada/
+    devuelta_tarde, o un no_show cuya ventana ya cerró). Si hubiera líneas en
+    ambos estados a la vez (mezcla rara, ej. edición manual concurrente),
+    gana 'entrega' -- es el paso que lógicamente va primero.
+
+    Un grupo en 'no_show' TODAVÍA puede firmar la ENTREGA mientras alguna de
+    sus líneas 'no_show' tenga `fin > ahora`: es la "entrega tardía" -- el
+    estudiante llegó después del margen de no-show (NO_SHOW_MARGEN_MIN) pero
+    sigue dentro de su horario, así que se le entrega igual (ver
+    `aplicar_transicion`, que marca `entrega_tardia=True`). Si esa ventana ya
+    cerró, no queda nada por firmar.
+
+    `ahora` es opcional, igual que en `esta_retrasada`: quien lo llama puede
+    fijarlo una sola vez por request en vez de pedir la hora del sistema por
+    cada grupo."""
     estados = {r.estado for r in reservas}
     if "confirmada" in estados:
         return MOMENTO_ENTREGA
+    if "no_show" in estados:
+        ahora = ahora or datetime.now(timezone.utc)
+        if any(_fin_aware(r) > ahora for r in reservas if r.estado == "no_show"):
+            return MOMENTO_ENTREGA
+        return None
     if ESTADO_ENTREGADA in estados:
         return MOMENTO_DEVOLUCION
     return None
@@ -150,7 +172,12 @@ def aplicar_transicion(reservas: list[Reserva], momento: str) -> tuple[int, str 
     `momento` (sin `commit`, igual que `guardar`). Devuelve (cuántas líneas
     cambiaron, error legible o None).
 
-    'entrega': todas las líneas 'confirmada' pasan a 'entregada'.
+    'entrega': las líneas 'confirmada' O 'no_show' pasan a 'entregada'. Una
+    línea que venía de 'no_show' se marca además con `entrega_tardia=True`
+    (ver el comentario de esa columna en el esquema) -- el estudiante llegó
+    tarde pero dentro de su ventana, y el horario NO se extiende por eso:
+    `fin` no se toca. Si TODAS las líneas objetivo ya tienen `fin <= ahora`
+    (la ventana cerró para todas), no se registra nada.
     'devolucion': todas las líneas 'entregada' pasan a 'completada', salvo
     que ya haya pasado `fin` -- ahí pasan a 'devuelta_tarde'. La comparación
     se hace una vez por línea (cada activo puede tener un `fin` propio si se
@@ -160,10 +187,14 @@ def aplicar_transicion(reservas: list[Reserva], momento: str) -> tuple[int, str 
     cambiadas = 0
 
     if momento == MOMENTO_ENTREGA:
-        objetivo = [r for r in reservas if r.estado == "confirmada"]
+        objetivo = [r for r in reservas if r.estado in ("confirmada", "no_show")]
         if not objetivo:
             return 0, "Esta reserva no tiene activos por entregar."
+        if all(_fin_aware(r) <= ahora for r in objetivo):
+            return 0, "La ventana de esta reserva ya terminó; no se puede registrar la entrega."
         for r in objetivo:
+            if r.estado == "no_show":
+                r.entrega_tardia = True
             r.estado = ESTADO_ENTREGADA
             cambiadas += 1
         return cambiadas, None

@@ -179,6 +179,11 @@ export type Sesion = {
   // columna: no hace falta cron ni worker, se calcula al serializar. Ver
   // actas_service.esta_retrasada.
   retrasada: boolean
+  // A diferencia de "retrasada", esta SÍ es una columna (Reserva.entrega_tardia):
+  // el estudiante recogió después del margen de no-show pero dentro de su
+  // ventana, y se le entregó igual (ver actas_service.aplicar_transicion).
+  // No es un estado nuevo a propósito, para que sobreviva a la devolución.
+  entrega_tardia: boolean
   canal_origen: string
   creado_en: string | null
 }
