@@ -29,6 +29,11 @@
       completo, código de estudiante, cédula) y hasta que no está completo
       no pasa a ningún otro intent (`registro_service.py`,
       `usuarios_service.py` — ver `docs/SESION_2026-08-25.md`)
+- [x] Aviso de tratamiento de datos en el primer mensaje de cada número
+      nuevo: antes de pedirle un solo dato se le informa que la conversación
+      queda guardada y monitoreada para métricas y archivo. Se emite una sola
+      vez por usuario y queda constancia de cuándo en
+      `usuarios.aviso_privacidad_en` (`registro_service.py`)
 - [x] Confirmación explícita antes de escribir una reserva en la base de
       datos — el bot manda un resumen tipo factura (cada activo del
       carrito, quién reserva, inicio, fin) con un menú (Confirmar /

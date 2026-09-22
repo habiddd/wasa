@@ -28,7 +28,13 @@ CREATE TABLE IF NOT EXISTS usuarios (
     registro_completo BOOLEAN NOT NULL DEFAULT FALSE, -- true cuando ya dio nombre+codigo+cedula
     rol               VARCHAR(30) NOT NULL DEFAULT 'estudiante', -- estudiante | staff | admin
     activo            BOOLEAN NOT NULL DEFAULT TRUE,
-    creado_en         TIMESTAMPTZ NOT NULL DEFAULT now()
+    creado_en         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Momento en que se le mostró el aviso de que su conversación queda
+    -- guardada y monitoreada (ver flask-app/app/registro_service.py,
+    -- MENSAJE_AVISO_PRIVACIDAD). NULL = nunca se le avisó. Vive acá y no en
+    -- la sesión de Redis porque el aviso tiene que salir exactamente una vez
+    -- y quedar constancia de cuándo, y la sesión expira a los 7 días.
+    aviso_privacidad_en TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS recursos (
@@ -231,6 +237,7 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cedula VARCHAR(20);
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS registro_completo BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE usuarios ALTER COLUMN nombre DROP NOT NULL;
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS jid_wa VARCHAR(64);
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS aviso_privacidad_en TIMESTAMPTZ;
 
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS placa VARCHAR(10);
 ALTER TABLE recursos ALTER COLUMN placa TYPE VARCHAR(10);

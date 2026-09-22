@@ -13,6 +13,8 @@ así que nunca interpreta un mensaje random como respuesta a una pregunta
 que ya no está pendiente.
 """
 
+from datetime import datetime, timezone
+
 from app.extensions import db
 from app.models import Usuario
 
@@ -26,6 +28,12 @@ CAMPOS_REGISTRO = [
 MENSAJE_BIENVENIDA = (
     "¡Hola! Soy el asistente de reservas de la LACS. Antes de ayudarte, necesito "
     "registrarte -- son solo 3 datos rápidos."
+)
+
+MENSAJE_AVISO_PRIVACIDAD = (
+    "*AVISO*\n"
+    "Esta conversación queda guardada y es monitoreada por la LACS para "
+    "métricas de uso y archivo de las solicitudes."
 )
 
 
@@ -106,4 +114,22 @@ def procesar_registro(usuario: Usuario, texto_usuario: str, sesion: dict) -> tup
 
     campo, pregunta = siguiente
     prefijo = MENSAJE_BIENVENIDA + " " if es_primera_pregunta else "¡Gracias! "
-    return f"{prefijo}{pregunta}", {**sesion, "registro_campo_pendiente": campo}
+    respuesta = f"{prefijo}{pregunta}"
+
+    # El aviso de tratamiento de datos abre el primer mensaje que recibe la
+    # persona. Cuelga de la columna en Postgres y no de `es_primera_pregunta`
+    # (que sale de la sesión de Redis) para que salga exactamente una vez: si
+    # la sesión expira a medio registro la bienvenida se repite, el aviso no.
+    # Se marca acá, al generar el texto, no cuando webhook.py confirma el
+    # envío a WhatsApp: si `enviar_mensaje_texto` falla después, esta fila
+    # queda marcada sin que la persona haya visto el aviso. Se acepta ese
+    # riesgo en vez de partir esta lógica entre registro_service.py y
+    # webhook.py por un caso de borde -- la verdad de si de verdad se
+    # entregó ya está en `auditoria_bot.estado_envio`, que guarda el
+    # `respuesta` completo (aviso incluido) junto a su estado de envío.
+    if usuario.aviso_privacidad_en is None:
+        usuario.aviso_privacidad_en = datetime.now(timezone.utc)
+        db.session.commit()
+        respuesta = f"{MENSAJE_AVISO_PRIVACIDAD}\n\n{respuesta}"
+
+    return respuesta, {**sesion, "registro_campo_pendiente": campo}

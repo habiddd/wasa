@@ -1124,6 +1124,20 @@ se pierda a mitad de registro: el siguiente mensaje recalcula el campo que
 realmente falta contra la fila real de `Usuario` en vez de asumir ciegamente
 que responde a lo último que se preguntó.
 
+El primer mensaje que recibe un número nuevo abre, además, con un aviso de
+que la conversación queda guardada y monitoreada (`MENSAJE_AVISO_PRIVACIDAD`
+en `registro_service.py`), antes incluso de la bienvenida. La marca de "ya
+fue avisado" es una columna nueva, `usuarios.aviso_privacidad_en
+TIMESTAMPTZ`, y **no** un valor en la sesión de Redis: un aviso de
+tratamiento de datos tiene que salir exactamente una vez y dejar constancia
+de cuándo se informó a esa persona, y ninguna de las dos cosas se puede
+garantizar colgándolas de la sesión, que tiene TTL de 7 días y puede
+perderse. Si eso pasara a mitad de registro, la bienvenida se repetiría
+(como ya hace hoy) pero el aviso no, porque su condición mira Postgres, no
+la sesión. Por el mismo motivo el aviso no se manda a los usuarios que ya
+existían antes de este cambio: solo se emite desde el flujo de registro, y
+un usuario ya registrado nunca vuelve a pasar por ahí.
+
 ## Memoria de conversación (`sesiones.py`)
 
 Cada webhook HTTP es una request sin estado, pero el registro paso a paso

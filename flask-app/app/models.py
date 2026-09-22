@@ -24,6 +24,11 @@ class Usuario(db.Model):
     rol = db.Column(db.String(30), nullable=False, default="estudiante")
     activo = db.Column(db.Boolean, nullable=False, default=True)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
+    # NULL hasta que el bot le muestre el aviso de tratamiento de datos en su
+    # primer mensaje (ver registro_service.MENSAJE_AVISO_PRIVACIDAD). No vive
+    # en la sesión de Redis a propósito: el aviso sale una sola vez y la fecha
+    # es la constancia de cuándo se informó.
+    aviso_privacidad_en = db.Column(db.DateTime(timezone=True))
 
 
 class Recurso(db.Model):
