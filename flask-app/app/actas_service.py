@@ -32,6 +32,12 @@ MAX_BYTES = 10 * 1024 * 1024
 MOMENTO_ENTREGA = "entrega"
 MOMENTO_DEVOLUCION = "devolucion"
 
+# Acta de DEVOLUCIÓN con un equipo sin marcar: la línea se cierra como
+# 'no_devuelta' y el activo pasa a 'no_devuelto' (fuera del catálogo del bot,
+# que solo ofrece 'disponible'). Solo la LACS lo saca de ahí, desde Activos.
+ESTADO_NO_DEVUELTA = "no_devuelta"
+RECURSO_NO_DEVUELTO = "no_devuelto"
+
 
 def _actas_dir() -> Path:
     return Path(current_app.config.get("ACTAS_DIR", "/app/actas"))
@@ -127,9 +133,10 @@ def _fin_aware(reserva: Reserva) -> datetime:
 def momento_siguiente(reservas: list[Reserva], ahora: datetime | None = None) -> str | None:
     """Qué acta falta por registrar para este grupo, o None si ya está
     cerrada (nada que firmar: todo cancelada/denegada/completada/
-    devuelta_tarde, o un no_show cuya ventana ya cerró). Si hubiera líneas en
-    ambos estados a la vez (mezcla rara, ej. edición manual concurrente),
-    gana 'entrega' -- es el paso que lógicamente va primero.
+    devuelta_tarde/no_devuelta, o un no_show cuya ventana ya cerró). Si
+    hubiera líneas en ambos estados a la vez (mezcla rara, ej. edición
+    manual concurrente), gana 'entrega' -- es el paso que lógicamente va
+    primero.
 
     Un grupo en 'no_show' TODAVÍA puede firmar la ENTREGA mientras alguna de
     sus líneas 'no_show' tenga `fin > ahora`: es la "entrega tardía" -- el
@@ -169,14 +176,17 @@ def esta_retrasada(reserva: Reserva, ahora: datetime | None = None) -> bool:
     return fin < ahora
 
 
-def _filtrar_marcadas(objetivo: list[Reserva], ids: set[int] | None, verbo: str) -> tuple[list[Reserva], str | None]:
+def _filtrar_marcadas(
+    objetivo: list[Reserva], ids: set[int] | None, verbo: str, permitir_vacio: bool = False
+) -> tuple[list[Reserva], str | None]:
     """Las líneas de `objetivo` que el administrador marcó en el paso
     "Equipos" del diálogo de firma. `ids=None` (acta subida, o cliente viejo)
     = todas, el comportamiento de antes. Un id fuera de `objetivo` se rechaza:
-    es justo lo que impide devolver un equipo que nunca se entregó."""
+    es justo lo que impide devolver un equipo que nunca se entregó.
+    `permitir_vacio`: en la devolución, nada marcado = no devolvió ninguno."""
     if ids is None:
         return objetivo, None
-    if not ids:
+    if not ids and not permitir_vacio:
         return [], f"Marca al menos un equipo {verbo}."
     if ids - {r.id for r in objetivo}:
         return [], f"Hay equipos marcados que no se pueden registrar como {verbo}s."
@@ -206,8 +216,9 @@ def aplicar_transicion(
     `ids` (opcional): las líneas que el administrador marcó como
     entregadas/devueltas. En la entrega, las NO marcadas pasan a 'cancelada'
     (no se las llevó, y así no quedan pidiendo otra acta de entrega); en la
-    devolución, las no marcadas siguen 'entregada' -- el equipo sigue afuera y
-    queda pendiente otra acta de devolución."""
+    devolución, las no marcadas pasan a 'no_devuelta' y su activo a
+    'no_devuelto' (ver ESTADO_NO_DEVUELTA); nada queda pendiente. Una
+    devolución sin nada marcado es válida (no devolvió ninguno)."""
     ahora = datetime.now(timezone.utc)
     cambiadas = 0
 
@@ -239,12 +250,16 @@ def aplicar_transicion(
         afuera = [r for r in reservas if r.estado == ESTADO_ENTREGADA]
         if not afuera:
             return 0, "Esta reserva no tiene activos por devolver."
-        objetivo, error = _filtrar_marcadas(afuera, ids, "devuelto")
+        objetivo, error = _filtrar_marcadas(afuera, ids, "devuelto", permitir_vacio=True)
         if error:
             return 0, error
-        for r in objetivo:
-            fin = r.fin if r.fin.tzinfo else r.fin.replace(tzinfo=timezone.utc)
-            r.estado = ESTADO_DEVUELTA_TARDE if ahora > fin else "completada"
+        for r in afuera:
+            if r in objetivo:
+                fin = r.fin if r.fin.tzinfo else r.fin.replace(tzinfo=timezone.utc)
+                r.estado = ESTADO_DEVUELTA_TARDE if ahora > fin else "completada"
+            else:
+                r.estado = ESTADO_NO_DEVUELTA
+                r.recurso.estado = RECURSO_NO_DEVUELTO
             cambiadas += 1
         return cambiadas, None
 

@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS recursos (
     CONSTRAINT recursos_padre_no_self CHECK (padre_id IS NULL OR padre_id <> id),
     CONSTRAINT recursos_espacio_no_self CHECK (espacio_id IS NULL OR espacio_id <> id),
     CONSTRAINT recursos_espacio_sin_padre_ni_lugar CHECK (tipo <> 'espacio' OR (padre_id IS NULL AND espacio_id IS NULL)),
-    CONSTRAINT recursos_estado_valido CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible'))
+    CONSTRAINT recursos_estado_valido CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible', 'no_devuelto'))
 );
 
 -- Único por activo, pero permite múltiples NULL (para 'espacio', que no
@@ -416,13 +416,22 @@ BEGIN
     END IF;
 END $$;
 
+-- 'no_devuelto' se sumó después (acta de devolución con un equipo sin
+-- marcar, ver actas_service.aplicar_transicion): se recrea si le falta.
 DO $$
 BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'recursos_estado_valido'
+          AND pg_get_constraintdef(oid) NOT LIKE '%no_devuelto%'
+    ) THEN
+        ALTER TABLE recursos DROP CONSTRAINT recursos_estado_valido;
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint WHERE conname = 'recursos_estado_valido'
     ) THEN
         ALTER TABLE recursos ADD CONSTRAINT recursos_estado_valido
-            CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible'));
+            CHECK (estado IN ('disponible', 'en_mantenimiento', 'no_disponible', 'no_devuelto'));
     END IF;
 END $$;
 
@@ -789,6 +798,37 @@ FROM reserva_estado_historial
 WHERE (estado_nuevo = 'entregada' AND estado_anterior IS DISTINCT FROM 'entregada')
    OR (estado_anterior = 'entregada' AND estado_nuevo IN ('completada', 'devuelta_tarde'));
 
+-- Historial de `recursos.estado` (ej. cuándo un activo pasó a 'no_devuelto' y
+-- cuándo la LACS lo volvió a 'disponible' desde Activos). Mismo patrón que
+-- reserva_estado_historial: trigger SECURITY DEFINER, sin FKs y de solo
+-- lectura para la app (REVOKE al final). La reserva que causó un
+-- 'no_devuelto' está en reserva_estado_historial (estado_nuevo='no_devuelta',
+-- mismo recurso_id y mismo cambiado_en: van en la misma transacción).
+CREATE TABLE IF NOT EXISTS recurso_estado_historial (
+    id              BIGSERIAL PRIMARY KEY,
+    recurso_id      INTEGER NOT NULL,
+    estado_anterior VARCHAR(20),
+    estado_nuevo    VARCHAR(20),
+    cambiado_en     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_recurso_estado_historial_recurso
+    ON recurso_estado_historial (recurso_id, cambiado_en);
+
+CREATE OR REPLACE FUNCTION registrar_historial_recurso() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+    INSERT INTO recurso_estado_historial (recurso_id, estado_anterior, estado_nuevo)
+    VALUES (NEW.id, OLD.estado, NEW.estado);
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS recursos_historial_upd ON recursos;
+CREATE TRIGGER recursos_historial_upd
+    AFTER UPDATE ON recursos
+    FOR EACH ROW
+    WHEN (OLD.estado IS DISTINCT FROM NEW.estado)
+    EXECUTE FUNCTION registrar_historial_recurso();
+
 -- Este script corre con el superusuario de Postgres (ver 01-init.sql), así
 -- que las tablas de arriba quedan con OWNER postgres. GRANT ALL PRIVILEGES
 -- ON DATABASE (en 01-init.sql) solo da privilegios a nivel de base de datos,
@@ -806,3 +846,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 -- El historial es de solo lectura para la app: lo escribe el trigger
 -- (SECURITY DEFINER), ver reserva_estado_historial más arriba.
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON reserva_estado_historial FROM :"db_user";
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON recurso_estado_historial FROM :"db_user";

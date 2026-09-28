@@ -103,4 +103,5 @@ export const ESTADOS_ACTIVO: Record<
   disponible: { texto: "Disponible", variant: "success" },
   en_mantenimiento: { texto: "En mantenimiento", variant: "warning" },
   no_disponible: { texto: "No disponible", variant: "destructive" },
+  no_devuelto: { texto: "No devuelto", variant: "destructive" },
 }

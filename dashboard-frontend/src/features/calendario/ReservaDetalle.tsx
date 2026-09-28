@@ -680,7 +680,7 @@ function FormularioEdicion({
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          Entregada, completada y devuelta tarde se registran con el acta, no desde acá.
+          Entregada, completada, devuelta tarde y no devuelta se registran con el acta, no desde acá.
         </p>
         {evento.porConfirmar && (
           <p className="text-xs text-muted-foreground">

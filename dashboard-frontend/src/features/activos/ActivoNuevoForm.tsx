@@ -248,11 +248,13 @@ export function ActivoNuevoForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(Object.keys(ESTADOS_ACTIVO) as EstadoRecurso[]).map((valor) => (
-                  <SelectItem key={valor} value={valor}>
-                    {ESTADOS_ACTIVO[valor].texto}
-                  </SelectItem>
-                ))}
+                {(Object.keys(ESTADOS_ACTIVO) as EstadoRecurso[])
+                  .filter((v) => v !== "no_devuelto")
+                  .map((valor) => (
+                    <SelectItem key={valor} value={valor}>
+                      {ESTADOS_ACTIVO[valor].texto}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           </div>

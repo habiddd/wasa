@@ -10,14 +10,17 @@ se agregan a la sesión ni se hace commit -- no escribe nada en la base.
 from datetime import datetime, timedelta, timezone
 
 from app import actas_service, create_app
-from app.models import Reserva
+from app.models import Recurso, Reserva
 
 app = create_app()
 with app.app_context():
     ahora = datetime.now(timezone.utc)
 
     def linea(id_, estado):
-        return Reserva(id=id_, estado=estado, inicio=ahora, fin=ahora + timedelta(hours=2))
+        return Reserva(
+            id=id_, estado=estado, inicio=ahora, fin=ahora + timedelta(hours=2),
+            recurso=Recurso(id=100 + id_, estado="disponible"),
+        )
 
     # Entrega parcial: 1 y 2 se entregan, 3 no -> cancelada.
     grupo = [linea(1, "confirmada"), linea(2, "confirmada"), linea(3, "confirmada")]
@@ -30,14 +33,20 @@ with app.app_context():
     assert cambiadas == 0 and error, error
     assert [r.estado for r in grupo] == ["entregada", "entregada", "cancelada"]
 
-    # Devolución parcial: la 2 sigue afuera y queda pendiente otra devolución.
-    assert actas_service.aplicar_transicion(grupo, "devolucion", {1}) == (1, None)
-    assert [r.estado for r in grupo] == ["completada", "entregada", "cancelada"]
-    assert actas_service.momento_siguiente(grupo) == "devolucion"
-
-    # Ninguno marcado se rechaza; sin `ids` (acta subida) se mueven todas.
-    assert actas_service.aplicar_transicion(grupo, "devolucion", set())[1]
-    assert actas_service.aplicar_transicion(grupo, "devolucion") == (1, None)
+    # Devolución: la 1 vuelve, la 2 no -> no_devuelta y su activo no_devuelto. Nada queda pendiente.
+    assert actas_service.aplicar_transicion(grupo, "devolucion", {1}) == (2, None)
+    assert [r.estado for r in grupo] == ["completada", "no_devuelta", "cancelada"]
+    assert [r.recurso.estado for r in grupo] == ["disponible", "no_devuelto", "disponible"]
     assert actas_service.momento_siguiente(grupo) is None
 
-print("OK: entrega parcial cancela lo no entregado; no se devuelve lo no entregado; devolución parcial deja pendiente el resto.")
+    # Devolución sin nada marcado (perdió todo) es válida; sin `ids` (acta subida) todo vuelve.
+    perdido = [linea(4, "entregada"), linea(5, "entregada")]
+    assert actas_service.aplicar_transicion(perdido, "devolucion", set()) == (2, None)
+    assert {r.estado for r in perdido} == {"no_devuelta"}
+    subida = [linea(6, "entregada")]
+    assert actas_service.aplicar_transicion(subida, "devolucion") == (1, None)
+    assert subida[0].estado == "completada" and subida[0].recurso.estado == "disponible"
+    # En la entrega, ninguno marcado se sigue rechazando.
+    assert actas_service.aplicar_transicion([linea(7, "confirmada")], "entrega", set())[1]
+
+print("OK: entrega parcial cancela lo no entregado; no se devuelve lo no entregado; lo no devuelto queda no_devuelta/no_devuelto.")

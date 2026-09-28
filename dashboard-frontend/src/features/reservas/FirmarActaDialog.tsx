@@ -164,8 +164,8 @@ export function FirmarActaDialog({
     onOpenChange(false)
   }
 
-  // Paso 1 (Equipos + nota) -> 2: cualquier combinación menos ninguno (el
-  // botón queda deshabilitado; el backend también lo rechaza).
+  // Paso 1 (Equipos + nota) -> 2: en la entrega, cualquier combinación menos
+  // ninguno; en la devolución también ninguno (no devolvió nada).
   function irAPaso2() {
     setPaso(2)
   }
@@ -237,6 +237,7 @@ export function FirmarActaDialog({
   }
 
   const resultado = estadoResultante(momento, fin)
+  const noDevueltos = momento === "devolucion" ? equipos.filter((e) => !marcados.has(e.id)) : []
   const tituloDialogo = momento === "entrega" ? "Acta de entrega" : "Acta de devolución"
 
   return (
@@ -440,6 +441,13 @@ export function FirmarActaDialog({
                   se leía "3:41 p. m..". */}
               Fecha y hora que quedan impresas: <strong>{formatearFechaActa(fechaPeticion)}</strong>
             </p>
+            {noDevueltos.length > 0 && (
+              <p className="rounded-md border border-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                Sin marcar, quedan registrados como <strong>no devueltos</strong>:{" "}
+                {noDevueltos.map((e) => e.nombre).join(", ")}. Esos activos pasan a "No devuelto" y no se
+                podrán reservar hasta cambiarlos en Activos.
+              </p>
+            )}
           </div>
         </div>
 
@@ -458,7 +466,7 @@ export function FirmarActaDialog({
             </Button>
           )}
           {paso === 1 && (
-            <Button type="button" onClick={irAPaso2} disabled={marcados.size === 0}>
+            <Button type="button" onClick={irAPaso2} disabled={marcados.size === 0 && momento === "entrega"}>
               Siguiente
             </Button>
           )}

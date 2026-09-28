@@ -48,7 +48,7 @@ export function ActivoEstadoSelect({
       </SelectTrigger>
       <SelectContent align="end">
         {(Object.keys(ESTADOS_ACTIVO) as EstadoRecurso[]).map((valor) => (
-          <SelectItem key={valor} value={valor}>
+          <SelectItem key={valor} value={valor} disabled={valor === "no_devuelto"}>
             {ESTADOS_ACTIVO[valor].texto}
           </SelectItem>
         ))}

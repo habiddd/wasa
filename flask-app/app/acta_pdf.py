@@ -56,6 +56,7 @@ _ESTADOS_LEGIBLES = {
     "no_show": "No show",
     "entregada": "Entregada",
     "devuelta_tarde": "Devuelta tarde",
+    "no_devuelta": "No devuelta",
 }
 
 _CANALES_LEGIBLES = {"whatsapp": "WhatsApp", "dashboard": "Dashboard"}

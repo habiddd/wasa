@@ -58,6 +58,7 @@ const ESTADOS: { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: "pendiente", etiqueta: "Pendientes de confirmación" },
   { valor: "completada", etiqueta: "Completadas" },
   { valor: "devuelta_tarde", etiqueta: "Devueltas tarde" },
+  { valor: "no_devuelta", etiqueta: "No devueltas" },
   { valor: "cancelada", etiqueta: "Canceladas" },
   { valor: "denegada", etiqueta: "Denegadas" },
   { valor: "no_show", etiqueta: "No show" },

@@ -197,6 +197,7 @@ const PRIORIDAD_ESTADO: EstadoReserva[] = [
   "pendiente",
   "confirmada",
   "entregada",
+  "no_devuelta",
   "no_show",
   "completada",
   "devuelta_tarde",
@@ -522,6 +523,11 @@ export const ESTILO_ESTADO: Record<
     badge: "secondary",
     badgeClase: "border-warning",
   },
+  no_devuelta: {
+    chip: "border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20",
+    barra: "bg-destructive",
+    badge: "destructive",
+  },
 }
 
 export function estiloDe(estado: EstadoReserva) {
@@ -535,6 +541,7 @@ export function estiloDe(estado: EstadoReserva) {
 export function etiquetaEstado(estado: EstadoReserva) {
   if (estado === "entregada") return "Entregada"
   if (estado === "devuelta_tarde") return "Devuelta tarde"
+  if (estado === "no_devuelta") return "No devuelta"
   return estado
 }
 

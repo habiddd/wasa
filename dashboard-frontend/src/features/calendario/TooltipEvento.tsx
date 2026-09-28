@@ -18,6 +18,7 @@ const COLOR_TOOLTIP: Record<EstadoReserva, string> = {
   completada: "bg-muted-foreground text-background [&_svg]:bg-muted-foreground [&_svg]:fill-muted-foreground",
   devuelta_tarde:
     "border-2 border-warning bg-muted-foreground text-background [&_svg]:bg-muted-foreground [&_svg]:fill-muted-foreground",
+  no_devuelta: "bg-destructive text-white [&_svg]:bg-destructive [&_svg]:fill-destructive",
 }
 
 export function TooltipEvento({ evento, children }: { evento: EventoCalendario; children: ReactElement }) {

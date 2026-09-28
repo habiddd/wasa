@@ -1479,7 +1479,7 @@ entregada + fin ya pasó ──> se MUESTRA "Retrasada" (derivado, no se guarda)
 
 Por LÍNEA, según los equipos marcados al firmar:
 confirmada/no_show ──(acta de ENTREGA, equipo NO marcado)──> cancelada
-entregada ──(acta de DEVOLUCIÓN, equipo NO marcado)──> sigue entregada
+entregada ──(acta de DEVOLUCIÓN, equipo NO marcado)──> no_devuelta  [+ recurso.estado = no_devuelto]
 ```
 
 - **El acta mueve solo los equipos marcados.** En el primer paso del
@@ -1488,12 +1488,16 @@ entregada ──(acta de DEVOLUCIÓN, equipo NO marcado)──> sigue entregada
   `equipos` del `POST .../actas`. `actas_service.aplicar_transicion` cambia
   solo esas líneas. En la **entrega**, las no marcadas pasan a `cancelada`:
   no se las llevó, y así no quedan pidiendo otra acta de entrega. En la
-  **devolución**, las no marcadas siguen `entregada`: el equipo sigue afuera
-  y la reserva queda pendiente de otra acta de devolución. Si llega un id
-  que no está en los estados que ese momento puede mover, el servidor lo
-  rechaza. Esa validación es lo que impide **devolver un equipo que nunca se
-  entregó**, y no depende de la interfaz. Un acta **subida** no manda
-  `equipos` y mueve todas las líneas, como antes.
+  **devolución**, las no marcadas pasan a `no_devuelta` y su activo a
+  `no_devuelto` (`actas_service.RECURSO_NO_DEVUELTO`): nada queda pendiente,
+  la reserva se cierra igual que si todo hubiera vuelto. Una devolución sin
+  nada marcado es válida (no devolvió ninguno). Un partial return posterior
+  (el equipo aparece después de todo) no lo resuelve el bot: la LACS lo
+  cambia a mano en Activos. Si llega un id que no está en los estados que ese
+  momento puede mover, el servidor lo rechaza. Esa validación es lo que
+  impide **devolver un equipo que nunca se entregó**, y no depende de la
+  interfaz. Un acta **subida** no manda `equipos` y mueve todas las líneas,
+  como antes.
 
 - **`entregada` ocupa el activo.** Está en
   `recursos_service.ESTADOS_QUE_OCUPAN` junto a `confirmada` y `pendiente`, y
@@ -1516,8 +1520,8 @@ entregada ──(acta de DEVOLUCIÓN, equipo NO marcado)──> sigue entregada
   retraso tiene que sobrevivir a la devolución: una vez el equipo vuelve,
   `retrasada` deja de ser verdad por definición, y sin este estado el dato se
   perdería.
-- **Los tres estados que exige acta están cerrados en la API.**
-  `_ESTADOS_SOLO_CON_ACTA = {"entregada", "completada", "devuelta_tarde"}`:
+- **Los cuatro estados que exige acta están cerrados en la API.**
+  `_ESTADOS_SOLO_CON_ACTA = {"entregada", "completada", "devuelta_tarde", "no_devuelta"}`:
   los tres endpoints de edición (`PATCH /reservas/<id>`,
   `PATCH /reservas/grupo/<id>` y `PATCH /reservas/bloque`) responden **409** si
   alguien intenta ponerlos a mano, y el selector de estado del detalle ya no
@@ -1753,7 +1757,8 @@ con `id` = `Reserva.id` de la línea, y el navegador dibuja ahí
 - un **chulito** en la columna del momento, para cada equipo marcado;
 - en la **entrega**, una **X** en "Entr." y en "Dev." para cada equipo no
   marcado, porque nunca se va a devolver;
-- nada en la devolución para lo no marcado: sigue afuera.
+- en la **devolución**, una **X** en "Dev." para cada equipo no marcado
+  (queda `no_devuelta`).
 
 Las marcas se dibujan con dos `drawLine`, no con los caracteres "✓" o "✗",
 porque Helvetica (WinAnsi) no tiene esos glifos. Las anclas van **por id,
@@ -1841,6 +1846,45 @@ SELECT usuario_id, COUNT(*) FILTER (WHERE retraso > interval '0') AS recogio_tar
 FROM reserva_puntualidad
 WHERE evento = 'entrega' AND ocurrido_en > now() - interval '1 year'
 GROUP BY usuario_id;
+```
+
+### Activos no devueltos (`recursos.estado = 'no_devuelto'` + `recurso_estado_historial`)
+
+Un equipo que no vuelve en la acta de devolución (el administrador lo dejó
+sin marcar) se saca del catálogo del bot sin que nadie tenga que acordarse de
+hacerlo a mano: su línea de reserva pasa a `no_devuelta`
+(`actas_service.ESTADO_NO_DEVUELTA`) y su `recursos.estado` a `no_devuelto`
+(`actas_service.RECURSO_NO_DEVUELTO`), en la misma transacción que cierra el
+resto de la devolución.
+
+- **Se comporta como `no_disponible` para todo lo automático.** El bot solo
+  ofrece equipos con `estado = 'disponible'` (`recursos_service`), y crear una
+  reserva a mano desde el dashboard sobre un activo `no_devuelto` lo bloquea
+  igual que cualquier otro estado fuera de catálogo.
+- **Solo la LACS lo saca de ahí, desde Activos.** El único camino de entrada
+  es el acta de devolución; `PATCH /api/activos/<id>` responde **409** si
+  alguien intenta poner `no_devuelto` a mano
+  (`routes/dashboard.api_actualizar_activo`), pero sí permite moverlo a
+  cualquier otro estado, o reenviar `no_devuelto` sin cambiarlo (el
+  formulario de edición manda el estado actual aunque no se toque). La UI lo
+  muestra en la lista de estados posibles pero lo deja deshabilitado como
+  opción a elegir (`ActivoEstadoSelect.tsx`, `ActivoEditForm.tsx`); el alta de
+  un activo nuevo ni lo ofrece (`ActivoNuevoForm.tsx`).
+- **`recurso_estado_historial` es el mismo patrón que
+  `reserva_estado_historial`:** trigger `SECURITY DEFINER` sobre
+  `UPDATE ON recursos`, sin FKs, y de solo lectura para la app
+  (`INSERT/UPDATE/DELETE/TRUNCATE` revocados a `APP_DB_USER`). Solo registra
+  `UPDATE`s (altas y bajas de activos no importan acá). La reserva que causó
+  un `no_devuelto` se encuentra cruzando `recurso_id` + `cambiado_en` con
+  `reserva_estado_historial.estado_nuevo = 'no_devuelta'` (van en la misma
+  transacción, mismo timestamp).
+- **`reserva_puntualidad` excluye `no_devuelta` a propósito**: mezclar "nunca
+  volvió" con el retraso de las que sí volvieron contaminaría la métrica de
+  puntualidad. El conteo de no devueltas es una consulta aparte:
+
+```sql
+SELECT usuario_id, count(*) FROM reserva_estado_historial
+WHERE estado_nuevo = 'no_devuelta' GROUP BY 1;
 ```
 
 ### Conversación de una sesión (Usuarios → Sesiones)

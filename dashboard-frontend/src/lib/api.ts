@@ -130,6 +130,7 @@ export type EstadoReserva =
   | "no_show"
   | "entregada"
   | "devuelta_tarde"
+  | "no_devuelta"
 
 // Toda reserva es particular o para una asignatura; en ese caso lleva el
 // NRC (identificador de la asignatura que cursa el estudiante).
@@ -510,7 +511,7 @@ export function fetchOcupados(inicio: Date, fin: Date) {
 // --- Activos -----------------------------------------------------------
 
 export type TipoRecurso = "equipo" | "espacio"
-export type EstadoRecurso = "disponible" | "en_mantenimiento" | "no_disponible"
+export type EstadoRecurso = "disponible" | "en_mantenimiento" | "no_disponible" | "no_devuelto"
 
 export type Recurso = {
   id: number

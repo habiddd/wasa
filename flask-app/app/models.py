@@ -61,11 +61,14 @@ class Recurso(db.Model):
     modelo = db.Column(db.String(100))
     identificador = db.Column(db.String(100))             # número de serie o IMEI, si lo tiene
     requiere_confirmacion = db.Column(db.Boolean, nullable=False, default=False)
-    # 'disponible' | 'en_mantenimiento' | 'no_disponible' -- estado de
-    # inventario que fija quien administra desde el dashboard, distinto del
-    # estado de agenda que calcula recursos_service._estado_recurso() a
-    # partir de las reservas. Antes era un BOOLEAN `activo` simple -- ver
-    # migración en postgres/init/02-schema.sql.
+    # 'disponible' | 'en_mantenimiento' | 'no_disponible' | 'no_devuelto' --
+    # estado de inventario que fija quien administra desde el dashboard,
+    # distinto del estado de agenda que calcula
+    # recursos_service._estado_recurso() a partir de las reservas. Antes era
+    # un BOOLEAN `activo` simple -- ver migración en
+    # postgres/init/02-schema.sql. 'no_devuelto': solo lo fija el acta de
+    # devolución cuando el equipo queda sin marcar (ver
+    # actas_service.RECURSO_NO_DEVUELTO), nunca a mano.
     estado = db.Column(db.String(20), nullable=False, default="disponible")
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
@@ -142,15 +145,16 @@ class Reserva(db.Model):
     inicio = db.Column(db.DateTime(timezone=True), nullable=False)
     fin = db.Column(db.DateTime(timezone=True), nullable=False)
     # 'confirmada' | 'pendiente' | 'denegada' | 'cancelada' | 'entregada' |
-    # 'completada' | 'devuelta_tarde' | 'no_show'. 'pendiente': el activo
-    # requiere confirmación y la LACS aún no la da (ver
+    # 'completada' | 'devuelta_tarde' | 'no_devuelta' | 'no_show'. 'pendiente':
+    # el activo requiere confirmación y la LACS aún no la da (ver
     # recursos_service.ESTADOS_QUE_OCUPAN); 'denegada': la LACS no lo aprobó y
     # el activo quedó libre. 'entregada': el usuario ya tiene el equipo (solo
     # se llega registrando el acta de ENTREGA, nunca a mano -- ver
     # routes/dashboard._ESTADOS_SOLO_CON_ACTA); sigue ocupando el activo.
     # 'completada'/'devuelta_tarde': acta de DEVOLUCIÓN registrada a tiempo o
     # tarde respectivamente (se decide una sola vez, al firmar la devolución,
-    # comparando con `fin` -- ver actas_service.aplicar_transicion). "retrasada"
+    # comparando con `fin` -- ver actas_service.aplicar_transicion).
+    # 'no_devuelta': acta de DEVOLUCIÓN sin ese equipo marcado. "retrasada"
     # NO es un valor de esta columna: es derivado (estado='entregada' AND
     # fin < now()), ver actas_service.esta_retrasada.
     estado = db.Column(db.String(20), nullable=False, default="confirmada")

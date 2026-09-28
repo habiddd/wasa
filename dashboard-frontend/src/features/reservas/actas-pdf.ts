@@ -170,9 +170,10 @@ function estamparX(pdf: PDFDocument, ancla: AnclaFirma) {
  * línea (`entrega_linea_<id>`, ver acta_pdf.generar_acta_con_anclas), no por
  * número de fila. `marcados` lleva chulito en la columna de este momento. En
  * la ENTREGA, `sinMarcar` (no se los llevó; el backend los cancela) lleva X
- * en Entr. y en Dev. -- nunca se van a devolver. En la devolución lo no
- * marcado queda en blanco: sigue afuera y lo cierra otra acta. Un ancla que
- * no existe (acta anterior a este cambio) se omite en silencio.
+ * en Entr. y en Dev. -- nunca se van a devolver. En la devolución,
+ * `sinMarcar` (no lo devolvió; el backend lo registra como no_devuelta)
+ * lleva X en Dev. Un ancla que no existe (acta anterior a este cambio) se
+ * omite en silencio.
  */
 function estamparMarcas(
   pdf: PDFDocument,
@@ -185,9 +186,10 @@ function estamparMarcas(
     const ancla = anclas[`${prefijo}_linea_${id}`]
     if (ancla) estamparChulito(pdf, ancla)
   }
-  if (momento !== "entrega") return
   for (const id of equipos.sinMarcar) {
-    for (const clave of [`entrega_linea_${id}`, `devolucion_linea_${id}`]) {
+    const claves =
+      momento === "entrega" ? [`entrega_linea_${id}`, `devolucion_linea_${id}`] : [`devolucion_linea_${id}`]
+    for (const clave of claves) {
       const ancla = anclas[clave]
       if (ancla) estamparX(pdf, ancla)
     }

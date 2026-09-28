@@ -887,7 +887,7 @@ _CAMPOS_EDITABLES_RESERVA = {"inicio", "fin", "estado", "recurso_id"}
 # Ver el comentario de la columna `estado` en postgres/init/02-schema.sql.
 _ESTADOS_RESERVA = {
     "confirmada", "pendiente", "cancelada", "entregada", "completada",
-    "devuelta_tarde", "no_show", "denegada",
+    "devuelta_tarde", "no_show", "denegada", "no_devuelta",
 }
 
 # Estados a los que SOLO se puede llegar registrando el acta correspondiente
@@ -895,11 +895,12 @@ _ESTADOS_RESERVA = {
 # estado del dashboard. Es una regla de negocio explícita que pidió el
 # usuario, no una limitación técnica: simular una entrega o una devolución
 # sin el acta real le quitaría todo el valor probatorio al historial.
-_ESTADOS_SOLO_CON_ACTA = {"entregada", "completada", "devuelta_tarde"}
+_ESTADOS_SOLO_CON_ACTA = {"entregada", "completada", "devuelta_tarde", "no_devuelta"}
 _MENSAJES_ESTADO_SOLO_ACTA = {
     "entregada": "A 'entregada' solo se llega registrando el acta de entrega (firmada o subida).",
     "completada": "A 'completada' solo se llega registrando el acta de devolución (firmada o subida).",
     "devuelta_tarde": "A 'devuelta tarde' solo se llega registrando el acta de devolución fuera de plazo (firmada o subida).",
+    "no_devuelta": "A 'no devuelta' solo se llega registrando el acta de devolución sin marcar ese equipo.",
 }
 
 
@@ -1601,10 +1602,13 @@ _CAMPOS_EDITABLES_ACTIVO = {
     "espacio_id",
 }
 
-# Debe coincidir con el CHECK `recursos_estado_valido` de
-# postgres/init/02-schema.sql. Solo 'disponible' es reservable (ver
-# recursos_service.ESTADO_DISPONIBLE) -- 'en_mantenimiento' y
-# 'no_disponible' quedan fuera del catálogo que ve el bot.
+# El CHECK `recursos_estado_valido` de postgres/init/02-schema.sql también
+# permite 'no_devuelto', pero ese no se elige a mano: solo lo fija el acta de
+# devolución (ver actas_service.RECURSO_NO_DEVUELTO). El PATCH de abajo
+# permite salir de 'no_devuelto' o reenviarlo sin cambios, pero nunca ponerlo
+# desde acá. Solo 'disponible' es reservable (ver
+# recursos_service.ESTADO_DISPONIBLE) -- 'en_mantenimiento', 'no_disponible'
+# y 'no_devuelto' quedan fuera del catálogo que ve el bot.
 _ESTADOS_VALIDOS = {"disponible", "en_mantenimiento", "no_disponible"}
 
 # Un padre (padre_id) es siempre un equipo: los accesorios cuelgan de un
@@ -1794,7 +1798,9 @@ def api_actualizar_activo(recurso_id):
     if campos_desconocidos:
         return jsonify({"error": f"Campos no editables: {', '.join(sorted(campos_desconocidos))}"}), 400
 
-    if "estado" in datos and datos["estado"] not in _ESTADOS_VALIDOS:
+    if "estado" in datos and datos["estado"] != recurso.estado and datos["estado"] not in _ESTADOS_VALIDOS:
+        if datos["estado"] == actas_service.RECURSO_NO_DEVUELTO:
+            return jsonify({"error": "A 'no devuelto' solo se llega registrando el acta de devolución sin marcar ese equipo."}), 409
         return jsonify({"error": _MENSAJES_INTEGRIDAD["recursos_estado_valido"]}), 400
 
     if "tipo" in datos and datos["tipo"] != "espacio":
