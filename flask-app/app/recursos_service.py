@@ -136,6 +136,29 @@ def buscar_recursos_en_texto(texto: str) -> tuple[list[Recurso], bool]:
     return candidatos, mejor_score == 1
 
 
+def modelos_no_disponibles_en_texto(texto: str) -> tuple[list[str], bool]:
+    """(modelos, ganan): modelos que el texto nombra y que hoy no tienen
+    NINGUNA unidad 'disponible' ('no_disponible', 'en_mantenimiento',
+    'no_devuelto': para el usuario todos son "no disponible", el motivo no se
+    le dice). Solo los que puntúan al menos como el mejor modelo disponible;
+    `ganan` = puntúan MÁS (el texto nombra justo ese). Sin esto, al preguntar
+    por la "Cámara Canon EOS R" (no devuelta) el bot respondía por la EOS R6,
+    o la reservaba en su lugar. En empate ("lente sony" = 24-70 perdido y
+    70-200 libre) la consulta muestra los dos y la reserva sigue normal."""
+    texto_norm = _normalizar(texto)
+    grupos = _grupos_activos()
+    disponibles = {nombre for nombre, _ in grupos}
+    mejor_disponible = max((_puntaje_recurso_en_texto(rep, texto_norm) for _, rep in grupos), default=0)
+    puntajes: dict[str, int] = {}
+    for r in Recurso.query.filter(Recurso.estado != ESTADO_DISPONIBLE).order_by(Recurso.id):
+        if r.nombre not in disponibles and r.nombre not in puntajes:
+            puntajes[r.nombre] = _puntaje_recurso_en_texto(r, texto_norm)
+    mejor = max(puntajes.values(), default=0)
+    if mejor == 0 or mejor < mejor_disponible:
+        return [], False
+    return [nombre for nombre, score in puntajes.items() if score == mejor], mejor > mejor_disponible
+
+
 def _regex_palabra(palabra: str) -> str:
     """Patrón para buscar `palabra` (ya normalizada) como palabra completa,
     tolerando el plural regular: "imac" coincide con "imacs", "camara" con
@@ -584,10 +607,17 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     -- todavía no hay página -- se conserva el listado completo de antes: sin
     enlace, es la única forma de que el usuario sepa qué existe."""
     ahora = datetime.now(timezone.utc)
+    no_disponibles, ganan = modelos_no_disponibles_en_texto(texto_usuario)
+    lineas_no_disponibles = [f"- {nombre}: no está disponible por ahora" for nombre in no_disponibles]
+    if ganan:
+        return "Esto es lo que tengo:\n" + "\n".join(lineas_no_disponibles)
+
     candidatos, es_match_debil = buscar_recursos_en_texto(texto_usuario)
 
     if candidatos:
-        lineas = "\n".join(f"- {r.nombre}: {_estado_grupo(r.nombre, ahora)}" for r in candidatos)
+        lineas = "\n".join(
+            [f"- {r.nombre}: {_estado_grupo(r.nombre, ahora)}" for r in candidatos] + lineas_no_disponibles
+        )
         salvedad = "\n(si buscabas otro activo, dime el nombre completo)" if es_match_debil else ""
         return f"Esto es lo que tengo:\n{lineas}{salvedad}"
 
@@ -2684,6 +2714,16 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
 
     if not nombres:
         return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la LACS.", sesion
+
+    # Nombró un modelo sin unidades disponibles: no se presta (ni se cambia en
+    # silencio por el más parecido, ver `modelos_no_disponibles_en_texto`).
+    no_disponibles, ganan = modelos_no_disponibles_en_texto(texto_usuario)
+    if ganan:
+        return (
+            f"{' y '.join(no_disponibles)}: no está disponible por ahora, así que no se puede reservar. "
+            "Si quieres otro equipo o espacio, escríbeme su nombre.",
+            sesion,
+        )
 
     recurso, candidatos, _ = _resolver_recurso_para_reserva(texto_usuario, {})
 

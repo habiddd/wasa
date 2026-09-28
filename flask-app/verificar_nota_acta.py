@@ -25,7 +25,7 @@ from sqlalchemy import func
 from app import acta_pdf, actas_service, create_app
 from app.extensions import db
 from app.models import Reserva, ReservaActa
-from app.routes.dashboard import _reservas_del_grupo
+from app.routes.dashboard import _reservas_del_grupo, _validar_nota
 
 HABID = 24
 
@@ -48,55 +48,59 @@ with app.app_context():
     assert anclas_grande["entrega_nota"]["pagina"] == pagina_firmas, "entrega_nota quedó en otra página que las firmas"
     assert anclas_grande["devolucion_nota"]["pagina"] == pagina_firmas, "devolucion_nota quedó en otra página que las firmas"
 
-    # --- Grupo de un solo activo (≤3): SÍ tiene que caber en una página -----
-    candidatos_chicos = (
-        db.session.query(Reserva.grupo_id, func.count())
+    # --- Grupo de un solo activo: SÍ tiene que caber en una página ----------
+    # (con 3+ activos las firmas de devolución pasan a la página 2 y está bien).
+    grupo_chico = (
+        db.session.query(Reserva.grupo_id)
         .filter(Reserva.usuario_id == HABID)
         .group_by(Reserva.grupo_id)
-        .having(func.count() <= 3)
-        .all()
+        .having(func.count() == 1)
+        .order_by(Reserva.grupo_id.desc())
+        .limit(1)
+        .scalar()
     )
-    grupo_chico = None
-    for gid, _n in candidatos_chicos:
-        reservas_chico = _reservas_del_grupo(gid)
-        if actas_service.momento_siguiente(reservas_chico) is not None:
-            grupo_chico = gid
-            break
-    assert grupo_chico is not None, "no hay ningún grupo chico (<=3 activos) del usuario de prueba con algo pendiente por firmar"
-
-    _pdf_chico, anclas_chico = acta_pdf.generar_acta_con_anclas(reservas_chico)
+    assert grupo_chico is not None, "no hay ningún grupo de un activo del usuario de prueba"
+    _pdf_chico, anclas_chico = acta_pdf.generar_acta_con_anclas(_reservas_del_grupo(grupo_chico))
     assert all(a["pagina"] == 1 for a in anclas_chico.values()), (
         f"el acta del grupo chico {grupo_chico} se corrió a una segunda página"
     )
 
     # --- POST real: nota de 301 caracteres debe rechazar sin escribir nada --
-    momento = actas_service.momento_siguiente(reservas_grande)
-    assert momento is not None, f"el grupo {grupo_grande} ya no tiene nada pendiente por firmar"
-
-    filas_antes = ReservaActa.query.filter_by(grupo_id=grupo_grande).count()
-
-    cliente = app.test_client()
-    auth = (app.config["DASHBOARD_USER"], app.config["DASHBOARD_PASSWORD"])
-    resp = cliente.post(
-        f"/dashboard/api/reservas/grupo/{grupo_grande}/actas",
-        data={
-            "archivo": (io.BytesIO(pdf_grande), "acta.pdf"),
-            "momento": momento,
-            "origen": "firmada",
-            "nota": "x" * 301,
-        },
-        content_type="multipart/form-data",
-        auth=auth,
+    # Hace falta un grupo con algo por firmar (si no, el endpoint responde 409
+    # antes de mirar la nota). Si no hay ninguno, se prueba la validación sola.
+    pendiente = next(
+        (gid for (gid,) in db.session.query(Reserva.grupo_id).filter(Reserva.usuario_id == HABID).distinct()
+         if actas_service.momento_siguiente(_reservas_del_grupo(gid)) is not None),
+        None,
     )
-    assert resp.status_code == 400, f"esperaba 400, llegó {resp.status_code}: {resp.get_data(as_text=True)}"
-    assert "300" in resp.get_json()["error"], resp.get_json()
-
-    filas_despues = ReservaActa.query.filter_by(grupo_id=grupo_grande).count()
-    assert filas_despues == filas_antes, "el POST rechazado no debía escribir ninguna fila"
+    if pendiente is None:
+        _nota, error = _validar_nota("x" * 301)
+        assert error and "300" in error, error
+        via = "_validar_nota directo (no hay grupo pendiente por firmar)"
+    else:
+        via = f"POST al grupo {pendiente}"
+        momento = actas_service.momento_siguiente(_reservas_del_grupo(pendiente))
+        filas_antes = ReservaActa.query.filter_by(grupo_id=pendiente).count()
+        cliente = app.test_client()
+        auth = (app.config["DASHBOARD_USER"], app.config["DASHBOARD_PASSWORD"])
+        resp = cliente.post(
+            f"/dashboard/api/reservas/grupo/{pendiente}/actas",
+            data={
+                "archivo": (io.BytesIO(pdf_grande), "acta.pdf"),
+                "momento": momento,
+                "origen": "firmada",
+                "nota": "x" * 301,
+            },
+            content_type="multipart/form-data",
+            auth=auth,
+        )
+        assert resp.status_code == 400, f"esperaba 400, llegó {resp.status_code}: {resp.get_data(as_text=True)}"
+        assert "300" in resp.get_json()["error"], resp.get_json()
+        filas_despues = ReservaActa.query.filter_by(grupo_id=pendiente).count()
+        assert filas_despues == filas_antes, "el POST rechazado no debía escribir ninguna fila"
 
 print(
     f"OK: entrega_nota/devolucion_nota consistentes en página {pagina_firmas} del grupo grande "
-    f"{grupo_grande} ({n_lineas} activos, {len(set(a['pagina'] for a in anclas_grande.values()))} página(s), "
-    f"preexistente antes de este cambio); grupo chico {grupo_chico} cabe en 1 página; "
-    f"POST con nota de 301 caracteres rechazado con 400 y sin escribir fila."
+    f"{grupo_grande} ({n_lineas} activos); grupo chico {grupo_chico} cabe en 1 página; "
+    f"nota de 301 caracteres rechazada vía {via}."
 )

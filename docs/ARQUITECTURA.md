@@ -1861,6 +1861,18 @@ resto de la devolución.
   ofrece equipos con `estado = 'disponible'` (`recursos_service`), y crear una
   reserva a mano desde el dashboard sobre un activo `no_devuelto` lo bloquea
   igual que cualquier otro estado fuera de catálogo.
+- **El bot dice que no está.** `recursos_service.modelos_no_disponibles_en_texto`
+  busca entre los modelos que no tienen ninguna unidad `disponible`. Para el
+  estudiante, `no_devuelto`, `no_disponible` y `en_mantenimiento` son iguales y
+  no se le dice el motivo. Si el texto nombra uno de esos modelos con más
+  puntaje que el mejor modelo disponible:
+  - `evaluar_consulta_disponibilidad` responde *"X: no está disponible por
+    ahora"*;
+  - `_iniciar_reserva` no deja reservarlo.
+
+  Así no se cambia en silencio por el modelo más parecido (la EOS R por la
+  EOS R6). Si hay empate, la consulta lista los dos modelos y la reserva
+  sigue como siempre.
 - **Solo la LACS lo saca de ahí, desde Activos.** El único camino de entrada
   es el acta de devolución; `PATCH /api/activos/<id>` responde **409** si
   alguien intenta poner `no_devuelto` a mano

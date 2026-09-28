@@ -29,7 +29,7 @@ nunca vio una reserva de prueba como `confirmada`.
 - Filas 80 a 91 de `reserva_estado_historial`.
 - Filas 4 a 7 de `recurso_estado_historial`.
 
-**Quedan en `no_devuelto` a propósito:**
+**Quedaron en `no_devuelto` a propósito** (después los pasaste a `disponible` desde Activos, a las 16:32):
 
 - Cámara Canon EOS R (recurso 2).
 - Micrófono Rode NTG3 (recurso 4).
@@ -198,17 +198,44 @@ WHERE estado_nuevo = 'no_devuelta' GROUP BY 1;
 
 ---
 
-## Observación: el bot cuando preguntan por un equipo no devuelto
+## El bot cuando preguntan por un equipo no disponible (corregido)
 
-El bot ya no presta un activo `no_devuelto`, porque solo trabaja con activos
-`disponible`. Pero **no dice que ese equipo no está**:
+**Antes:** el bot no prestaba un activo `no_devuelto`, pero tampoco decía que
+no estaba:
 
-- **Si se pregunta por "Cámara Canon EOS R",** responde con el modelo más
-  parecido que sí está disponible: *"Cámara Canon EOS R6: libre"*. Es cierto
-  que la R6 está libre, pero puede confundir a quien buscaba la EOS R.
-- **Si se pregunta por "Trípode Manfrotto",** no lo encuentra y manda el
-  enlace al catálogo.
+- Si se preguntaba por la "Cámara Canon EOS R", respondía *"Cámara Canon EOS
+  R6: libre"*.
+- Al pedir reservarla, podía tomar la R6 en su lugar.
 
-No se cambió nada del bot. Si se quiere que responda algo como *"ese equipo
-no está disponible por ahora"*, habría que hacer que la búsqueda también mire
-los activos `no_devuelto`.
+**Ahora:** `recursos_service.modelos_no_disponibles_en_texto` también busca
+entre los modelos que no tienen ninguna unidad `disponible`. Para el
+estudiante, `no_devuelto`, `no_disponible` y `en_mantenimiento` son lo mismo:
+"no disponible".
+
+Prueba: [`flask-app/verificar_bot_no_disponible.py`](../flask-app/verificar_bot_no_disponible.py).
+La Canon y el micrófono ya los habías vuelto a `disponible` desde Activos a
+las 16:32 (filas 8 a 10 de `recurso_estado_historial`). Por eso la prueba los
+pone en `no_devuelto` dentro de una transacción y la revierte al final: no
+guarda nada. El lente 24-70 (recurso 19) sí sigue `no_devuelto`.
+
+```
+  consulta 'tienen la cámara canon eos r?'
+    -> 'Esto es lo que tengo:\n- Cámara Canon EOS R: no está disponible por ahora'
+  consulta 'tienen la canon eos r6?'
+    -> 'Esto es lo que tengo:\n- Cámara Canon EOS R6: libre, sin reservas próximas'
+  consulta 'hay cámaras canon?'
+    -> 'Esto es lo que tengo:\n- Cámara Canon EOS R6: libre, sin reservas próximas\n- Cámara Canon EOS R: no está disponible por ahora'
+  consulta 'el micrófono rode ntg3 está libre?'
+    -> 'Esto es lo que tengo:\n- Micrófono Rode NTG3: no está disponible por ahora'
+  consulta 'tienen el lente sony 24-70?'
+    -> 'Esto es lo que tengo:\n- Lente Sony 70-200mm f/2.8: libre, sin reservas próximas\n- Lente Sony 24-70mm f/2.8: no está disponible por ahora'
+  consulta 'tienen el trípode manfrotto?'
+    -> 'Esto es lo que tengo:\n- Trípode Manfrotto: libre, sin reservas próximas'
+  reservar 'cámara canon eos r'
+    -> 'Cámara Canon EOS R: no está disponible por ahora, así que no se puede reservar. Si quieres otro equipo o espacio, escríbeme su nombre.'
+  reservar 'canon eos r6'
+    -> '¿Esta reserva es particular o para una asignatura? ...'   (sigue normal)
+  reservar 'cámara canon'
+    -> '¿Esta reserva es particular o para una asignatura? ...'   (sigue normal: hay una Canon disponible)
+OK: el bot dice 'no está disponible' por lo no disponible/no devuelto, no lo cambia por otro modelo y no deja reservarlo.
+```

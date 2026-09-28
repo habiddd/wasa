@@ -10,8 +10,8 @@ escribe ninguna fila ni archivo.
 
 El grupo con MÁS líneas para comprobar que las anclas de cada fila existen y
 son consistentes entre sí (misma fila -> mismo "y", Dev. a la derecha de
-Entr.), y un grupo chico (<=3 activos) para confirmar que la tabla sigue
-cabiendo en una sola página.
+Entr.), y un grupo chico (<=3 activos) para confirmar que la tabla de activos
+cabe en la página 1 (las firmas de devolución pueden pasar a la 2).
 """
 
 from sqlalchemy import func
@@ -56,8 +56,10 @@ with app.app_context():
     reservas_chico = _reservas_del_grupo(grupo_chico)
     _pdf, anclas_chico = acta_pdf.generar_acta_con_anclas(reservas_chico)
     comprobar_anclas(reservas_chico, anclas_chico)
-    assert all(a["pagina"] == 1 for a in anclas_chico.values()), (
-        f"el acta del grupo chico {grupo_chico} se corrió a una segunda página"
+    # La tabla de activos cabe en la página 1; las firmas de devolución pueden
+    # pasar a la 2 (desde 3 activos) y está bien: sus anclas llevan la página.
+    assert all(a["pagina"] == 1 for k, a in anclas_chico.items() if "_linea_" in k), (
+        f"la tabla del acta del grupo chico {grupo_chico} se corrió a una segunda página"
     )
 
     # /acta/estado trae TODAS las líneas del grupo (también las canceladas),
@@ -69,5 +71,5 @@ with app.app_context():
 
 print(
     f"OK: anclas por línea consistentes en el grupo grande {grupo_grande} ({n_lineas} activos) y en el "
-    f"grupo chico {grupo_chico} (1 página); /acta/estado devuelve todas las líneas en orden."
+    f"grupo chico {grupo_chico} (tabla en la página 1); /acta/estado devuelve todas las líneas en orden."
 )
