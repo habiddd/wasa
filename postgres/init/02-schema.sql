@@ -679,6 +679,113 @@ CREATE TABLE IF NOT EXISTS reserva_avisos (
     CONSTRAINT reserva_avisos_unico UNIQUE (grupo_id, tipo)
 );
 
+-- Historial de estados de cada línea de reserva, para métricas de largo plazo
+-- ("¿quién recoge tarde en el último año?"). Antes solo se guardaba el estado
+-- ACTUAL: no quedaba cuándo se entregó ni cuándo se devolvió un equipo, ni los
+-- cambios a mano (no_show <-> confirmada, cancelada...), y borrar una reserva
+-- desde el dashboard se llevaba todo, actas incluidas (ON DELETE CASCADE).
+--
+-- Lo llena un TRIGGER, no la app: así lo cubren todos los caminos (bot,
+-- dashboard, barrido de no-show, psql a mano) sin tocar ninguno. SIN foreign
+-- keys a propósito: el historial tiene que sobrevivir al borrado de la reserva,
+-- del grupo o del usuario. Cada fila guarda `inicio`/`fin` tal como estaban en
+-- ese instante, así el retraso se mide contra el horario vigente al momento de
+-- la entrega aunque luego se reprograme.
+--   estado_anterior NULL = alta de la línea; estado_nuevo NULL = línea borrada.
+-- Solo el trigger escribe (SECURITY DEFINER, dueño postgres); a la app se le
+-- quitan INSERT/UPDATE/DELETE al final de este script, así nadie puede
+-- "corregir" la historia desde Flask.
+CREATE TABLE IF NOT EXISTS reserva_estado_historial (
+    id              BIGSERIAL PRIMARY KEY,
+    reserva_id      INTEGER NOT NULL,
+    grupo_id        INTEGER,
+    usuario_id      INTEGER,
+    recurso_id      INTEGER,
+    inicio          TIMESTAMPTZ,
+    fin             TIMESTAMPTZ,
+    estado_anterior VARCHAR(20),
+    estado_nuevo    VARCHAR(20),
+    cambiado_en     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_reserva_estado_historial_reserva
+    ON reserva_estado_historial (reserva_id, cambiado_en);
+CREATE INDEX IF NOT EXISTS idx_reserva_estado_historial_usuario
+    ON reserva_estado_historial (usuario_id, cambiado_en);
+
+CREATE OR REPLACE FUNCTION registrar_historial_reserva() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        INSERT INTO reserva_estado_historial
+            (reserva_id, grupo_id, usuario_id, recurso_id, inicio, fin, estado_anterior, estado_nuevo)
+        VALUES (OLD.id, OLD.grupo_id, OLD.usuario_id, OLD.recurso_id, OLD.inicio, OLD.fin, OLD.estado, NULL);
+        RETURN OLD;
+    END IF;
+    -- En UPDATE solo llega aquí si cambió el estado o el horario (lo filtra
+    -- el WHEN del trigger).
+    INSERT INTO reserva_estado_historial
+        (reserva_id, grupo_id, usuario_id, recurso_id, inicio, fin, estado_anterior, estado_nuevo)
+    VALUES (NEW.id, NEW.grupo_id, NEW.usuario_id, NEW.recurso_id, NEW.inicio, NEW.fin,
+            CASE WHEN TG_OP = 'UPDATE' THEN OLD.estado END, NEW.estado);
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS reservas_historial_ins_del ON reservas;
+CREATE TRIGGER reservas_historial_ins_del
+    AFTER INSERT OR DELETE ON reservas
+    FOR EACH ROW EXECUTE FUNCTION registrar_historial_reserva();
+DROP TRIGGER IF EXISTS reservas_historial_upd ON reservas;
+CREATE TRIGGER reservas_historial_upd
+    AFTER UPDATE ON reservas
+    FOR EACH ROW
+    WHEN (OLD.estado IS DISTINCT FROM NEW.estado
+          OR OLD.inicio IS DISTINCT FROM NEW.inicio
+          OR OLD.fin IS DISTINCT FROM NEW.fin)
+    EXECUTE FUNCTION registrar_historial_reserva();
+
+-- Backfill único (solo si el historial está vacío): lo único con hora real
+-- que había antes del trigger son las actas. La primera acta de cada momento
+-- es la transición; las siguientes son re-firmas del mismo papel.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM reserva_estado_historial) THEN
+        INSERT INTO reserva_estado_historial
+            (reserva_id, grupo_id, usuario_id, recurso_id, inicio, fin, estado_anterior, estado_nuevo, cambiado_en)
+        SELECT r.id, r.grupo_id, r.usuario_id, r.recurso_id, r.inicio, r.fin,
+               NULL, 'entregada', a.primera
+        FROM reservas r
+        JOIN (SELECT grupo_id, MIN(creado_en) AS primera FROM reserva_actas
+              WHERE momento = 'entrega' GROUP BY grupo_id) a ON a.grupo_id = r.grupo_id
+        WHERE r.estado IN ('entregada', 'completada', 'devuelta_tarde');
+
+        INSERT INTO reserva_estado_historial
+            (reserva_id, grupo_id, usuario_id, recurso_id, inicio, fin, estado_anterior, estado_nuevo, cambiado_en)
+        SELECT r.id, r.grupo_id, r.usuario_id, r.recurso_id, r.inicio, r.fin,
+               'entregada', r.estado, a.primera
+        FROM reservas r
+        JOIN (SELECT grupo_id, MIN(creado_en) AS primera FROM reserva_actas
+              WHERE momento = 'devolucion' GROUP BY grupo_id) a ON a.grupo_id = r.grupo_id
+        WHERE r.estado IN ('completada', 'devuelta_tarde');
+    END IF;
+END $$;
+
+-- Una fila por entrega y por devolución, con el retraso ya calculado
+-- (positivo = tarde; entrega contra `inicio`, devolución contra `fin`). Ej.:
+--   SELECT usuario_id, COUNT(*) FILTER (WHERE retraso > interval '0')
+--   FROM reserva_puntualidad
+--   WHERE evento = 'entrega' AND ocurrido_en > now() - interval '1 year'
+--   GROUP BY usuario_id;
+CREATE OR REPLACE VIEW reserva_puntualidad AS
+SELECT reserva_id, grupo_id, usuario_id, recurso_id, inicio, fin,
+       CASE WHEN estado_nuevo = 'entregada' THEN 'entrega' ELSE 'devolucion' END AS evento,
+       estado_nuevo AS estado,
+       cambiado_en AS ocurrido_en,
+       CASE WHEN estado_nuevo = 'entregada' THEN cambiado_en - inicio
+            ELSE cambiado_en - fin END AS retraso
+FROM reserva_estado_historial
+WHERE (estado_nuevo = 'entregada' AND estado_anterior IS DISTINCT FROM 'entregada')
+   OR (estado_anterior = 'entregada' AND estado_nuevo IN ('completada', 'devuelta_tarde'));
+
 -- Este script corre con el superusuario de Postgres (ver 01-init.sql), así
 -- que las tablas de arriba quedan con OWNER postgres. GRANT ALL PRIVILEGES
 -- ON DATABASE (en 01-init.sql) solo da privilegios a nivel de base de datos,
@@ -692,3 +799,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"db_user";
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
     GRANT USAGE, SELECT ON SEQUENCES TO :"db_user";
+
+-- El historial es de solo lectura para la app: lo escribe el trigger
+-- (SECURITY DEFINER), ver reserva_estado_historial más arriba.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON reserva_estado_historial FROM :"db_user";

@@ -12,7 +12,7 @@ del carrito, no una por línea.
 """
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import current_app
@@ -173,7 +173,8 @@ def aplicar_transicion(reservas: list[Reserva], momento: str) -> tuple[int, str 
     cambiaron, error legible o None).
 
     'entrega': las líneas 'confirmada' O 'no_show' pasan a 'entregada'. Una
-    línea que venía de 'no_show' se marca además con `entrega_tardia=True`
+    línea que venía de 'no_show', o cuya entrega ya pasó el margen de no-show
+    aunque siga 'confirmada', se marca además con `entrega_tardia=True`
     (ver el comentario de esa columna en el esquema) -- el estudiante llegó
     tarde pero dentro de su ventana, y el horario NO se extiende por eso:
     `fin` no se toca. Si TODAS las líneas objetivo ya tienen `fin <= ahora`
@@ -192,8 +193,13 @@ def aplicar_transicion(reservas: list[Reserva], momento: str) -> tuple[int, str 
             return 0, "Esta reserva no tiene activos por entregar."
         if all(_fin_aware(r) <= ahora for r in objetivo):
             return 0, "La ventana de esta reserva ya terminó; no se puede registrar la entrega."
+        # Tardía también si ya pasó el margen aunque la línea siga
+        # 'confirmada': el barrido de no-show pudo no haber corrido todavía
+        # (contenedor caído) o la LACS revirtió el no_show a mano.
+        margen = timedelta(minutes=current_app.config.get("NO_SHOW_MARGEN_MIN", 30))
         for r in objetivo:
-            if r.estado == "no_show":
+            inicio = r.inicio if r.inicio.tzinfo else r.inicio.replace(tzinfo=timezone.utc)
+            if r.estado == "no_show" or ahora > inicio + margen:
                 r.entrega_tardia = True
             r.estado = ESTADO_ENTREGADA
             cambiadas += 1

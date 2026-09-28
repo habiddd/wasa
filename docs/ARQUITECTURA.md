@@ -1498,7 +1498,10 @@ entregada + fin ya pasó ──> se MUESTRA "Retrasada" (derivado, no se guarda)
   `estado`) -- si fuera un estado se perdería al devolver el equipo. El
   horario NO se extiende por la demora: `fin` no se toca, así que una
   reserva de 4 horas recogida con 1 hora de retraso deja 3 horas de uso
-  real, no 4.
+  real, no 4. Desde el 28/09/2026 también se marca cuando la entrega llega
+  después de `inicio + NO_SHOW_MARGEN_MIN` con la línea todavía en
+  `confirmada` (el barrido de no-show no alcanzó a correr, o la LACS lo
+  revirtió a mano): antes esas recogidas tardías quedaban en `false`.
 
 **Límite conocido:** una reserva `entregada` y retrasada deja de bloquear su
 activo, porque el `EXCLUDE` trabaja sobre `tstzrange(inicio, fin)` y ese rango
@@ -1722,6 +1725,40 @@ Dos ajustes de infraestructura que hicieron falta y son fáciles de perder:
   blanco, con un único error en consola como toda pista. Se añade a la tabla
   global y no a una `location` con su propio bloque `types` porque ese bloque
   **reemplaza** la tabla heredada en lugar de ampliarla.
+
+### Historial de estados (`reserva_estado_historial` + vista `reserva_puntualidad`)
+
+`reservas.estado` solo dice cómo está una línea **ahora**. Para métricas de
+meses o años (quién recoge tarde, quién devuelve tarde) está
+`reserva_estado_historial`: una fila por cada alta, cambio de `estado`, cambio
+de `inicio`/`fin` y borrado de una línea de `reservas`.
+
+- La llena un **trigger de Postgres** (`registrar_historial_reserva`), no la
+  app: cubre el bot, el dashboard, el barrido de no-show y cualquier `psql` a
+  mano sin tocar ninguno de esos caminos.
+- **Sin foreign keys**: sobrevive al borrado de la reserva, del grupo y del
+  usuario (`api_eliminar_reserva_grupo` y el quitar un activo de un grupo
+  ya no borran el rastro).
+- Cada fila copia `inicio`/`fin`/`usuario_id`/`recurso_id` **del momento del
+  cambio**: el retraso se mide contra el horario vigente en ese instante.
+  `estado_anterior NULL` = alta; `estado_nuevo NULL` = línea borrada.
+- **Solo lectura para la app**: la función es `SECURITY DEFINER` y a
+  `APP_DB_USER` se le revocan `INSERT/UPDATE/DELETE/TRUNCATE` sobre la tabla.
+- `cambiado_en` es `now()`, la hora de **inicio de la transacción**: todos los
+  cambios de un mismo `commit` comparten hora.
+- Backfill único al crearla: las entregas y devoluciones anteriores se
+  reconstruyeron desde la primera acta de cada momento en `reserva_actas`.
+
+La vista `reserva_puntualidad` deja una fila por entrega y por devolución con
+el `retraso` ya calculado (entrega contra `inicio`, devolución contra `fin`;
+positivo = tarde):
+
+```sql
+SELECT usuario_id, COUNT(*) FILTER (WHERE retraso > interval '0') AS recogio_tarde
+FROM reserva_puntualidad
+WHERE evento = 'entrega' AND ocurrido_en > now() - interval '1 year'
+GROUP BY usuario_id;
+```
 
 ### Conversación de una sesión (Usuarios → Sesiones)
 
