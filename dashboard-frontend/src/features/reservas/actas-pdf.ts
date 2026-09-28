@@ -65,6 +65,7 @@ function clavesDe(momento: MomentoActa) {
     admin: `${prefijo}_admin`,
     adminFecha: `${prefijo}_admin_fecha`,
     adminCc: `${prefijo}_admin_cc`,
+    nota: `${prefijo}_nota`,
   }
 }
 
@@ -129,9 +130,9 @@ function estamparTexto(pdf: PDFDocument, ancla: AnclaFirma, fuente: PDFFont, tex
  * sus anclas ya calculadas por el backend -- ver acta_pdf.py y
  * `/acta/estado`), estampa las dos firmas del momento (usuario y
  * administrador LACS), la fecha y hora en los dos cuadros, y -- si se
- * tecleó -- la cédula del administrador. A mano solo queda la firma: la
- * cédula del usuario ya viene impresa por el servidor (ver
- * acta_pdf._celda_firma) y no se toca acá.
+ * tecleó -- la cédula del administrador y/o la nota de este momento. A mano
+ * solo queda la firma: la cédula del usuario ya viene impresa por el
+ * servidor (ver acta_pdf._celda_firma) y no se toca acá.
  *
  * Las coordenadas de pdf-lib y las de reportlab comparten el mismo origen
  * (esquina inferior izquierda de la página, en puntos): NO hay que invertir
@@ -145,7 +146,8 @@ export async function estamparFirmas(
   momento: MomentoActa,
   firmas: { usuario: Blob; admin: Blob },
   fecha: Date,
-  cedulaAdmin?: string
+  cedulaAdmin?: string,
+  nota?: string
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.load(pdfBase)
   const claves = clavesDe(momento)
@@ -185,6 +187,23 @@ export async function estamparFirmas(
   if (cedulaLimpia) {
     const anclaCc = anclas[claves.adminCc]
     if (anclaCc) estamparTexto(pdf, anclaCc, fuente, cedulaLimpia)
+  }
+
+  // Helvetica (WinAnsi) no dibuja emojis ni comillas tipográficas: se reemplazan por "?". Saltos de línea -> espacio (el hueco es fijo).
+  // ponytail: “”‘’ salen como "?"; mapearlas a comillas rectas si alguien se queja.
+  const notaLimpia = nota?.replace(/\s+/g, " ").replace(/[^\x20-\x7E\xA0-\xFF]/g, "?").trim()
+  const anclaNota = anclas[claves.nota]
+  if (notaLimpia && anclaNota) {
+    // El hueco es de 2 líneas a 7.5pt; una nota larga (hasta 300) achica la letra para no pisar lo de abajo (1.8: margen por el corte de palabras).
+    const size = Math.min(7.5, (anclaNota.ancho * 1.8) / fuente.widthOfTextAtSize(notaLimpia, 1))
+    pdf.getPage(anclaNota.pagina - 1).drawText(notaLimpia, {
+      x: anclaNota.x,
+      y: anclaNota.y + anclaNota.alto - size,
+      size,
+      lineHeight: size * 1.2,
+      maxWidth: anclaNota.ancho,
+      font: fuente,
+    })
   }
 
   return pdf.save()

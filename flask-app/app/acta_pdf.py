@@ -203,6 +203,16 @@ _ALTO_FIRMA = 2 * cm
 # leading 11).
 _ANCHO_FECHA = _ANCHO_UTIL / 2 - 18
 _ALTO_FECHA = 11
+# Alto del hueco reservado para la nota del administrador (entrega y
+# devolución tienen el suyo, ver más abajo): 2 líneas de 9pt de interlineado
+# a lo ANCHO de toda la página -- de sobra para los 300 del VARCHAR de la
+# columna (a ese ancho entran ~300 caracteres en 2 líneas). Bajado de 3 a 2
+# líneas: con 3 una reserva de varios activos (tabla larga) se corría a una
+# segunda página (verificado generando el acta real, ver
+# verificar_nota_acta.py). Lo dibuja pdf-lib al firmar en pantalla (ver
+# dashboard-frontend/.../actas-pdf.ts), no reportlab -- acá solo se reserva
+# el espacio en blanco y se ancla su posición.
+_ALTO_NOTA = 2 * 9
 # Cuántos guiones lleva "Fecha y hora ____...": se probaron varios valores
 # con `stringWidth` y se generó el PDF real para elegir uno que deje la línea
 # con un margen cómodo dentro de _ANCHO_FECHA (con 30, sobran ~63pt de 257pt
@@ -313,10 +323,12 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
     Claves: `entrega_usuario`, `entrega_admin`, `devolucion_usuario`,
     `devolucion_admin`, cada una con `_fecha` (el hueco de la línea "Fecha y
     hora", ya desplazado más allá de la etiqueta) y `_cc` (el hueco de la
-    línea "C.C.", igual de desplazado) -- 12 en total. A mano solo queda la
-    firma: la cédula del usuario ya viene impresa (ver `_celda_firma`) y la
-    fecha la estampa el navegador (ver actas-pdf.ts), así que `_fecha` y
-    `_cc` son huecos que el navegador rellena sin necesitar medir nada del
+    línea "C.C.", igual de desplazado), más `entrega_nota` y
+    `devolucion_nota` (el hueco de observaciones libres del administrador,
+    ver `reserva_actas.nota`) -- 14 en total. A mano solo queda la firma: la
+    cédula del usuario ya viene impresa (ver `_celda_firma`) y la fecha la
+    estampa el navegador (ver actas-pdf.ts), así que `_fecha`, `_cc` y
+    `_nota` son huecos que el navegador rellena sin necesitar medir nada del
     lado del PDF."""
     anclas: dict = {}
     primera = reservas[0]
@@ -510,6 +522,17 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
     historia.append(KeepTogether([
         Paragraph("Entrega y devolución", _SECCION),
         tabla_firmas,
+        # Huecos reservados para la nota que el administrador deja al firmar
+        # cada momento (opcional, reserva_actas.nota) -- el navegador la
+        # dibuja con pdf-lib al estampar, acá solo se reserva el espacio y
+        # se ancla su posición (ver _ALTO_NOTA y actas-pdf.ts).
+        Spacer(1, 0.15 * cm),
+        Paragraph("<b>Observaciones de la entrega (LACS):</b>", _FIRMA_PIE),
+        Spacer(1, _ALTO_NOTA),
+        _Ancla("entrega_nota", anclas, _ANCHO_UTIL, _ALTO_NOTA),
+        Paragraph("<b>Observaciones de la devolución (LACS):</b>", _FIRMA_PIE),
+        Spacer(1, _ALTO_NOTA),
+        _Ancla("devolucion_nota", anclas, _ANCHO_UTIL, _ALTO_NOTA),
     ]))
 
     doc.build(historia)

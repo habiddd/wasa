@@ -1434,6 +1434,21 @@ antes, que regeneraba el PDF en cada apertura del modal.
   `recursos_service.ZONA_HORARIA_LACS` que el resto del proyecto y
   normaliza a UTC antes de convertir los `datetime` que puedan llegar
   naive de la BD, igual que `_serializar_reserva`.
+- **Nota del administrador (opcional).** `reserva_actas.nota` (VARCHAR(300),
+  validada con `_validar_nota`, la misma función y el mismo límite que la
+  nota de la reserva) guarda una observación libre por ACTA -- una para la
+  entrega, otra para la devolución, no una sola para todo el histórico. El
+  acta base reserva dos cajas, "Observaciones de la entrega (LACS)" y
+  "Observaciones de la devolución (LACS)", con sus propias anclas
+  `entrega_nota`/`devolucion_nota` (ver `acta_pdf._ALTO_NOTA`); quien firma
+  en pantalla la escribe en `FirmarActaDialog` y `pdf-lib` la dibuja ahí
+  mismo al componer el PDF (ver `actas-pdf.ts`, que además reemplaza por
+  "?" cualquier carácter fuera de WinAnsi -- emoji o comilla tipográfica --
+  porque Helvetica no lo dibuja). Un acta **subida** solo guarda la nota en
+  la base: en papel queda escrita a mano dentro de la misma caja, no hay
+  nada que estampar. Un acta **anterior** a este cambio no trae esas anclas
+  -- la nota igual se guarda en el historial, solo que no se imprime (mismo
+  criterio que la fecha/C.C. cuando falta su ancla).
 
 ### Ciclo de estados de una reserva
 

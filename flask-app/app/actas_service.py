@@ -70,6 +70,7 @@ def guardar(
     datos: bytes,
     anclas: dict | None,
     firmado_por: str | None,
+    nota: str | None = None,
 ) -> ReservaActa:
     """Escribe `datos` a disco y arma la fila `ReservaActa` (sin `commit`:
     lo hace el endpoint, junto con el cambio de estado, para que un fallo de
@@ -101,6 +102,7 @@ def guardar(
         bytes=len(datos),
         anclas=anclas,
         firmado_por=firmado_por,
+        nota=nota,
     )
     db.session.add(acta)
     return acta

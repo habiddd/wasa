@@ -3,6 +3,7 @@ import { Loader2Icon } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -13,7 +14,8 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { etiquetaEstado } from "@/features/calendario/calendario-utils"
+import { Textarea } from "@/components/ui/textarea"
+import { etiquetaEstado, NOTA_MAX_CARACTERES } from "@/features/calendario/calendario-utils"
 import { registrarActa, type AnclaFirma, type MomentoActa, type Sesion } from "@/lib/api"
 
 import { estadoResultante, estamparFirmas, formatearFechaActa } from "./actas-pdf"
@@ -49,6 +51,8 @@ export function FirmarActaDialog({
   const [paso, setPaso] = useState<Paso>(1)
   const [firmadoPor, setFirmadoPor] = useState("")
   const [cedulaAdmin, setCedulaAdmin] = useState("")
+  const [dejarNota, setDejarNota] = useState(false)
+  const [nota, setNota] = useState("")
   const [usuarioVacio, setUsuarioVacio] = useState(true)
   const [adminVacio, setAdminVacio] = useState(true)
   const [generando, setGenerando] = useState(false)
@@ -135,6 +139,8 @@ export function FirmarActaDialog({
     setPaso(1)
     setFirmadoPor("")
     setCedulaAdmin("")
+    setDejarNota(false)
+    setNota("")
     setUsuarioVacio(true)
     setAdminVacio(true)
     setPdfFirmado(null)
@@ -170,7 +176,8 @@ export function FirmarActaDialog({
         momento,
         { usuario: pngUsuario, admin: pngAdmin },
         fechaPeticion,
-        cedulaAdmin
+        cedulaAdmin,
+        dejarNota ? nota : undefined
       )
       setPdfFirmado(bytes)
       setPaso(3)
@@ -191,6 +198,7 @@ export function FirmarActaDialog({
         origen: "firmada",
         anclas,
         firmadoPor: firmadoPor.trim(),
+        nota: dejarNota ? nota.trim() : undefined,
       })
       toast.success("Acta registrada.")
       onRegistrada(reservas)
@@ -272,6 +280,44 @@ export function FirmarActaDialog({
                 />
               </div>
             </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="firma-dejar-nota"
+                  checked={dejarNota}
+                  onCheckedChange={(v) => {
+                    const marcado = v === true
+                    setDejarNota(marcado)
+                    if (!marcado) setNota("")
+                  }}
+                />
+                <Label htmlFor="firma-dejar-nota" className="cursor-pointer">
+                  Agregar nota al acta
+                </Label>
+              </div>
+              {dejarNota && (
+                <>
+                  <Textarea
+                    id="firma-nota"
+                    value={nota}
+                    onChange={(e) => setNota(e.target.value)}
+                    maxLength={NOTA_MAX_CARACTERES}
+                    placeholder="Observaciones de esta entrega/devolución…"
+                    className="resize-none"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {nota.length}/{NOTA_MAX_CARACTERES} caracteres
+                  </p>
+                  {!anclas[`${momento}_nota`] && (
+                    <p className="text-xs text-muted-foreground">
+                      Esta acta es anterior a las notas: se guarda en el historial pero no se imprime.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+
             <div className="relative">
               <FirmaCanvas
                 ref={canvasAdminRef}

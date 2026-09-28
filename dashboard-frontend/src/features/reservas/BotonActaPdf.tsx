@@ -341,6 +341,7 @@ export function BotonActaPdf({
                             {acta.creado_en ? FORMATO_HISTORIAL.format(new Date(acta.creado_en)) : "-"}
                             {acta.firmado_por && ` · ${acta.firmado_por}`}
                           </span>
+                          {acta.nota && <span className="block text-xs italic text-muted-foreground">{acta.nota}</span>}
                         </span>
                         <Button
                           type="button"

@@ -328,6 +328,7 @@ export type ActaRegistrada = {
   bytes: number
   sha256: string
   firmado_por: string | null
+  nota: string | null
   creado_en: string | null
 }
 
@@ -336,18 +337,20 @@ export type EstadoActa = {
   // etc.) y no queda nada por firmar.
   momento_siguiente: MomentoActa | null
   tiene_acta: boolean
-  // 12 claves: entrega_usuario, entrega_admin, devolucion_usuario,
+  // 14 claves: entrega_usuario, entrega_admin, devolucion_usuario,
   // devolucion_admin -- cada una es la zona de firma (la raya de "Firma" con
   // su etiqueta, usa recorte-acta.ts para el fondo del lienzo y
   // actas-pdf.ts para estampar el trazo), más "..._fecha" y "..._cc": los
   // huecos donde escribir la fecha y la cédula del administrador, YA
   // desplazados más allá de su etiqueta por el backend (ver
   // acta_pdf._Ancla.despl_x) -- el frontend no mide ningún texto, solo
-  // dibuja en `ancla.x`. Ya no hay "..._caja": el lienzo volvió a ser solo
-  // la franja de firma, no el cuadro completo. La cédula del USUARIO no
-  // viaja acá -- la imprime el servidor directo en el PDF (ver
-  // acta_pdf._celda_firma). Las anclas son las de la última acta guardada
-  // si existe, si no las del acta base recién generada.
+  // dibuja en `ancla.x`. Más "entrega_nota" y "devolucion_nota": el hueco de
+  // observaciones libres del administrador (ver reserva_actas.nota). Ya no
+  // hay "..._caja": el lienzo volvió a ser solo la franja de firma, no el
+  // cuadro completo. La cédula del USUARIO no viaja acá -- la imprime el
+  // servidor directo en el PDF (ver acta_pdf._celda_firma). Las anclas son
+  // las de la última acta guardada si existe, si no las del acta base recién
+  // generada.
   anclas: Record<string, AnclaFirma>
   historial: ActaRegistrada[]
 }
@@ -378,6 +381,7 @@ export async function registrarActa(
     origen: OrigenActa
     anclas?: Record<string, AnclaFirma>
     firmadoPor?: string
+    nota?: string
   }
 ): Promise<{ reservas: Sesion[]; acta: ActaRegistrada }> {
   const formData = new FormData()
@@ -386,6 +390,7 @@ export async function registrarActa(
   formData.append("origen", datos.origen)
   if (datos.anclas) formData.append("anclas", JSON.stringify(datos.anclas))
   if (datos.firmadoPor) formData.append("firmado_por", datos.firmadoPor)
+  if (datos.nota) formData.append("nota", datos.nota)
 
   const resp = await fetch(`${BASE}/reservas/grupo/${grupoId}/actas`, {
     method: "POST",

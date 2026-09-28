@@ -243,6 +243,10 @@ class ReservaActa(db.Model):
     # archivo -- no se recalculan después, ver comentario en el schema.
     anclas = db.Column(JSONB)
     firmado_por = db.Column(db.String(150))
+    # Nota libre y opcional del administrador al firmar ESTE momento (no la
+    # de la reserva -- ver ReservaGrupo.nota). Máximo 300 caracteres, ver
+    # postgres/init/02-schema.sql.
+    nota = db.Column(db.String(300))
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
     # passive_deletes=True: ver el comentario de `grupo_id` arriba -- sin

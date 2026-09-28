@@ -626,6 +626,9 @@ CREATE TABLE IF NOT EXISTS reserva_actas (
 CREATE INDEX IF NOT EXISTS idx_reserva_actas_grupo
     ON reserva_actas (grupo_id, creado_en DESC);
 
+-- Nota libre del administrador al firmar ese momento (opcional). Misma cota que reserva_grupos.nota.
+ALTER TABLE reserva_actas ADD COLUMN IF NOT EXISTS nota VARCHAR(300);
+
 -- Entrega tardía: el estudiante recogió después de NO_SHOW_MARGEN_MIN minutos
 -- de `inicio` (el margen de no-show) pero todavía DENTRO de su ventana (antes
 -- de `fin`), así que igual se le entrega -- ver actas_service.aplicar_transicion

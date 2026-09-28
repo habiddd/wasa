@@ -1291,6 +1291,7 @@ def _serializar_acta(a: ReservaActa) -> dict:
         "bytes": a.bytes,
         "sha256": a.sha256,
         "firmado_por": a.firmado_por,
+        "nota": a.nota,
         "creado_en": a.creado_en.isoformat() if a.creado_en else None,
     }
 
@@ -1409,8 +1410,8 @@ def api_crear_acta_grupo(grupo_id):
     'devuelta_tarde' (ver _ESTADOS_SOLO_CON_ACTA). `multipart/form-data`:
     `archivo` (el PDF), `momento` ('entrega'|'devolucion'), `origen`
     ('firmada'|'subida'), `anclas` (JSON en texto, opcional -- las que usó el
-    navegador para estampar, solo tiene sentido con origen='firmada') y
-    `firmado_por` (texto, opcional).
+    navegador para estampar, solo tiene sentido con origen='firmada'),
+    `firmado_por` (texto, opcional) y `nota` (texto, opcional, ver _validar_nota).
 
     Guarda el archivo y cambia el estado de las líneas en la MISMA
     transacción (un solo commit): si falla, se borra el archivo recién
@@ -1452,8 +1453,12 @@ def api_crear_acta_grupo(grupo_id):
 
     firmado_por = (request.form.get("firmado_por") or "").strip() or None
 
+    nota, error = _validar_nota(request.form.get("nota"))
+    if error:
+        return jsonify({"error": error}), 400
+
     try:
-        acta = actas_service.guardar(grupo_id, momento, origen, datos, anclas, firmado_por)
+        acta = actas_service.guardar(grupo_id, momento, origen, datos, anclas, firmado_por, nota)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
