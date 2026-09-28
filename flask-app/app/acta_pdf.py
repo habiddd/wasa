@@ -92,6 +92,8 @@ _FIRMA_PIE = ParagraphStyle("ActaFirmaPie", fontName="Helvetica", fontSize=8.5, 
 _FIRMA_PIE_CENTRADO = ParagraphStyle(
     "ActaFirmaPieCentrado", parent=_FIRMA_PIE, alignment=1,  # 1 = TA_CENTER
 )
+_CELDA_CENTRADA = ParagraphStyle("ActaCeldaCentrada", parent=_CELDA, alignment=1)
+_CELDA_ENCABEZADO_CENTRADA = ParagraphStyle("ActaCeldaEncabezadoCentrada", parent=_CELDA_ENCABEZADO, alignment=1)
 
 
 def _esc(valor) -> str:
@@ -162,13 +164,16 @@ class _Ancla(Flowable):
     final y el navegador solo dibuja en `ancla.x` sin saber nada de la
     etiqueta."""
 
-    def __init__(self, clave: str, destino: dict, ancho: float, alto: float, *, despl_x: float = 0.0):
+    def __init__(
+        self, clave: str, destino: dict, ancho: float, alto: float, *, despl_x: float = 0.0, extra: dict | None = None
+    ):
         super().__init__()
         self.width = 0
         self.height = 0
         self._clave, self._destino = clave, destino
         self._ancho, self._alto = ancho, alto
         self._despl_x = despl_x
+        self._extra = extra or {}
 
     def draw(self):
         x, y = self.canv.absolutePosition(0, 0)
@@ -177,6 +182,7 @@ class _Ancla(Flowable):
             "pagina": self.canv.getPageNumber(),
             "x": round(x, 2), "y": round(y, 2),
             "ancho": round(self._ancho, 2), "alto": round(self._alto, 2),
+            **self._extra,
         }
 
 
@@ -325,7 +331,10 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
     hora", ya desplazado más allá de la etiqueta) y `_cc` (el hueco de la
     línea "C.C.", igual de desplazado), más `entrega_nota` y
     `devolucion_nota` (el hueco de observaciones libres del administrador,
-    ver `reserva_actas.nota`) -- 14 en total. A mano solo queda la firma: la
+    ver `reserva_actas.nota`) -- 14 en total -- y, por cada activo N (desde 1),
+    `entrega_item_N`/`devolucion_item_N`: la casilla de las columnas
+    "Entr."/"Dev." de la tabla de activos, con una `etiqueta` legible del
+    activo, donde el navegador dibuja el chulito de lo que se marcó. A mano solo queda la firma: la
     cédula del usuario ya viene impresa (ver `_celda_firma`) y la fecha la
     estampa el navegador (ver actas-pdf.ts), así que `_fecha`, `_cc` y
     `_nota` son huecos que el navegador rellena sin necesitar medir nada del
@@ -431,11 +440,27 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
         f"Activos ({len(reservas)})" if len(reservas) > 1 else "Activo", _SECCION,
     ))
 
-    # "Entr." en vez de un símbolo de check/casilla: igual que la flecha de
-    # arriba, "✓"/"☐" están fuera de WinAnsi y Helvetica los pinta como un
-    # cuadro relleno en vez del glifo -- texto plano se ve bien siempre.
-    encabezados = ["Entr.", "N.º", "Activo", "Placa", "Marca/Modelo", "Serie/IMEI", "Ubicación", "Estado"]
-    filas = [[Paragraph(h, _CELDA_ENCABEZADO) for h in encabezados]]
+    # "Entr."/"Dev." con una casilla "[  ]" en texto en vez de un símbolo de
+    # check: "✓"/"☐" están fuera de WinAnsi y Helvetica los pinta como un
+    # cuadro relleno. El chulito lo dibuja el navegador con pdf-lib al firmar
+    # (ver actas-pdf.ts), sobre el ancla `entrega_item_N`/`devolucion_item_N`
+    # de cada casilla -- el administrador marca en el diálogo de firma qué
+    # equipos se entregan/devuelven. Cada ancla lleva además la `etiqueta` del
+    # activo para que el diálogo la muestre sin depender de que el front
+    # ordene las líneas igual que `_reservas_del_grupo`.
+    anchos = [1.1 * cm, 1.1 * cm, 0.7 * cm, 4.0 * cm, 1.9 * cm, 2.9 * cm, 2.6 * cm, 2.4 * cm, 2.0 * cm]
+    # El total debe calzar en _ANCHO_UTIL; se ajusta la última columna con lo
+    # que sobre/falte para no depender de que la suma de arriba sea exacta.
+    anchos[-1] += _ANCHO_UTIL - sum(anchos)
+    # Ancho escribible de las casillas: la celda menos LEFT/RIGHTPADDING (3pt
+    # cada uno, ver el TableStyle de abajo).
+    ancho_casilla = anchos[0] - 6
+
+    encabezados = ["Entr.", "Dev.", "N.º", "Activo", "Placa", "Marca/Modelo", "Serie/IMEI", "Ubicación", "Estado"]
+    filas = [[
+        Paragraph(h, _CELDA_ENCABEZADO_CENTRADA if i < 3 else _CELDA_ENCABEZADO)
+        for i, h in enumerate(encabezados)
+    ]]
     for indice, r in enumerate(reservas, start=1):
         recurso = r.recurso
         nombre = recurso.nombre if recurso else f"Recurso #{r.recurso_id}"
@@ -449,9 +474,23 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
         ) or "–"
         identificador = recurso.identificador if recurso and recurso.identificador else "–"
         ubicacion = recurso.ubicacion if recurso and recurso.ubicacion else "–"
+        etiqueta = nombre if placa == "–" else f"{nombre} ({placa})"
+
+        def casilla(momento: str) -> list:
+            # El ancla va DESPUÉS del párrafo: su "y" es la base de la línea
+            # de "[  ]" y el alto (_CELDA.leading) cubre la línea completa.
+            return [
+                Paragraph("[" + "&nbsp;" * 5 + "]", _CELDA_CENTRADA),
+                _Ancla(
+                    f"{momento}_item_{indice}", anclas, ancho_casilla, _CELDA.leading,
+                    extra={"etiqueta": etiqueta},
+                ),
+            ]
+
         filas.append([
-            Paragraph("[&nbsp;&nbsp;]", _CELDA),
-            Paragraph(str(indice), _CELDA),
+            casilla("entrega"),
+            casilla("devolucion"),
+            Paragraph(str(indice), _CELDA_CENTRADA),
             Paragraph(_esc(nombre), _CELDA),
             Paragraph(_esc(placa), _CELDA),
             Paragraph(_esc(marca_modelo), _CELDA),
@@ -460,16 +499,14 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
             Paragraph(_esc(_ESTADOS_LEGIBLES.get(r.estado, r.estado)), _CELDA),
         ])
 
-    anchos = [1.3 * cm, 0.8 * cm, 4.3 * cm, 1.9 * cm, 3.0 * cm, 2.7 * cm, 2.5 * cm, 2.2 * cm]
-    # El total debe calzar en _ANCHO_UTIL; se ajusta la última columna con lo
-    # que sobre/falte para no depender de que la suma de arriba sea exacta.
-    anchos[-1] += _ANCHO_UTIL - sum(anchos)
     tabla_activos = Table(filas, colWidths=anchos, repeatRows=1)
     tabla_activos.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2f2f2f")),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#999999")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (0, 0), (1, -1), "CENTER"),
+        # Sin ALIGN CENTER: los Paragraph ya se centran con su propio estilo
+        # (_CELDA_CENTRADA), y ALIGN movería al centro de la celda el _Ancla
+        # de ancho 0 de las casillas -- el chulito saldría corrido a la derecha.
         ("TOPPADDING", (0, 0), (-1, -1), 2.2),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2),
         ("LEFTPADDING", (0, 0), (-1, -1), 3),

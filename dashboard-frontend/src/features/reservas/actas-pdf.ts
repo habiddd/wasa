@@ -70,6 +70,36 @@ function clavesDe(momento: MomentoActa) {
 }
 
 /**
+ * Casillas "Entr."/"Dev." de la tabla de activos para este momento, en el
+ * orden del acta (`<momento>_item_1`, `_2`, …). Vacío si el acta base es
+ * anterior a las casillas con ancla -- ahí el diálogo de firma omite el paso
+ * de marcar equipos.
+ */
+export function casillasDe(anclas: Record<string, AnclaFirma>, momento: MomentoActa) {
+  const prefijo = `${momento === "entrega" ? "entrega" : "devolucion"}_item_`
+  return Object.entries(anclas)
+    .filter(([clave]) => clave.startsWith(prefijo))
+    .map(([clave, ancla]) => ({ clave, ancla, indice: Number(clave.slice(prefijo.length)) }))
+    .sort((a, b) => a.indice - b.indice)
+}
+
+/**
+ * Dibuja un chulito con dos trazos de línea centrado en la casilla: "✓" no
+ * existe en WinAnsi (Helvetica), igual que en acta_pdf.py.
+ */
+function estamparChulito(pdf: PDFDocument, ancla: AnclaFirma) {
+  const pagina = pdf.getPage(ancla.pagina - 1)
+  const lado = Math.min(ancla.alto, ancla.ancho) * 0.8
+  const cx = ancla.x + ancla.ancho / 2
+  const cy = ancla.y + ancla.alto / 2
+  const color = rgb(0.05, 0.35, 0.1)
+  const trazo = { thickness: 1.4, color }
+  const codo = { x: cx - lado * 0.12, y: cy - lado * 0.4 }
+  pagina.drawLine({ start: { x: cx - lado * 0.45, y: cy }, end: codo, ...trazo })
+  pagina.drawLine({ start: codo, end: { x: cx + lado * 0.5, y: cy + lado * 0.55 }, ...trazo })
+}
+
+/**
  * Estampa el PNG del lienzo de firma (ver FirmaCanvas.exportarPng) dentro de
  * la zona de firma -- calco EXACTO, sin conservar proporción ni centrar: el
  * lienzo del navegador ya tiene la proporción de esa zona (prop `proporcion`
@@ -130,7 +160,8 @@ function estamparTexto(pdf: PDFDocument, ancla: AnclaFirma, fuente: PDFFont, tex
  * sus anclas ya calculadas por el backend -- ver acta_pdf.py y
  * `/acta/estado`), estampa las dos firmas del momento (usuario y
  * administrador LACS), la fecha y hora en los dos cuadros, y -- si se
- * tecleó -- la cédula del administrador y/o la nota de este momento. A mano
+ * tecleó -- la cédula del administrador y/o la nota de este momento, más el
+ * chulito en la casilla de cada activo marcado como entregado/devuelto. A mano
  * solo queda la firma: la cédula del usuario ya viene impresa por el
  * servidor (ver acta_pdf._celda_firma) y no se toca acá.
  *
@@ -147,10 +178,17 @@ export async function estamparFirmas(
   firmas: { usuario: Blob; admin: Blob },
   fecha: Date,
   cedulaAdmin?: string,
-  nota?: string
+  nota?: string,
+  /** Claves (`<momento>_item_N`) de las casillas que el administrador marcó como entregadas/devueltas. */
+  marcados: string[] = []
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.load(pdfBase)
   const claves = clavesDe(momento)
+
+  for (const clave of marcados) {
+    const ancla = anclas[clave]
+    if (ancla) estamparChulito(pdf, ancla)
+  }
 
   const [pngUsuario, pngAdmin] = await Promise.all([
     firmas.usuario.arrayBuffer(),

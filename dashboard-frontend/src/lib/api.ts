@@ -319,7 +319,15 @@ export type OrigenActa = "firmada" | "subida"
 // inferior izquierda -- mismo sistema de coordenadas que reportlab usó para
 // componer el PDF (ver acta_pdf.py, _Ancla) y que pdf-lib usa para leerlo, así
 // que no hay que invertir nada al estampar.
-export type AnclaFirma = { pagina: number; x: number; y: number; ancho: number; alto: number }
+export type AnclaFirma = {
+  pagina: number
+  x: number
+  y: number
+  ancho: number
+  alto: number
+  /** Solo en las casillas de activos (`entrega_item_N`/`devolucion_item_N`): nombre legible del activo. */
+  etiqueta?: string
+}
 
 export type ActaRegistrada = {
   id: number
