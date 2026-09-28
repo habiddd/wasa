@@ -219,6 +219,16 @@ export function BotonActaPdf({
 
   const etiqueta = variante === "boton" ? etiquetaBoton(momentoSiguienteAprox(reservas)) : undefined
 
+  // Equipos para el paso "Equipos" de FirmarActaDialog: salen de
+  // `estadoActa.lineas` (todas las líneas del grupo, del servidor), NO de la
+  // prop `reservas` -- esa viene del calendario, que oculta canceladas y
+  // aplica filtros. Solo se ofrecen las líneas que este momento puede mover
+  // (mismo criterio que actas_service.aplicar_transicion): en la devolución,
+  // las que siguen 'entregada' -- lo que no se entregó no se puede devolver.
+  const estadosMovibles: string[] =
+    estadoActa?.momento_siguiente === "devolucion" ? ["entregada"] : ["confirmada", "no_show"]
+  const equiposFirma = (estadoActa?.lineas ?? []).filter((l) => estadosMovibles.includes(l.estado))
+
   return (
     // Los eventos de un portal de React burbujean por el árbol de React, no
     // por el DOM: sin este envoltorio, un clic dentro del modal llegaría a la
@@ -382,6 +392,7 @@ export function BotonActaPdf({
           anclas={estadoActa.anclas}
           pdfBase={pdfBytes}
           usuarioNombre={usuarioNombre}
+          equipos={equiposFirma}
           fin={fin}
           onRegistrada={firmaRegistrada}
         />

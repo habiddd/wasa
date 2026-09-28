@@ -1380,6 +1380,18 @@ def api_estado_acta_grupo(grupo_id):
         "tiene_acta": ultima_acta is not None,
         "anclas": anclas,
         "historial": [_serializar_acta(a) for a in historial],
+        # TODAS las líneas del grupo, sin filtrar -- el paso "Equipos" del
+        # diálogo de firma no puede depender de lo que muestre el calendario
+        # (que oculta canceladas y aplica filtros): en la entrega, una línea
+        # que faltara ahí se cancelaría sin que nadie la viera.
+        "lineas": [
+            {
+                "id": r.id,
+                "nombre": r.recurso.nombre if r.recurso else f"Recurso #{r.recurso_id}",
+                "estado": r.estado,
+            }
+            for r in reservas
+        ],
     })
 
 
@@ -1457,16 +1469,27 @@ def api_crear_acta_grupo(grupo_id):
     if error:
         return jsonify({"error": error}), 400
 
+    # Ids de reserva (líneas) marcados en el paso "Equipos" del diálogo de
+    # firma, separados por coma. Ausente = todas (acta subida o cliente
+    # viejo), ver actas_service.aplicar_transicion.
+    equipos = None
+    equipos_crudo = request.form.get("equipos")
+    if equipos_crudo is not None:
+        try:
+            equipos = {int(x) for x in equipos_crudo.split(",") if x.strip()}
+        except ValueError:
+            return jsonify({"error": "'equipos' debe ser una lista de ids separados por coma."}), 400
+
     try:
         acta = actas_service.guardar(grupo_id, momento, origen, datos, anclas, firmado_por, nota)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    cambiadas, error = actas_service.aplicar_transicion(reservas, momento)
+    cambiadas, error = actas_service.aplicar_transicion(reservas, momento, equipos)
     if error:
-        # No debería pasar (ya se validó momento == siguiente arriba), pero
-        # cubre la carrera de dos requests concurrentes registrando la misma
-        # acta: el segundo llega con las líneas ya cambiadas por el primero.
+        # Equipos marcados inválidos, o la carrera de dos requests
+        # concurrentes registrando la misma acta: el segundo llega con las
+        # líneas ya cambiadas por el primero.
         db.session.rollback()
         (Path(current_app.config["ACTAS_DIR"]) / acta.archivo).unlink(missing_ok=True)
         return jsonify({"error": error}), 409

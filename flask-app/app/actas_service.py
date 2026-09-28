@@ -169,7 +169,23 @@ def esta_retrasada(reserva: Reserva, ahora: datetime | None = None) -> bool:
     return fin < ahora
 
 
-def aplicar_transicion(reservas: list[Reserva], momento: str) -> tuple[int, str | None]:
+def _filtrar_marcadas(objetivo: list[Reserva], ids: set[int] | None, verbo: str) -> tuple[list[Reserva], str | None]:
+    """Las líneas de `objetivo` que el administrador marcó en el paso
+    "Equipos" del diálogo de firma. `ids=None` (acta subida, o cliente viejo)
+    = todas, el comportamiento de antes. Un id fuera de `objetivo` se rechaza:
+    es justo lo que impide devolver un equipo que nunca se entregó."""
+    if ids is None:
+        return objetivo, None
+    if not ids:
+        return [], f"Marca al menos un equipo {verbo}."
+    if ids - {r.id for r in objetivo}:
+        return [], f"Hay equipos marcados que no se pueden registrar como {verbo}s."
+    return [r for r in objetivo if r.id in ids], None
+
+
+def aplicar_transicion(
+    reservas: list[Reserva], momento: str, ids: set[int] | None = None
+) -> tuple[int, str | None]:
     """Cambia el estado de las líneas afectadas por registrar el acta de
     `momento` (sin `commit`, igual que `guardar`). Devuelve (cuántas líneas
     cambiaron, error legible o None).
@@ -185,14 +201,23 @@ def aplicar_transicion(reservas: list[Reserva], momento: str) -> tuple[int, str 
     que ya haya pasado `fin` -- ahí pasan a 'devuelta_tarde'. La comparación
     se hace una vez por línea (cada activo puede tener un `fin` propio si se
     editó horario por separado, aunque en la práctica todas comparten
-    horario de grupo)."""
+    horario de grupo).
+
+    `ids` (opcional): las líneas que el administrador marcó como
+    entregadas/devueltas. En la entrega, las NO marcadas pasan a 'cancelada'
+    (no se las llevó, y así no quedan pidiendo otra acta de entrega); en la
+    devolución, las no marcadas siguen 'entregada' -- el equipo sigue afuera y
+    queda pendiente otra acta de devolución."""
     ahora = datetime.now(timezone.utc)
     cambiadas = 0
 
     if momento == MOMENTO_ENTREGA:
-        objetivo = [r for r in reservas if r.estado in ("confirmada", "no_show")]
-        if not objetivo:
+        pendientes = [r for r in reservas if r.estado in ("confirmada", "no_show")]
+        if not pendientes:
             return 0, "Esta reserva no tiene activos por entregar."
+        objetivo, error = _filtrar_marcadas(pendientes, ids, "entregado")
+        if error:
+            return 0, error
         if all(_fin_aware(r) <= ahora for r in objetivo):
             return 0, "La ventana de esta reserva ya terminó; no se puede registrar la entrega."
         # Tardía también si ya pasó el margen aunque la línea siga
@@ -205,12 +230,18 @@ def aplicar_transicion(reservas: list[Reserva], momento: str) -> tuple[int, str 
                 r.entrega_tardia = True
             r.estado = ESTADO_ENTREGADA
             cambiadas += 1
+        for r in pendientes:
+            if r not in objetivo:
+                r.estado = "cancelada"
         return cambiadas, None
 
     if momento == MOMENTO_DEVOLUCION:
-        objetivo = [r for r in reservas if r.estado == ESTADO_ENTREGADA]
-        if not objetivo:
+        afuera = [r for r in reservas if r.estado == ESTADO_ENTREGADA]
+        if not afuera:
             return 0, "Esta reserva no tiene activos por devolver."
+        objetivo, error = _filtrar_marcadas(afuera, ids, "devuelto")
+        if error:
+            return 0, error
         for r in objetivo:
             fin = r.fin if r.fin.tzinfo else r.fin.replace(tzinfo=timezone.utc)
             r.estado = ESTADO_DEVUELTA_TARDE if ahora > fin else "completada"

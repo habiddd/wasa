@@ -1464,7 +1464,24 @@ no_show ──(acta de ENTREGA, dentro de la ventana)──> entregada [+ entreg
 entregada ──(acta de DEVOLUCIÓN, a tiempo)──────> completada
 entregada ──(acta de DEVOLUCIÓN, tarde)─────────> devuelta_tarde
 entregada + fin ya pasó ──> se MUESTRA "Retrasada" (derivado, no se guarda)
+
+Por LÍNEA, según los equipos marcados al firmar:
+confirmada/no_show ──(acta de ENTREGA, equipo NO marcado)──> cancelada
+entregada ──(acta de DEVOLUCIÓN, equipo NO marcado)──> sigue entregada
 ```
+
+- **El acta mueve solo los equipos marcados.** En el primer paso del
+  diálogo de firma el administrador marca qué equipos se entregan o se
+  devuelven, y el navegador manda sus ids (`Reserva.id`) en el campo
+  `equipos` del `POST .../actas`. `actas_service.aplicar_transicion` cambia
+  solo esas líneas. En la **entrega**, las no marcadas pasan a `cancelada`:
+  no se las llevó, y así no quedan pidiendo otra acta de entrega. En la
+  **devolución**, las no marcadas siguen `entregada`: el equipo sigue afuera
+  y la reserva queda pendiente de otra acta de devolución. Si llega un id
+  que no está en los estados que ese momento puede mover, el servidor lo
+  rechaza. Esa validación es lo que impide **devolver un equipo que nunca se
+  entregó**, y no depende de la interfaz. Un acta **subida** no manda
+  `equipos` y mueve todas las líneas, como antes.
 
 - **`entregada` ocupa el activo.** Está en
   `recursos_service.ESTADOS_QUE_OCUPAN` junto a `confirmada` y `pendiente`, y
@@ -1617,10 +1634,25 @@ mandarlo".
 
 ### Firmar el acta en pantalla
 
-`features/reservas/FirmarActaDialog.tsx` es un asistente de tres pasos:
-**primero firma el usuario, después el administrador**, y el tercer paso
-muestra el PDF ya compuesto antes de guardarlo, junto al estado al que pasará
-la reserva y la fecha y hora exactas que van a quedar impresas.
+`features/reservas/FirmarActaDialog.tsx` es un asistente de cuatro pasos:
+
+1. **Equipos y nota.** Una casilla "Todos los equipos entregados/devueltos",
+   marcada por defecto (un solo chulito para todo el caso común), y una por
+   equipo para quitar o poner. La maestra se ve a medias si la selección es
+   mixta. Sin nada marcado no se puede avanzar. Debajo de un separador va la
+   nota opcional del administrador.
+2. **Firma del usuario.**
+3. **Datos y firma del administrador.**
+4. **Confirmar.** Muestra el PDF ya compuesto, el estado al que pasará la
+   reserva y la fecha y hora exactas que van a quedar impresas.
+
+La lista de equipos del paso 1 sale de `lineas` en `/acta/estado` (todas las
+líneas del grupo, desde el servidor), **no** de la prop `reservas` que llega
+del calendario. El calendario oculta las canceladas y aplica filtros, y una
+lista filtrada causó dos errores reales: marcas corridas a la fila
+equivocada, y el riesgo de cancelar en la entrega una línea que no aparecía
+en pantalla. Solo se listan las líneas que ese momento puede mover:
+`confirmada`/`no_show` en la entrega, `entregada` en la devolución.
 
 - **El PDF firmado se compone en el navegador, con `pdf-lib`.** Es una
   decisión deliberada de quien mantiene el proyecto, tomada sabiendo el
@@ -1699,6 +1731,30 @@ Dos detalles que cuestan un bug si se ignoran:
 El navegador escribe la fecha y la cédula del administrador **blanqueando
 antes el hueco** con un rectángulo blanco: sin eso, el texto cae encima de los
 guiones preimpresos y queda tachado e ilegible.
+
+**Anclas de equipos.** La tabla de activos tiene dos columnas de casillas
+`[  ]`: "Entr." y "Dev." (la columna "Ubicación" se quitó para hacerles
+sitio). Cada fila aporta `entrega_linea_<id>` y `devolucion_linea_<id>`,
+con `id` = `Reserva.id` de la línea, y el navegador dibuja ahí
+(`actas-pdf.ts`, `estamparMarcas`):
+
+- un **chulito** en la columna del momento, para cada equipo marcado;
+- en la **entrega**, una **X** en "Entr." y en "Dev." para cada equipo no
+  marcado, porque nunca se va a devolver;
+- nada en la devolución para lo no marcado: sigue afuera.
+
+Las marcas se dibujan con dos `drawLine`, no con los caracteres "✓" o "✗",
+porque Helvetica (WinAnsi) no tiene esos glifos. Las anclas van **por id,
+no por número de fila**: la primera versión usaba `entrega_item_N` con N
+calculado en el navegador sobre una lista filtrada, y las marcas caían en la
+fila equivocada. Las actas firmadas con esa versión (o antes) no traen
+anclas `_linea_`: el diálogo avisa que las marcas no se imprimirán, y el
+cambio de estado se aplica igual.
+
+En `acta_pdf.py`, el `ALIGN CENTER` del `TableStyle` **no** debe cubrir las
+columnas Entr./Dev.: `_Ancla` mide 0 de ancho, y la tabla la correría al
+centro de la celda. El centrado visual de `[  ]` lo da el propio
+`Paragraph` (`_CELDA_CENTRADA`).
 
 ### Histórico de actas (`reserva_actas` + volumen `actas_pdf`)
 

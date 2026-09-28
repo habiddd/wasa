@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { etiquetaEstado, NOTA_MAX_CARACTERES } from "@/features/calendario/calendario-utils"
 import { registrarActa, type AnclaFirma, type MomentoActa, type Sesion } from "@/lib/api"
@@ -22,7 +23,7 @@ import { estadoResultante, estamparFirmas, formatearFechaActa } from "./actas-pd
 import { FirmaCanvas, type FirmaCanvasHandle } from "./FirmaCanvas"
 import { recortarCuadro } from "./recorte-acta"
 
-type Paso = 1 | 2 | 3
+type Paso = 1 | 2 | 3 | 4
 
 export function FirmarActaDialog({
   abierto,
@@ -32,6 +33,7 @@ export function FirmarActaDialog({
   anclas,
   pdfBase,
   usuarioNombre,
+  equipos,
   fin,
   onRegistrada,
 }: {
@@ -43,7 +45,11 @@ export function FirmarActaDialog({
   /** Bytes del acta vigente (la que se muestra en el preview de BotonActaPdf) -- es la base sobre la que se estampan las firmas. */
   pdfBase: ArrayBuffer
   usuarioNombre: string
-  /** Fin de la reserva -- para anunciar en el paso 3 si una devolución llega
+  /** Activos de esta reserva, en el mismo orden (índice 1-based) que la
+   * columna "N.º" de la tabla del PDF (ver acta_pdf.generar_acta_con_anclas)
+   * -- de acá sale la lista de checkboxes del paso "Equipos". */
+  equipos: { id: number; nombre: string }[]
+  /** Fin de la reserva -- para anunciar en el paso 4 si una devolución llega
    * a tiempo (completada) o tarde (devuelta_tarde). Ver actas-pdf.estadoResultante. */
   fin: Date
   onRegistrada: (reservas: Sesion[]) => void
@@ -53,6 +59,10 @@ export function FirmarActaDialog({
   const [cedulaAdmin, setCedulaAdmin] = useState("")
   const [dejarNota, setDejarNota] = useState(false)
   const [nota, setNota] = useState("")
+  // Equipos marcados como entregados/devueltos -- todos por defecto (un solo
+  // chulito para todo es el caso común), el administrador desmarca los que
+  // no apliquen. Guarda ids de línea (`Reserva.id`, `equipos[].id`).
+  const [marcados, setMarcados] = useState<Set<number>>(() => new Set(equipos.map((e) => e.id)))
   const [usuarioVacio, setUsuarioVacio] = useState(true)
   const [adminVacio, setAdminVacio] = useState(true)
   const [generando, setGenerando] = useState(false)
@@ -61,7 +71,7 @@ export function FirmarActaDialog({
   const [url, setUrl] = useState<string | null>(null)
 
   // Fecha y hora que va a quedar impresa en los dos cuadros de este momento
-  // -- se congela al ABRIR el diálogo, no al componer el PDF (irAPaso3),
+  // -- se congela al ABRIR el diálogo, no al componer el PDF (irAPaso4),
   // porque el usuario pidió que sea "la fecha cuando se crea la petición de
   // hacer la firma", no la del rato después en que se termina de firmar.
   // Reiniciada cada vez que `abierto` pasa a true (ver el efecto de abajo) --
@@ -69,7 +79,11 @@ export function FirmarActaDialog({
   // siguiente apertura dentro de la misma sesión de BotonActaPdf.
   const [fechaPeticion, setFechaPeticion] = useState(() => new Date())
   useEffect(() => {
-    if (abierto) setFechaPeticion(new Date())
+    if (abierto) {
+      setFechaPeticion(new Date())
+      setMarcados(new Set(equipos.map((e) => e.id)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `equipos` es un array derivado de `reservas` en BotonActaPdf, se relee tal cual en cada apertura sin necesitar que cambie la referencia para disparar el efecto.
   }, [abierto])
 
   // Fondo de cada lienzo: la franja de firma real del acta, recortada del
@@ -133,7 +147,7 @@ export function FirmarActaDialog({
 
   // Al cerrar, todo vuelve al paso 1 la próxima vez que se abra -- pero los
   // lienzos NO se desmontan mientras el diálogo está abierto (ver el JSX:
-  // los tres pasos están siempre montados, solo se ocultan con `hidden`),
+  // los cuatro pasos están siempre montados, solo se ocultan con `hidden`),
   // así que "Atrás" no pierde lo ya firmado dentro de una misma apertura.
   function resetearYCerrar() {
     setPaso(1)
@@ -141,6 +155,7 @@ export function FirmarActaDialog({
     setCedulaAdmin("")
     setDejarNota(false)
     setNota("")
+    setMarcados(new Set(equipos.map((e) => e.id)))
     setUsuarioVacio(true)
     setAdminVacio(true)
     setPdfFirmado(null)
@@ -149,15 +164,21 @@ export function FirmarActaDialog({
     onOpenChange(false)
   }
 
-  async function irAPaso2() {
-    if (canvasUsuarioRef.current?.estaVacio()) {
-      toast.error("Falta la firma del usuario.")
-      return
-    }
+  // Paso 1 (Equipos + nota) -> 2: cualquier combinación menos ninguno (el
+  // botón queda deshabilitado; el backend también lo rechaza).
+  function irAPaso2() {
     setPaso(2)
   }
 
   async function irAPaso3() {
+    if (canvasUsuarioRef.current?.estaVacio()) {
+      toast.error("Falta la firma del usuario.")
+      return
+    }
+    setPaso(3)
+  }
+
+  async function irAPaso4() {
     if (!firmadoPor.trim()) {
       toast.error("Falta el nombre de quien firma por la LACS.")
       return
@@ -177,10 +198,14 @@ export function FirmarActaDialog({
         { usuario: pngUsuario, admin: pngAdmin },
         fechaPeticion,
         cedulaAdmin,
-        dejarNota ? nota : undefined
+        dejarNota ? nota : undefined,
+        {
+          marcados: [...marcados],
+          sinMarcar: equipos.filter((e) => !marcados.has(e.id)).map((e) => e.id),
+        }
       )
       setPdfFirmado(bytes)
-      setPaso(3)
+      setPaso(4)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
@@ -199,6 +224,7 @@ export function FirmarActaDialog({
         anclas,
         firmadoPor: firmadoPor.trim(),
         nota: dejarNota ? nota.trim() : undefined,
+        equipos: [...marcados],
       })
       toast.success("Acta registrada.")
       onRegistrada(reservas)
@@ -224,62 +250,64 @@ export function FirmarActaDialog({
         <DialogHeader>
           <DialogTitle>{tituloDialogo}</DialogTitle>
           <DialogDescription>
-            Reserva N.º {grupoId} · {usuarioNombre} · Paso {paso} de 3
+            Reserva N.º {grupoId} · {usuarioNombre} · Paso {paso} de 4
           </DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
-          {/* Los tres pasos quedan siempre montados (solo se ocultan con
+          {/* Los cuatro pasos quedan siempre montados (solo se ocultan con
               `hidden`): así "Atrás" no borra los trazos ya dibujados, que
               viven dentro del estado interno de cada FirmaCanvas. */}
           <div className={paso === 1 ? "space-y-2" : "hidden"}>
-            <p className="text-sm font-medium">1. Firma del usuario</p>
-            <p className="text-sm text-muted-foreground">
-              {usuarioNombre}, titular de la reserva N.º {grupoId}.
-            </p>
-            {/* El lienzo queda siempre montado debajo (ver el comentario de
-                arriba sobre los tres pasos) -- el overlay de carga solo lo
-                tapa mientras pdf.js todavía está recortando el fondo, no lo
-                reemplaza. */}
-            <div className="relative">
-              <FirmaCanvas
-                ref={canvasUsuarioRef}
-                onTrazosCambian={setUsuarioVacio}
-                fondo={fondoUsuario}
-                proporcion={proporcionUsuario}
-              />
-              {cargandoFondo && (
-                <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-md bg-muted/90 text-sm text-muted-foreground">
-                  <Loader2Icon className="size-4 animate-spin" />
-                  Cargando la raya de firma…
-                </div>
+            <p className="text-sm font-medium">1. Equipos y nota</p>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="firma-equipos-todos"
+                  checked={
+                    marcados.size === 0
+                      ? false
+                      : marcados.size === equipos.length
+                        ? true
+                        : "indeterminate"
+                  }
+                  onCheckedChange={(v) =>
+                    setMarcados(v === true ? new Set(equipos.map((e) => e.id)) : new Set())
+                  }
+                />
+                <Label htmlFor="firma-equipos-todos" className="cursor-pointer font-medium">
+                  Todos los equipos {momento === "entrega" ? "entregados" : "devueltos"}
+                </Label>
+              </div>
+              <ul className="space-y-1 pl-6">
+                {equipos.map((e) => (
+                  <li key={e.id} className="flex items-center gap-2">
+                    <Checkbox
+                      id={`firma-equipo-${e.id}`}
+                      checked={marcados.has(e.id)}
+                      onCheckedChange={(v) =>
+                        setMarcados((prev) => {
+                          const siguiente = new Set(prev)
+                          if (v === true) siguiente.add(e.id)
+                          else siguiente.delete(e.id)
+                          return siguiente
+                        })
+                      }
+                    />
+                    <Label htmlFor={`firma-equipo-${e.id}`} className="cursor-pointer font-normal">
+                      {e.nombre}
+                    </Label>
+                  </li>
+                ))}
+              </ul>
+              {equipos.length > 0 && !anclas[`${momento}_linea_${equipos[0].id}`] && (
+                <p className="text-xs text-muted-foreground">
+                  Esta acta es anterior a las marcas de equipos: no se imprimen.
+                </p>
               )}
             </div>
-          </div>
 
-          <div className={paso === 2 ? "space-y-2" : "hidden"}>
-            <p className="text-sm font-medium">2. Firma del administrador (LACS)</p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="firma-firmado-por">Nombre de quien entrega/recibe por la LACS</Label>
-                <Input
-                  id="firma-firmado-por"
-                  value={firmadoPor}
-                  onChange={(e) => setFirmadoPor(e.target.value)}
-                  placeholder="Nombre completo"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="firma-cedula-admin">Cédula de quien firma por la LACS (opcional)</Label>
-                <Input
-                  id="firma-cedula-admin"
-                  value={cedulaAdmin}
-                  onChange={(e) => setCedulaAdmin(e.target.value)}
-                  placeholder="N.º de cédula"
-                  inputMode="numeric"
-                />
-              </div>
-            </div>
+            <Separator className="my-3" />
 
             <div className="space-y-1.5">
               <div className="flex items-center gap-2">
@@ -292,7 +320,7 @@ export function FirmarActaDialog({
                     if (!marcado) setNota("")
                   }}
                 />
-                <Label htmlFor="firma-dejar-nota" className="cursor-pointer">
+                <Label htmlFor="firma-dejar-nota" className="cursor-pointer font-semibold">
                   Agregar nota al acta
                 </Label>
               </div>
@@ -317,6 +345,56 @@ export function FirmarActaDialog({
                 </>
               )}
             </div>
+          </div>
+
+          <div className={paso === 2 ? "space-y-2" : "hidden"}>
+            <p className="text-sm font-medium">2. Firma del usuario</p>
+            <p className="text-sm text-muted-foreground">
+              {usuarioNombre}, titular de la reserva N.º {grupoId}.
+            </p>
+            {/* El lienzo queda siempre montado debajo (ver el comentario de
+                arriba sobre los cuatro pasos) -- el overlay de carga solo lo
+                tapa mientras pdf.js todavía está recortando el fondo, no lo
+                reemplaza. */}
+            <div className="relative">
+              <FirmaCanvas
+                ref={canvasUsuarioRef}
+                onTrazosCambian={setUsuarioVacio}
+                fondo={fondoUsuario}
+                proporcion={proporcionUsuario}
+              />
+              {cargandoFondo && (
+                <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-md bg-muted/90 text-sm text-muted-foreground">
+                  <Loader2Icon className="size-4 animate-spin" />
+                  Cargando la raya de firma…
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className={paso === 3 ? "space-y-2" : "hidden"}>
+            <p className="text-sm font-medium">3. Firma del administrador (LACS)</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="firma-firmado-por">Nombre de quien entrega/recibe por la LACS</Label>
+                <Input
+                  id="firma-firmado-por"
+                  value={firmadoPor}
+                  onChange={(e) => setFirmadoPor(e.target.value)}
+                  placeholder="Nombre completo"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="firma-cedula-admin">Cédula de quien firma por la LACS (opcional)</Label>
+                <Input
+                  id="firma-cedula-admin"
+                  value={cedulaAdmin}
+                  onChange={(e) => setCedulaAdmin(e.target.value)}
+                  placeholder="N.º de cédula"
+                  inputMode="numeric"
+                />
+              </div>
+            </div>
 
             <div className="relative">
               <FirmaCanvas
@@ -334,8 +412,8 @@ export function FirmarActaDialog({
             </div>
           </div>
 
-          <div className={paso === 3 ? "space-y-2" : "hidden"}>
-            <p className="text-sm font-medium">3. Confirmar</p>
+          <div className={paso === 4 ? "space-y-2" : "hidden"}>
+            <p className="text-sm font-medium">4. Confirmar</p>
             <div className="h-80 overflow-hidden rounded-md border bg-muted">
               {url ? (
                 <iframe
@@ -380,16 +458,21 @@ export function FirmarActaDialog({
             </Button>
           )}
           {paso === 1 && (
-            <Button type="button" onClick={irAPaso2} disabled={usuarioVacio}>
+            <Button type="button" onClick={irAPaso2} disabled={marcados.size === 0}>
               Siguiente
             </Button>
           )}
           {paso === 2 && (
-            <Button type="button" onClick={irAPaso3} disabled={adminVacio || !firmadoPor.trim() || generando}>
-              {generando ? "Componiendo…" : "Siguiente"}
+            <Button type="button" onClick={irAPaso3} disabled={usuarioVacio}>
+              Siguiente
             </Button>
           )}
           {paso === 3 && (
+            <Button type="button" onClick={irAPaso4} disabled={adminVacio || !firmadoPor.trim() || generando}>
+              {generando ? "Componiendo…" : "Siguiente"}
+            </Button>
+          )}
+          {paso === 4 && (
             <Button type="button" onClick={confirmar} disabled={!pdfFirmado || guardando}>
               {guardando ? "Guardando…" : "Guardar acta"}
             </Button>

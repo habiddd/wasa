@@ -49,13 +49,17 @@ export function formatearFechaActa(fecha: Date): string {
   return FORMATO_FECHA_ACTA.format(fecha).replace(/[  ]/g, " ")
 }
 
-// Las 12 claves que devuelve el backend (ver acta_pdf._celda_firma y
+// Las claves que devuelve el backend (ver acta_pdf._celda_firma y
 // generar_acta_con_anclas): por cuadro de firma, la zona de firma
 // (`usuario`/`admin`, la raya de "Firma" con su etiqueta -- ver A5 del plan
 // de cédula/fecha automáticas), más su hueco de fecha (`_fecha`) y su hueco
 // de C.C. (`_cc`). Cada cuadro del acta tiene su propia línea "Fecha y hora
 // ___" y su propia línea "C.C. ___", así que se rellenan las DOS de este
-// momento, no una sola para ambos firmantes.
+// momento, no una sola para ambos firmantes. `itemPrefijo` no es una clave
+// completa sino el prefijo ("entrega"/"devolucion") con el que se arma
+// `${itemPrefijo}_linea_${id}` -- la caja "[  ]" de cada activo (ver
+// `estamparMarcas` más abajo), una por fila de la tabla, así que no tiene
+// sentido enumerarlas acá de a una.
 function clavesDe(momento: MomentoActa) {
   const prefijo = momento === "entrega" ? "entrega" : "devolucion"
   return {
@@ -66,6 +70,7 @@ function clavesDe(momento: MomentoActa) {
     adminFecha: `${prefijo}_admin_fecha`,
     adminCc: `${prefijo}_admin_cc`,
     nota: `${prefijo}_nota`,
+    itemPrefijo: prefijo,
   }
 }
 
@@ -126,6 +131,70 @@ function estamparTexto(pdf: PDFDocument, ancla: AnclaFirma, fuente: PDFFont, tex
 }
 
 /**
+ * Dibuja un chulito (✓) dentro de la caja "[  ]" de un activo -- NO el
+ * carácter "✓": Helvetica/WinAnsi no tiene ese glifo y lo dibujaría como un
+ * cuadro relleno (mismo problema documentado arriba para "p. m." y en
+ * acta_pdf.py para "→"/"✓"). Dos trazos con `drawLine` en vez de texto:
+ * un tramo corto que baja y otro más largo que sube, el patrón clásico de un
+ * check dibujado a mano. Centrado horizontalmente en `ancla.ancho` y apoyado
+ * en `ancla.y + 1` (un punto por encima de la base, para no pisar la línea
+ * de la caja) subiendo ~7pt.
+ */
+function estamparChulito(pdf: PDFDocument, ancla: AnclaFirma) {
+  const pagina = pdf.getPage(ancla.pagina - 1)
+  const ancho = 7
+  const x0 = ancla.x + (ancla.ancho - ancho) / 2
+  const y0 = ancla.y + 1
+  const grosor = 1.2
+  const color = rgb(0, 0, 0)
+
+  pagina.drawLine({ start: { x: x0, y: y0 + 3 }, end: { x: x0 + ancho * 0.35, y: y0 }, thickness: grosor, color })
+  pagina.drawLine({ start: { x: x0 + ancho * 0.35, y: y0 }, end: { x: x0 + ancho, y: y0 + 7 }, thickness: grosor, color })
+}
+
+/** Una X del mismo tamaño y posición que el chulito: activo NO entregado. */
+function estamparX(pdf: PDFDocument, ancla: AnclaFirma) {
+  const pagina = pdf.getPage(ancla.pagina - 1)
+  const lado = 6
+  const x0 = ancla.x + (ancla.ancho - lado) / 2
+  const y0 = ancla.y + 1.5
+  const opciones = { thickness: 1.2, color: rgb(0, 0, 0) }
+
+  pagina.drawLine({ start: { x: x0, y: y0 }, end: { x: x0 + lado, y: y0 + lado }, ...opciones })
+  pagina.drawLine({ start: { x: x0, y: y0 + lado }, end: { x: x0 + lado, y: y0 }, ...opciones })
+}
+
+/**
+ * Marca las cajas "[  ]" de la tabla de activos según el paso "Equipos" del
+ * diálogo (FirmarActaDialog.tsx). Las anclas van por `Reserva.id` de la
+ * línea (`entrega_linea_<id>`, ver acta_pdf.generar_acta_con_anclas), no por
+ * número de fila. `marcados` lleva chulito en la columna de este momento. En
+ * la ENTREGA, `sinMarcar` (no se los llevó; el backend los cancela) lleva X
+ * en Entr. y en Dev. -- nunca se van a devolver. En la devolución lo no
+ * marcado queda en blanco: sigue afuera y lo cierra otra acta. Un ancla que
+ * no existe (acta anterior a este cambio) se omite en silencio.
+ */
+function estamparMarcas(
+  pdf: PDFDocument,
+  anclas: Record<string, AnclaFirma>,
+  momento: MomentoActa,
+  equipos: { marcados: number[]; sinMarcar: number[] }
+) {
+  const prefijo = clavesDe(momento).itemPrefijo
+  for (const id of equipos.marcados) {
+    const ancla = anclas[`${prefijo}_linea_${id}`]
+    if (ancla) estamparChulito(pdf, ancla)
+  }
+  if (momento !== "entrega") return
+  for (const id of equipos.sinMarcar) {
+    for (const clave of [`entrega_linea_${id}`, `devolucion_linea_${id}`]) {
+      const ancla = anclas[clave]
+      if (ancla) estamparX(pdf, ancla)
+    }
+  }
+}
+
+/**
  * Compone el acta firmada: carga el PDF base (generado por reportlab, con
  * sus anclas ya calculadas por el backend -- ver acta_pdf.py y
  * `/acta/estado`), estampa las dos firmas del momento (usuario y
@@ -147,7 +216,10 @@ export async function estamparFirmas(
   firmas: { usuario: Blob; admin: Blob },
   fecha: Date,
   cedulaAdmin?: string,
-  nota?: string
+  nota?: string,
+  /** Ids de línea (`Reserva.id`) marcados y sin marcar en el paso
+   * "Equipos" del diálogo -- ver `estamparMarcas`. */
+  equipos: { marcados: number[]; sinMarcar: number[] } = { marcados: [], sinMarcar: [] }
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.load(pdfBase)
   const claves = clavesDe(momento)
@@ -165,6 +237,8 @@ export async function estamparFirmas(
 
   await estamparImagen(pdf, new Uint8Array(pngUsuario), anclaUsuario)
   await estamparImagen(pdf, new Uint8Array(pngAdmin), anclaAdmin)
+
+  estamparMarcas(pdf, anclas, momento, equipos)
 
   const fuente = await pdf.embedFont(StandardFonts.Helvetica)
   const textoFecha = formatearFechaActa(fecha)

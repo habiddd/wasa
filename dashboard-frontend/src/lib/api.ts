@@ -337,22 +337,29 @@ export type EstadoActa = {
   // etc.) y no queda nada por firmar.
   momento_siguiente: MomentoActa | null
   tiene_acta: boolean
-  // 14 claves: entrega_usuario, entrega_admin, devolucion_usuario,
-  // devolucion_admin -- cada una es la zona de firma (la raya de "Firma" con
-  // su etiqueta, usa recorte-acta.ts para el fondo del lienzo y
-  // actas-pdf.ts para estampar el trazo), más "..._fecha" y "..._cc": los
-  // huecos donde escribir la fecha y la cédula del administrador, YA
-  // desplazados más allá de su etiqueta por el backend (ver
-  // acta_pdf._Ancla.despl_x) -- el frontend no mide ningún texto, solo
-  // dibuja en `ancla.x`. Más "entrega_nota" y "devolucion_nota": el hueco de
-  // observaciones libres del administrador (ver reserva_actas.nota). Ya no
-  // hay "..._caja": el lienzo volvió a ser solo la franja de firma, no el
-  // cuadro completo. La cédula del USUARIO no viaja acá -- la imprime el
-  // servidor directo en el PDF (ver acta_pdf._celda_firma). Las anclas son
-  // las de la última acta guardada si existe, si no las del acta base recién
-  // generada.
+  // entrega_usuario, entrega_admin, devolucion_usuario, devolucion_admin --
+  // cada una es la zona de firma (la raya de "Firma" con su etiqueta, usa
+  // recorte-acta.ts para el fondo del lienzo y actas-pdf.ts para estampar el
+  // trazo), más "..._fecha" y "..._cc": los huecos donde escribir la fecha y
+  // la cédula del administrador, YA desplazados más allá de su etiqueta por
+  // el backend (ver acta_pdf._Ancla.despl_x) -- el frontend no mide ningún
+  // texto, solo dibuja en `ancla.x`. Más "entrega_nota" y "devolucion_nota":
+  // el hueco de observaciones libres del administrador (ver
+  // reserva_actas.nota). Ya no hay "..._caja": el lienzo volvió a ser solo
+  // la franja de firma, no el cuadro completo. La cédula del USUARIO no
+  // viaja acá -- la imprime el servidor directo en el PDF (ver
+  // acta_pdf._celda_firma). Y "entrega_linea_<id>"/"devolucion_linea_<id>"
+  // (id = Reserva.id, una por fila de la tabla): la caja "[  ]" de cada
+  // activo, donde se dibuja un chulito (entregado/devuelto) o una X (no
+  // entregado), ver FirmarActaDialog.tsx y actas-pdf.ts -- las actas
+  // firmadas antes de este cambio no traen estas claves, y el frontend lo
+  // tolera igual que con "..._nota". Las anclas son las de la última acta
+  // guardada si existe, si no las del acta base recién generada.
   anclas: Record<string, AnclaFirma>
   historial: ActaRegistrada[]
+  // Todas las líneas del grupo en el orden del PDF, sin los filtros del
+  // calendario -- de acá sale la lista del paso "Equipos".
+  lineas: { id: number; nombre: string; estado: EstadoReserva }[]
 }
 
 export function obtenerEstadoActa(grupoId: number) {
@@ -382,6 +389,8 @@ export async function registrarActa(
     anclas?: Record<string, AnclaFirma>
     firmadoPor?: string
     nota?: string
+    /** Ids de las líneas marcadas como entregadas/devueltas; sin él, todas. */
+    equipos?: number[]
   }
 ): Promise<{ reservas: Sesion[]; acta: ActaRegistrada }> {
   const formData = new FormData()
@@ -391,6 +400,7 @@ export async function registrarActa(
   if (datos.anclas) formData.append("anclas", JSON.stringify(datos.anclas))
   if (datos.firmadoPor) formData.append("firmado_por", datos.firmadoPor)
   if (datos.nota) formData.append("nota", datos.nota)
+  if (datos.equipos) formData.append("equipos", datos.equipos.join(","))
 
   const resp = await fetch(`${BASE}/reservas/grupo/${grupoId}/actas`, {
     method: "POST",

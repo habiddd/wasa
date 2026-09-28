@@ -79,6 +79,12 @@ _CELDA_ENCABEZADO = ParagraphStyle(
     "ActaCeldaEncabezado", fontName="Helvetica-Bold", fontSize=8, leading=10,
     textColor=colors.white,
 )
+# Para las celdas "[  ]" de las columnas Entr./Dev.: a diferencia de las
+# demás columnas de la tabla, acá SÍ importa que el texto quede centrado
+# dentro de la celda (no solo alineado a la izquierda), para que el ancla del
+# chulito (ver _Ancla más abajo y generar_acta_con_anclas) quede centrada
+# sobre la caja "[  ]" en vez de pegada a su borde izquierdo.
+_CELDA_CENTRADA = ParagraphStyle("ActaCeldaCentrada", parent=_CELDA, alignment=1)
 _FIRMA_TITULO_FILA = ParagraphStyle(
     "ActaFirmaFila", fontName="Helvetica-Bold", fontSize=10, leading=12,
     textColor=colors.HexColor("#1a1a1a"),
@@ -325,11 +331,17 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
     hora", ya desplazado más allá de la etiqueta) y `_cc` (el hueco de la
     línea "C.C.", igual de desplazado), más `entrega_nota` y
     `devolucion_nota` (el hueco de observaciones libres del administrador,
-    ver `reserva_actas.nota`) -- 14 en total. A mano solo queda la firma: la
-    cédula del usuario ya viene impresa (ver `_celda_firma`) y la fecha la
-    estampa el navegador (ver actas-pdf.ts), así que `_fecha`, `_cc` y
-    `_nota` son huecos que el navegador rellena sin necesitar medir nada del
-    lado del PDF."""
+    ver `reserva_actas.nota`). A mano solo queda la firma: la cédula del
+    usuario ya viene impresa (ver `_celda_firma`) y la fecha la estampa el
+    navegador (ver actas-pdf.ts), así que `_fecha`, `_cc` y `_nota` son
+    huecos que el navegador rellena sin necesitar medir nada del lado del
+    PDF. Además, `entrega_linea_<id>` y `devolucion_linea_<id>` (id =
+    `Reserva.id` de la fila) marcan la caja "[  ]" de cada fila -- el
+    navegador dibuja ahí un chulito (entregado/devuelto) o una X (no
+    entregado), ver FirmarActaDialog.tsx y actas-pdf.ts. Por id y no por
+    número de fila: la lista de líneas que tiene el navegador puede venir
+    filtrada (el calendario oculta las canceladas) y un índice posicional
+    corría las marcas a la fila equivocada."""
     anclas: dict = {}
     primera = reservas[0]
     grupo = primera.grupo
@@ -431,10 +443,23 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
         f"Activos ({len(reservas)})" if len(reservas) > 1 else "Activo", _SECCION,
     ))
 
-    # "Entr." en vez de un símbolo de check/casilla: igual que la flecha de
-    # arriba, "✓"/"☐" están fuera de WinAnsi y Helvetica los pinta como un
-    # cuadro relleno en vez del glifo -- texto plano se ve bien siempre.
-    encabezados = ["Entr.", "N.º", "Activo", "Placa", "Marca/Modelo", "Serie/IMEI", "Ubicación", "Estado"]
+    # "Entr."/"Dev." en vez de un símbolo de check/casilla: igual que la
+    # flecha de arriba, "✓"/"☐" están fuera de WinAnsi y Helvetica los pinta
+    # como un cuadro relleno en vez del glifo -- texto plano se ve bien
+    # siempre. Anchos definidos ACÁ (antes de armar las filas, no después)
+    # porque cada fila necesita anchos[0]/anchos[1] para dimensionar el
+    # ancla del chulito de su propia celda -- ver el bucle de abajo.
+    encabezados = ["Entr.", "Dev.", "N.º", "Activo", "Placa", "Marca/Modelo", "Serie/IMEI", "Estado"]
+    anchos = [
+        1.1 * cm, 1.1 * cm, 0.8 * cm, 6.1 * cm, 1.9 * cm, 2.7 * cm, 2.7 * cm, 2.2 * cm,
+    ]
+    # El total debe calzar en _ANCHO_UTIL; se ajusta la última columna con lo
+    # que sobre/falte para no depender de que la suma de arriba sea exacta.
+    anchos[-1] += _ANCHO_UTIL - sum(anchos)
+    # LEFTPADDING + RIGHTPADDING de la tabla (ver TableStyle más abajo): lo
+    # que le queda de ancho útil a cada ancla de chulito dentro de su celda.
+    _PADDING_CELDA = 3 + 3
+
     filas = [[Paragraph(h, _CELDA_ENCABEZADO) for h in encabezados]]
     for indice, r in enumerate(reservas, start=1):
         recurso = r.recurso
@@ -448,28 +473,51 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
             " ".join(p for p in (recurso.marca, recurso.modelo) if p) if recurso else ""
         ) or "–"
         identificador = recurso.identificador if recurso and recurso.identificador else "–"
-        ubicacion = recurso.ubicacion if recurso and recurso.ubicacion else "–"
         filas.append([
-            Paragraph("[&nbsp;&nbsp;]", _CELDA),
+            # El ancla va DESPUÉS del Paragraph en la misma celda -- así su
+            # "y" es la base de la línea de la caja "[  ]" (mismo truco que
+            # `_celda_firma` con `__top`/`__bottom`), no la parte de arriba
+            # de la celda. El navegador la usa para estampar el chulito de
+            # este activo cuando el administrador lo marcó como
+            # entregado/devuelto (ver actas-pdf.ts, `estamparFirmas`).
+            [
+                Paragraph("[&nbsp;&nbsp;]", _CELDA_CENTRADA),
+                _Ancla(f"entrega_linea_{r.id}", anclas, anchos[0] - _PADDING_CELDA, 10),
+            ],
+            [
+                Paragraph("[&nbsp;&nbsp;]", _CELDA_CENTRADA),
+                _Ancla(f"devolucion_linea_{r.id}", anclas, anchos[1] - _PADDING_CELDA, 10),
+            ],
             Paragraph(str(indice), _CELDA),
             Paragraph(_esc(nombre), _CELDA),
             Paragraph(_esc(placa), _CELDA),
             Paragraph(_esc(marca_modelo), _CELDA),
             Paragraph(_esc(identificador), _CELDA),
-            Paragraph(_esc(ubicacion), _CELDA),
             Paragraph(_esc(_ESTADOS_LEGIBLES.get(r.estado, r.estado)), _CELDA),
         ])
 
-    anchos = [1.3 * cm, 0.8 * cm, 4.3 * cm, 1.9 * cm, 3.0 * cm, 2.7 * cm, 2.5 * cm, 2.2 * cm]
-    # El total debe calzar en _ANCHO_UTIL; se ajusta la última columna con lo
-    # que sobre/falte para no depender de que la suma de arriba sea exacta.
-    anchos[-1] += _ANCHO_UTIL - sum(anchos)
     tabla_activos = Table(filas, colWidths=anchos, repeatRows=1)
     tabla_activos.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2f2f2f")),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#999999")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (0, 0), (1, -1), "CENTER"),
+        # OJO: NO incluir las columnas 0/1 (Entr./Dev.) acá aunque tengan
+        # contenido "centrado" -- ese centrado ya lo hace _CELDA_CENTRADA
+        # (alignment en el propio ParagraphStyle, ver arriba). Esta línea de
+        # ALIGN es del Table/TableStyle: solo reposiciona un flowable cuyo
+        # `wrap()` reporte un ancho MENOR al de la columna, y el `_Ancla` que
+        # va junto al Paragraph en esas dos celdas reporta ancho 0 (ver
+        # `_Ancla.__init__`, `self.width = 0` es fijo, el parámetro `ancho`
+        # es solo metadata) -- si esta columna estuviera en el rango CENTER,
+        # el TABLE correría el ancla hasta el CENTRO de la celda en vez de
+        # dejarla en el borde izquierdo, y el ancho reportado (`ancho_col -
+        # padding`) ya no significaría nada coherente para quien la usa
+        # (verificado generando el acta real y comparando `ancla.x` con y sin
+        # esta columna en el rango -- con ella adentro, `ancla.x` salía en el
+        # CENTRO de la celda, no en su borde izquierdo, y el chulito quedaba
+        # corrido hacia la columna siguiente). La columna N.º sigue acá
+        # porque su celda es un Paragraph sin ancla -- inofensivo.
+        ("ALIGN", (2, 0), (2, -1), "CENTER"),
         ("TOPPADDING", (0, 0), (-1, -1), 2.2),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2),
         ("LEFTPADDING", (0, 0), (-1, -1), 3),
