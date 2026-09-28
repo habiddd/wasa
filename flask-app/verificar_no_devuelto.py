@@ -81,15 +81,35 @@ with app.app_context():
         # ...el formulario de edición puede reenviar el estado que ya tiene...
         resp = cliente.patch(f"{API}/activos/{perdido_id}", json={"estado": "no_devuelto"}, auth=auth)
         assert resp.status_code == 200, resp.get_json()
-        # ...y desde Activos vuelve a disponible.
-        resp = cliente.patch(f"{API}/activos/{perdido_id}", json={"estado": "disponible"}, auth=auth)
+        # ...sacarlo de no_devuelto (a cualquier estado) exige motivo...
+        for cuerpo in ({"estado": "disponible"}, {"estado": "en_mantenimiento"},
+                       {"estado": "disponible", "motivo_estado": "perdido"},
+                       {"estado": "disponible", "motivo_estado": "otro", "nota_estado": "  "}):
+            resp = cliente.patch(f"{API}/activos/{perdido_id}", json=cuerpo, auth=auth)
+            assert resp.status_code == 400, (cuerpo, resp.status_code, resp.get_json())
+        db.session.expire_all()
+        assert Recurso.query.get(perdido_id).estado == "no_devuelto"
+        # ...y con él vuelve a disponible desde Activos.
+        resp = cliente.patch(f"{API}/activos/{perdido_id}", auth=auth, json={
+            "estado": "disponible", "motivo_estado": "devuelto_tarde", "nota_estado": "Lo trajo al día siguiente (prueba)."})
         assert resp.status_code == 200, resp.get_json()
 
         hist = [tuple(f) for f in db.session.execute(text(
-            "SELECT recurso_id, estado_anterior, estado_nuevo FROM recurso_estado_historial "
+            "SELECT recurso_id, estado_anterior, estado_nuevo, reserva_id, motivo, nota FROM recurso_estado_historial "
             "WHERE id > :desde AND recurso_id IN (:a, :b) ORDER BY id"),
             {"desde": hist_desde, "a": devuelto_id, "b": perdido_id})]
-        assert hist == [(perdido_id, "disponible", "no_devuelto"), (perdido_id, "no_devuelto", "disponible")], hist
+        linea_perdida = lineas[perdido_id]
+        assert hist == [
+            (perdido_id, "disponible", "no_devuelto", linea_perdida, None, None),
+            (perdido_id, "no_devuelto", "disponible", linea_perdida, "devuelto_tarde", "Lo trajo al día siguiente (prueba)."),
+        ], hist
+        # El motivo es local a esa transacción: el siguiente cambio no lo hereda.
+        cliente.patch(f"{API}/activos/{perdido_id}", json={"estado": "en_mantenimiento"}, auth=auth)
+        cliente.patch(f"{API}/activos/{perdido_id}", json={"estado": "disponible"}, auth=auth)
+        ultimos = [tuple(f) for f in db.session.execute(text(
+            "SELECT reserva_id, motivo, nota FROM recurso_estado_historial WHERE recurso_id = :id ORDER BY id DESC LIMIT 2"),
+            {"id": perdido_id})]
+        assert ultimos == [(None, None, None), (None, None, None)], ultimos
 
         linea = [tuple(f) for f in db.session.execute(text(
             "SELECT estado_anterior, estado_nuevo FROM reserva_estado_historial WHERE reserva_id = :id ORDER BY id"),
@@ -111,4 +131,4 @@ with app.app_context():
         shutil.rmtree(Path(app.config["ACTAS_DIR"]) / str(gid), ignore_errors=True)
 
 print(f"OK: grupo {gid} -> completada + no_devuelta; activo {perdido_id} no_devuelto, fuera del bot, "
-      f"rechazado a mano (409), vuelto a disponible y registrado en recurso_estado_historial. Prueba borrada.")
+      f"rechazado a mano (409), sin motivo no sale (400), con motivo vuelve a disponible y queda con reserva_id/motivo/nota en recurso_estado_historial. Prueba borrada.")

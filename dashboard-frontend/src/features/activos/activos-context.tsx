@@ -11,6 +11,7 @@ import {
   crearActivo,
   fetchActivos,
   type CambiosActivo,
+  type OpcionesCambioActivo,
   type Recurso,
 } from "@/lib/api"
 
@@ -25,7 +26,7 @@ type ActivosContextValue = {
   crear: (cambios: CambiosActivo) => Promise<Recurso>
   actualizar: (
     id: number,
-    cambios: CambiosActivo & { propagar_espacio?: boolean }
+    cambios: CambiosActivo & OpcionesCambioActivo
   ) => Promise<Recurso & { hijos_actualizados?: number }>
   expandidos: Set<number>
   toggleExpandido: (id: number) => void
@@ -81,7 +82,7 @@ export function ActivosProvider({ children }: { children: ReactNode }) {
   )
 
   const actualizar = useCallback(
-    async (id: number, cambios: CambiosActivo & { propagar_espacio?: boolean }) => {
+    async (id: number, cambios: CambiosActivo & OpcionesCambioActivo) => {
       const actualizado = await actualizarActivo(id, cambios)
       await reload()
       return actualizado

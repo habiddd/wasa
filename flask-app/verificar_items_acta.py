@@ -10,8 +10,8 @@ escribe ninguna fila ni archivo.
 
 El grupo con MÁS líneas para comprobar que las anclas de cada fila existen y
 son consistentes entre sí (misma fila -> mismo "y", Dev. a la derecha de
-Entr.), y un grupo chico (<=3 activos) para confirmar que la tabla de activos
-cabe en la página 1 (las firmas de devolución pueden pasar a la 2).
+Entr.), y el grupo más grande de hasta 4 activos para confirmar que el acta entera
+cabe en una página (si no cabe, pasa a 2 con las firmas juntas).
 """
 
 from sqlalchemy import func
@@ -52,15 +52,18 @@ with app.app_context():
     _pdf, anclas_grande = acta_pdf.generar_acta_con_anclas(reservas_grande)
     comprobar_anclas(reservas_grande, anclas_grande)
 
-    grupo_chico = next(gid for gid, n in por_grupo if n <= 3)
+    grupo_chico = max((gid for gid, n in por_grupo if n <= 4), key=lambda g: dict(por_grupo)[g])
     reservas_chico = _reservas_del_grupo(grupo_chico)
     _pdf, anclas_chico = acta_pdf.generar_acta_con_anclas(reservas_chico)
     comprobar_anclas(reservas_chico, anclas_chico)
-    # La tabla de activos cabe en la página 1; las firmas de devolución pueden
-    # pasar a la 2 (desde 3 activos) y está bien: sus anclas llevan la página.
-    assert all(a["pagina"] == 1 for k, a in anclas_chico.items() if "_linea_" in k), (
-        f"la tabla del acta del grupo chico {grupo_chico} se corrió a una segunda página"
+    # Hasta 4 activos el acta entra ENTERA en una hoja (diseño compacto, ver
+    # acta_pdf.generar_acta_con_anclas).
+    assert all(a["pagina"] == 1 for a in anclas_chico.values()), (
+        f"el acta del grupo chico {grupo_chico} se corrió a una segunda página"
     )
+    # Si no cabe, pasa a 2 páginas, pero el bloque de firmas y notas va junto.
+    paginas_firmas = {a["pagina"] for k, a in anclas_grande.items() if "_linea_" not in k}
+    assert len(paginas_firmas) == 1, f"firmas del grupo grande repartidas en {paginas_firmas}"
 
     # /acta/estado trae TODAS las líneas del grupo (también las canceladas),
     # en el mismo orden que la tabla del PDF.
@@ -71,5 +74,5 @@ with app.app_context():
 
 print(
     f"OK: anclas por línea consistentes en el grupo grande {grupo_grande} ({n_lineas} activos) y en el "
-    f"grupo chico {grupo_chico} (tabla en la página 1); /acta/estado devuelve todas las líneas en orden."
+    f"grupo chico {grupo_chico} (acta entera en 1 página); /acta/estado devuelve todas las líneas en orden."
 )

@@ -49,7 +49,6 @@ with app.app_context():
     assert anclas_grande["devolucion_nota"]["pagina"] == pagina_firmas, "devolucion_nota quedó en otra página que las firmas"
 
     # --- Grupo de un solo activo: SÍ tiene que caber en una página ----------
-    # (con 3+ activos las firmas de devolución pasan a la página 2 y está bien).
     grupo_chico = (
         db.session.query(Reserva.grupo_id)
         .filter(Reserva.usuario_id == HABID)

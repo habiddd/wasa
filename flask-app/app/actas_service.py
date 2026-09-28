@@ -259,8 +259,14 @@ def aplicar_transicion(
                 r.estado = ESTADO_DEVUELTA_TARDE if ahora > fin else "completada"
             else:
                 r.estado = ESTADO_NO_DEVUELTA
-                r.recurso.estado = RECURSO_NO_DEVUELTO
             cambiadas += 1
+        # Las líneas primero: el trigger de recursos busca la reserva
+        # 'no_devuelta' para anotar reserva_id en recurso_estado_historial, y
+        # sin este flush SQLAlchemy actualizaría recursos antes que reservas.
+        db.session.flush()
+        for r in afuera:
+            if r.estado == ESTADO_NO_DEVUELTA:
+                r.recurso.estado = RECURSO_NO_DEVUELTO
         return cambiadas, None
 
     return 0, f"Momento de acta desconocido: {momento!r}."

@@ -106,7 +106,7 @@ with app.app_context():
     assert resp.status_code == 409, (resp.status_code, resp.get_json())
     paso(f"Activos, poner {nombre[a]} a mano en no_devuelto -> {resp.status_code} {resp.get_json()['error']!r}")
 
-    resp = cliente.patch(f"{API}/activos/{c}", json={"estado": "disponible"}, auth=auth)
+    resp = cliente.patch(f"{API}/activos/{c}", json={"estado": "disponible", "motivo_estado": "encontrado"}, auth=auth)
     assert resp.status_code == 200, resp.get_json()
     assert estado_activo(c) == "disponible" and bot_lo_ofrece(c)
     paso(f"Activos, la LACS recupera {nombre[c]} y lo pasa a disponible -> 200; el bot vuelve a ofrecerlo")

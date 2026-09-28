@@ -5,12 +5,16 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import type { EstadoRecurso, Recurso } from "@/lib/api"
+import type { CambiosActivo, EstadoRecurso, OpcionesCambioActivo, Recurso } from "@/lib/api"
 
 import { ActivoEditForm } from "./ActivoEditForm"
 import { ActivoEstadoSelect } from "./ActivoEstadoSelect"
+import { MotivoNoDevueltoDialog } from "./MotivoNoDevueltoDialog"
 import { useActivosContext } from "./activos-context"
 import { hijosDe, nombreEspacio } from "./tree-utils"
+
+type Cambios = CambiosActivo & OpcionesCambioActivo
+type Actualizado = Recurso & { hijos_actualizados?: number }
 
 export function ActivoCard({
   recurso,
@@ -24,6 +28,12 @@ export function ActivoCard({
   const { activos, expandidos, toggleExpandido, actualizar } = useActivosContext()
   const [editando, setEditando] = useState(false)
   const [cambiandoEstado, setCambiandoEstado] = useState(false)
+  // Cambio en espera del motivo (ver actualizarConMotivo).
+  const [pendiente, setPendiente] = useState<{
+    cambios: Cambios
+    resolve: (r: Actualizado) => void
+    reject: (e: Error) => void
+  } | null>(null)
 
   const hijos = hijosDe(recurso.id, lista)
   const tieneHijos = hijos.length > 0
@@ -34,10 +44,19 @@ export function ActivoCard({
   // espacio referenciado.
   const lugarNombre = nombreEspacio(recurso.espacio_id, activos)
 
+  // Sacar un activo de "no_devuelto" (a cualquier estado) exige un motivo:
+  // se pide en un diálogo y el cambio espera hasta que se guarde o cancele.
+  function actualizarConMotivo(cambios: Cambios): Promise<Actualizado> {
+    const saleDeNoDevuelto =
+      recurso.estado === "no_devuelto" && cambios.estado !== undefined && cambios.estado !== "no_devuelto"
+    if (!saleDeNoDevuelto) return actualizar(recurso.id, cambios)
+    return new Promise((resolve, reject) => setPendiente({ cambios, resolve, reject }))
+  }
+
   async function handleEstadoChange(nuevo: EstadoRecurso) {
     setCambiandoEstado(true)
     try {
-      await actualizar(recurso.id, { estado: nuevo })
+      await actualizarConMotivo({ estado: nuevo })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err))
     } finally {
@@ -104,7 +123,7 @@ export function ActivoCard({
               lista={lista}
               onCancel={() => setEditando(false)}
               onSave={async (cambios) => {
-                const actualizado = await actualizar(recurso.id, cambios)
+                const actualizado = await actualizarConMotivo(cambios)
                 // Solo informativo -- reload() ya trajo los datos nuevos;
                 // esto es para que el usuario sepa que también se movieron
                 // hijos, no solo el activo que editó.
@@ -125,6 +144,30 @@ export function ActivoCard({
             <ActivoCard key={h.id} recurso={h} lista={lista} nivel={nivel + 1} />
           ))}
         </div>
+      )}
+      {pendiente && pendiente.cambios.estado && (
+        <MotivoNoDevueltoDialog
+          nombre={recurso.nombre}
+          estadoNuevo={pendiente.cambios.estado}
+          onCancel={() => {
+            pendiente.reject(new Error("Cambio de estado cancelado: falta el motivo."))
+            setPendiente(null)
+          }}
+          onConfirm={async (motivo, nota) => {
+            try {
+              const r = await actualizar(recurso.id, {
+                ...pendiente.cambios,
+                motivo_estado: motivo,
+                nota_estado: nota,
+              })
+              pendiente.resolve(r)
+              setPendiente(null)
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : String(err))
+              throw err
+            }
+          }}
+        />
       )}
     </>
   )

@@ -570,9 +570,18 @@ export function crearActivo(cambios: CambiosActivo) {
 // padre_id) que estaban en el mismo lugar (ver dashboard.py). El backend
 // puede devolver `hijos_actualizados` cuando hubo propagación, solo para
 // que el toast de confirmación diga cuántos se movieron.
+// `motivo_estado`/`nota_estado`: obligatorios al sacar un activo de
+// "no_devuelto" (métrica, ver recurso_estado_historial en 02-schema.sql).
+export type MotivoSalidaNoDevuelto = "devuelto_tarde" | "encontrado" | "otro"
+export type OpcionesCambioActivo = {
+  propagar_espacio?: boolean
+  motivo_estado?: MotivoSalidaNoDevuelto
+  nota_estado?: string
+}
+
 export function actualizarActivo(
   id: number,
-  cambios: CambiosActivo & { propagar_espacio?: boolean }
+  cambios: CambiosActivo & OpcionesCambioActivo
 ) {
   return request<Recurso & { hijos_actualizados?: number }>(`/activos/${id}`, {
     method: "PATCH",

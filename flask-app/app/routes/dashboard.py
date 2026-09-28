@@ -1610,6 +1610,8 @@ _CAMPOS_EDITABLES_ACTIVO = {
 # recursos_service.ESTADO_DISPONIBLE) -- 'en_mantenimiento', 'no_disponible'
 # y 'no_devuelto' quedan fuera del catálogo que ve el bot.
 _ESTADOS_VALIDOS = {"disponible", "en_mantenimiento", "no_disponible"}
+# Mismo CHECK que recurso_historial_motivo_valido en 02-schema.sql.
+_MOTIVOS_SALIDA_NO_DEVUELTO = {"devuelto_tarde", "encontrado", "otro"}
 
 # Un padre (padre_id) es siempre un equipo: los accesorios cuelgan de un
 # equipo, y el lugar donde algo está se dice con espacio_id, no con padre_id.
@@ -1793,6 +1795,21 @@ def api_actualizar_activo(recurso_id):
     # dict ANTES del chequeo de campos_desconocidos (si no, lo rechazaría) y
     # antes del setattr genérico de más abajo.
     propagar_espacio = datos.pop("propagar_espacio", True)
+    # Por qué sale de 'no_devuelto' (métrica, ver recurso_estado_historial):
+    # opciones de la petición como propagar_espacio, no campos del activo.
+    motivo_estado = datos.pop("motivo_estado", None)
+    nota_estado = (datos.pop("nota_estado", None) or "").strip()
+    sale_de_no_devuelto = (
+        recurso.estado == actas_service.RECURSO_NO_DEVUELTO
+        and "estado" in datos and datos["estado"] != recurso.estado
+    )
+    if sale_de_no_devuelto:
+        if motivo_estado not in _MOTIVOS_SALIDA_NO_DEVUELTO:
+            return jsonify({"error": "Indica por qué el activo deja de estar 'no devuelto' (devuelto tarde, encontrado u otro)."}), 400
+        if motivo_estado == "otro" and not nota_estado:
+            return jsonify({"error": "Con el motivo 'otro' escribe una nota que lo explique."}), 400
+        if len(nota_estado) > 300:
+            return jsonify({"error": "La nota no puede superar 300 caracteres."}), 400
 
     campos_desconocidos = set(datos) - _CAMPOS_EDITABLES_ACTIVO
     if campos_desconocidos:
@@ -1860,6 +1877,14 @@ def api_actualizar_activo(recurso_id):
                 if actual.id == recurso.id:
                     return jsonify({"error": "Esa relación crearía un ciclo entre activos."}), 400
                 actual = actual.padre
+
+    if sale_de_no_devuelto:
+        # Antes del setattr: cualquier autoflush posterior ya dispara el
+        # trigger, que lee estos valores (locales a esta transacción).
+        db.session.execute(
+            text("SELECT set_config('lacs.motivo_estado', :m, true), set_config('lacs.nota_estado', :n, true)"),
+            {"m": motivo_estado, "n": nota_estado},
+        )
 
     for campo, valor in datos.items():
         setattr(recurso, campo, valor)

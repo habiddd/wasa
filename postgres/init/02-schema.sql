@@ -814,13 +814,58 @@ CREATE TABLE IF NOT EXISTS recurso_estado_historial (
 CREATE INDEX IF NOT EXISTS idx_recurso_estado_historial_recurso
     ON recurso_estado_historial (recurso_id, cambiado_en);
 
+-- Métricas de los no devueltos: `reserva_id` es la reserva que dejó el activo
+-- en 'no_devuelto' (también en la fila que lo SACA de ahí, para unir la ida y
+-- la vuelta sin deducir nada), y `motivo`/`nota` dicen por qué salió de
+-- 'no_devuelto' -- el dashboard los exige (PATCH /api/activos) y los pasa al
+-- trigger con set_config('lacs.motivo_estado'/'lacs.nota_estado', ..., true).
+ALTER TABLE recurso_estado_historial
+    ADD COLUMN IF NOT EXISTS reserva_id INTEGER,
+    ADD COLUMN IF NOT EXISTS motivo     VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS nota       VARCHAR(300);
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'recurso_historial_motivo_valido') THEN
+        ALTER TABLE recurso_estado_historial ADD CONSTRAINT recurso_historial_motivo_valido
+            CHECK (motivo IS NULL OR motivo IN ('devuelto_tarde', 'encontrado', 'otro'));
+    END IF;
+END $$;
+
 CREATE OR REPLACE FUNCTION registrar_historial_recurso() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+    v_reserva INTEGER;
 BEGIN
-    INSERT INTO recurso_estado_historial (recurso_id, estado_anterior, estado_nuevo)
-    VALUES (NEW.id, OLD.estado, NEW.estado);
+    IF NEW.estado = 'no_devuelto' THEN
+        -- actas_service marca la línea 'no_devuelta' y hace flush ANTES de
+        -- cambiar el activo, así que ya se ve acá.
+        SELECT id INTO v_reserva FROM reservas
+        WHERE recurso_id = NEW.id AND estado = 'no_devuelta'
+        ORDER BY fin DESC, id DESC LIMIT 1;
+    ELSIF OLD.estado = 'no_devuelto' THEN
+        SELECT reserva_id INTO v_reserva FROM recurso_estado_historial
+        WHERE recurso_id = NEW.id AND estado_nuevo = 'no_devuelto'
+        ORDER BY id DESC LIMIT 1;
+    END IF;
+    INSERT INTO recurso_estado_historial (recurso_id, estado_anterior, estado_nuevo, reserva_id, motivo, nota)
+    VALUES (NEW.id, OLD.estado, NEW.estado, v_reserva,
+            NULLIF(current_setting('lacs.motivo_estado', true), ''),
+            NULLIF(current_setting('lacs.nota_estado', true), ''));
     RETURN NEW;
 END $$;
+
+-- Relleno de las filas anteriores a estas columnas (idempotente: solo toca
+-- reserva_id NULL). Ida: misma transacción que la línea 'no_devuelta'
+-- (mismo cambiado_en). Vuelta: la reserva de su ida más reciente. Motivo no
+-- se rellena: no se sabe.
+UPDATE recurso_estado_historial h SET reserva_id = rh.reserva_id
+FROM reserva_estado_historial rh JOIN reservas r ON r.id = rh.reserva_id
+WHERE h.reserva_id IS NULL AND h.estado_nuevo = 'no_devuelto'
+  AND rh.estado_nuevo = 'no_devuelta' AND r.recurso_id = h.recurso_id AND rh.cambiado_en = h.cambiado_en;
+UPDATE recurso_estado_historial h SET reserva_id = (
+    SELECT i.reserva_id FROM recurso_estado_historial i
+    WHERE i.recurso_id = h.recurso_id AND i.estado_nuevo = 'no_devuelto' AND i.id < h.id
+    ORDER BY i.id DESC LIMIT 1)
+WHERE h.reserva_id IS NULL AND h.estado_anterior = 'no_devuelto';
 
 DROP TRIGGER IF EXISTS recursos_historial_upd ON recursos;
 CREATE TRIGGER recursos_historial_upd

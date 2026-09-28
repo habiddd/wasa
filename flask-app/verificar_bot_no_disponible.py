@@ -1,9 +1,9 @@
 """
 Qué dice el bot cuando le nombran un equipo sin unidades disponibles
 (docs/PRUEBAS_NO_DEVUELTO_2026-09-28.md, sección "El bot..."). No guarda nada:
-pone la Canon EOS R (2) y el Rode NTG3 (4) en 'no_devuelto' dentro de una
-transacción que se revierte al final (con el lente 24-70 = 19, que sí sigue así,
-y el trípode 3 disponible). No manda mensajes.
+pone la Canon EOS R (2), el Rode NTG3 (4) y el lente 24-70 (19) en 'no_devuelto' dentro de una
+transacción que se revierte al final (el trípode 3 queda disponible).
+No manda mensajes.
 
     docker exec -i lacs_flask_app python - < flask-app/verificar_bot_no_disponible.py
 """
@@ -15,10 +15,10 @@ from app.models import Recurso, Usuario
 
 app = create_app()
 with app.app_context():
-    for i in (2, 4):
+    for i in (2, 4, 19):
         db.session.get(Recurso, i).estado = "no_devuelto"
     db.session.flush()
-    assert [db.session.get(Recurso, i).estado for i in (3, 19)] == ["disponible", "no_devuelto"]
+    assert db.session.get(Recurso, 3).estado == "disponible"
 
     def consulta(texto):
         respuesta = R.evaluar_consulta_disponibilidad(texto)

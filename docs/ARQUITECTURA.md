@@ -1882,6 +1882,14 @@ resto de la devolución.
   muestra en la lista de estados posibles pero lo deja deshabilitado como
   opción a elegir (`ActivoEstadoSelect.tsx`, `ActivoEditForm.tsx`); el alta de
   un activo nuevo ni lo ofrece (`ActivoNuevoForm.tsx`).
+- **Salir de `no_devuelto` pide un motivo.** A cualquier estado, también
+  `disponible`: `devuelto_tarde`, `encontrado` u `otro` (este con nota
+  obligatoria). Sin motivo el PATCH responde **400**, y en Activos lo pide
+  `MotivoNoDevueltoDialog.tsx`. La API lo pasa al trigger con `set_config(...,
+  true)` y queda en `recurso_estado_historial.motivo`/`nota`, junto con
+  `reserva_id`: la reserva que dejó el activo sin devolver, tanto en la fila
+  de entrada como en la de salida. Ver la consulta de métricas en
+  docs/SESION_2026-09-28.md.
 - **`recurso_estado_historial` es el mismo patrón que
   `reserva_estado_historial`:** trigger `SECURITY DEFINER` sobre
   `UPDATE ON recursos`, sin FKs, y de solo lectura para la app

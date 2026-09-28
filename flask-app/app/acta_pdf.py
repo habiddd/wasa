@@ -127,14 +127,14 @@ def _fecha_larga(dt: datetime) -> str:
     return f"{local.day} de {_MESES[local.month - 1]} de {local.year}, {hora12}:{local.minute:02d} {meridiano}"
 
 
-def _tabla_datos(pares: list[tuple[str, str]]) -> Table:
+def _tabla_datos(pares: list[tuple[str, str]], ancho: float = _ANCHO_UTIL, ancho_etiqueta: float = 4.2 * cm) -> Table:
     """Lista de propiedades "etiqueta: valor" sin bordes, como las tarjetas
     `Dato` de ReservaDetalle.tsx pero en PDF."""
     filas = [
         [Paragraph(f"<b>{_esc(etiqueta)}</b>", _NORMAL), Paragraph(_esc(valor), _NORMAL)]
         for etiqueta, valor in pares
     ]
-    tabla = Table(filas, colWidths=[4.2 * cm, _ANCHO_UTIL - 4.2 * cm])
+    tabla = Table(filas, colWidths=[ancho_etiqueta, ancho - ancho_etiqueta])
     tabla.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 1.2),
@@ -204,6 +204,9 @@ _ANCHO_FIRMA = 0.85 * (_ANCHO_UTIL / 2 - 18)
 # que el recorte de fondo que ve quien firma (recorte-acta.ts) traiga la
 # raya sobre la que escribir en vez de salir en blanco.
 _ALTO_FIRMA = 2 * cm
+# En el acta compacta (ver generar_acta_con_anclas): sigue siendo un hueco
+# cómodo para firmar a mano y es lo que deja entrar varios activos en 1 hoja.
+_ALTO_FIRMA_COMPACTA = 1.4 * cm
 # Ancho útil de la línea de C.C./Fecha dentro de la celda: mismo ancho de
 # celda que _ANCHO_FIRMA pero sin el recorte del 85% (esas líneas de texto no
 # necesitan ese margen), y el alto de una línea de _FIRMA_PIE (fontSize 8.5,
@@ -240,7 +243,8 @@ _ANCHO_ETIQUETA_CC = stringWidth("C.C. ", _FIRMA_PIE.fontName, _FIRMA_PIE.fontSi
 
 
 def _celda_firma(
-    titulo_fila: str, rol: str, subtitulo: str | None, clave: str, destino: dict, cedula: str | None = None
+    titulo_fila: str, rol: str, subtitulo: str | None, clave: str, destino: dict, cedula: str | None = None,
+    alto_firma: float = _ALTO_FIRMA,
 ) -> list:
     """Contenido de un cuadro de firma: título (ENTREGA/DEVOLUCIÓN), rol,
     titular preimpreso si aplica, espacio para firmar a mano y los campos que
@@ -286,7 +290,7 @@ def _celda_firma(
     contenido += [
         # Alto para firmar a mano -- lo pide el flujo físico del acta, no es
         # relleno visual.
-        Spacer(1, _ALTO_FIRMA),
+        Spacer(1, alto_firma),
         # Marca el borde superior de la zona de firma reportada: su "y" es la
         # raya (justo antes del HRFlowable); `generar_acta_con_anclas` le suma
         # _ALTO_FIRMA para que el borde superior real incluya también el
@@ -321,6 +325,21 @@ def _celda_firma(
 
 
 def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
+    """El acta en UNA hoja si se puede y en dos si no: primero el diseño
+    normal; si se pasa de una página, el compacto (Solicitante y Reserva lado
+    a lado, hueco de firma más bajo); si ni así cabe, el normal en 2 páginas
+    (más aire para firmar). Ver `_construir_acta` para el contenido y las
+    anclas. Las actas ya firmadas no se ven afectadas: guardan sus propias
+    anclas (`reserva_actas.anclas`) y la devolución se estampa con esas."""
+    pdf, anclas, paginas = _construir_acta(reservas, compacta=False)
+    if paginas > 1:
+        pdf_c, anclas_c, paginas_c = _construir_acta(reservas, compacta=True)
+        if paginas_c == 1:
+            return pdf_c, anclas_c
+    return pdf, anclas
+
+
+def _construir_acta(reservas: list[Reserva], compacta: bool) -> tuple[bytes, dict, int]:
     """PDF del acta de entrega y devolución para todas las líneas de un mismo
     `grupo_id` (ya ordenadas por quien llama, ver `_reservas_del_grupo`), más
     el diccionario de anclas de firma (ver `_Ancla`) que el navegador usa con
@@ -376,14 +395,13 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
     historia.append(Spacer(1, 0.15 * cm))
 
     # --- Solicitante -----------------------------------------------------------
-    historia.append(Paragraph("Solicitante", _SECCION))
-    historia.append(_tabla_datos([
+    pares_solicitante = [
         ("Nombre", usuario.nombre if usuario else None),
         ("WhatsApp", usuario.telefono_wa if usuario else None),
         ("Código Uninorte", usuario.codigo_uninorte if usuario else None),
         ("Cédula", usuario.cedula if usuario else None),
         ("Rol", (usuario.rol.capitalize() if usuario and usuario.rol else None)),
-    ]))
+    ]
 
     # --- Reserva -----------------------------------------------------------
     if grupo and grupo.tipo_uso == "asignatura":
@@ -432,8 +450,27 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
     if primera.creado_en:
         pares_reserva.append(("Fecha de creación", _fecha_larga(primera.creado_en)))
 
-    historia.append(Paragraph("Reserva", _SECCION))
-    historia.append(_tabla_datos(pares_reserva))
+    if compacta:
+        # Las dos secciones lado a lado: son las filas cortas que más alto
+        # ocupan, y así el acta de varios activos entra en una hoja.
+        media = _ANCHO_UTIL / 2
+        columnas = Table([[
+            [Paragraph("Solicitante", _SECCION), _tabla_datos(pares_solicitante, media - 6, 2.9 * cm)],
+            [Paragraph("Reserva", _SECCION), _tabla_datos(pares_reserva, media - 6, 3.4 * cm)],
+        ]], colWidths=[media, media])
+        columnas.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        historia.append(columnas)
+    else:
+        historia.append(Paragraph("Solicitante", _SECCION))
+        historia.append(_tabla_datos(pares_solicitante))
+        historia.append(Paragraph("Reserva", _SECCION))
+        historia.append(_tabla_datos(pares_reserva))
 
     if grupo and grupo.nota:
         historia.append(Spacer(1, 0.15 * cm))
@@ -543,18 +580,19 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
     # administrador se teclea en el diálogo de firma del dashboard y la
     # estampa el navegador sobre el hueco `..._admin_cc` (ver _celda_firma).
     cedula_usuario = usuario.cedula if usuario else None
+    alto_firma = _ALTO_FIRMA_COMPACTA if compacta else _ALTO_FIRMA
     datos_firmas = [
         [
             _celda_firma(
-                "ENTREGA", "Usuario", subtitulo_usuario, "entrega_usuario", anclas, cedula=cedula_usuario
+                "ENTREGA", "Usuario", subtitulo_usuario, "entrega_usuario", anclas, cedula=cedula_usuario, alto_firma=alto_firma
             ),
-            _celda_firma("ENTREGA", "Administrador (LACS)", None, "entrega_admin", anclas),
+            _celda_firma("ENTREGA", "Administrador (LACS)", None, "entrega_admin", anclas, alto_firma=alto_firma),
         ],
         [
             _celda_firma(
-                "DEVOLUCIÓN", "Usuario", subtitulo_usuario, "devolucion_usuario", anclas, cedula=cedula_usuario
+                "DEVOLUCIÓN", "Usuario", subtitulo_usuario, "devolucion_usuario", anclas, cedula=cedula_usuario, alto_firma=alto_firma
             ),
-            _celda_firma("DEVOLUCIÓN", "Administrador (LACS)", None, "devolucion_admin", anclas),
+            _celda_firma("DEVOLUCIÓN", "Administrador (LACS)", None, "devolucion_admin", anclas, alto_firma=alto_firma),
         ],
     ]
     tabla_firmas = Table(datos_firmas, colWidths=[_ANCHO_UTIL / 2, _ANCHO_UTIL / 2])
@@ -611,10 +649,10 @@ def generar_acta_con_anclas(reservas: list[Reserva]) -> tuple[bytes, dict]:
             # _ANCHO_FIRMA en vez de la misma representación que el resto del
             # JSON.
             "ancho": round(_ANCHO_FIRMA, 2),
-            "alto": round((arriba["y"] + _ALTO_FIRMA) - abajo["y"], 2),
+            "alto": round((arriba["y"] + alto_firma) - abajo["y"], 2),
         }
 
-    return buffer.getvalue(), anclas
+    return buffer.getvalue(), anclas, doc.page
 
 
 def generar_acta(reservas: list[Reserva]) -> bytes:

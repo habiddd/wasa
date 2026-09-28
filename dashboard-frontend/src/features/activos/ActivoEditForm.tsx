@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import type { CambiosActivo, EstadoRecurso, Recurso, TipoRecurso } from "@/lib/api"
+import type { CambiosActivo, EstadoRecurso, OpcionesCambioActivo, Recurso, TipoRecurso } from "@/lib/api"
 
 import { useActivosContext } from "./activos-context"
 import { CampoCategoria } from "./CampoCategoria"
@@ -34,7 +34,7 @@ export function ActivoEditForm({
   recurso: Recurso
   lista: Recurso[]
   onCancel: () => void
-  onSave: (cambios: CambiosActivo & { propagar_espacio?: boolean }) => Promise<void>
+  onSave: (cambios: CambiosActivo & OpcionesCambioActivo) => Promise<void>
 }) {
   // El selector de Padre usa `lista` (viene filtrada por el panel que llama
   // a este form -- ej. solo equipos de una categoría). El de Lugar/espacio
