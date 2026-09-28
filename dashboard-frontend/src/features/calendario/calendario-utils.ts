@@ -252,6 +252,12 @@ export function etiquetaEvento(evento: EventoCalendario) {
   return evento.reservas.length > 1 ? `${primero} +${evento.reservas.length - 1}` : primero
 }
 
+/** Tooltip de un evento en la rejilla: número(s) de reserva y estado. */
+export function tooltipEvento(evento: EventoCalendario) {
+  const numeros = evento.numeros.map((n) => `#${n}`).join(", ")
+  return `Reserva ${numeros} · ${etiquetaEstadoEvento(evento)}\n${hora(evento.inicio)} – ${hora(evento.fin)} · ${etiquetaEvento(evento)} · ${evento.usuarioNombre}`
+}
+
 /** Lo que dice el badge de estado de una reserva completa. */
 export function etiquetaEstadoEvento(evento: EventoCalendario) {
   if (evento.parcial) return "parcial"
@@ -524,8 +530,8 @@ export function estiloDe(estado: EstadoReserva) {
 
 // Etiquetas en español para los estados nuevos, cuyo valor crudo ("entregada",
 // "devuelta_tarde") ya es legible pero "devuelta_tarde" no lo es tal cual sale
-// de la BD -- el resto de estados se pinta crudo en badges/leyenda (ver
-// EstadoReservaBadge, LEYENDA en CalendarioPanel) y no hace falta tocarlos.
+// de la BD -- el resto de estados se pinta crudo en badges/tooltips (ver
+// EstadoReservaBadge, tooltipEvento) y no hace falta tocarlos.
 export function etiquetaEstado(estado: EstadoReserva) {
   if (estado === "entregada") return "Entregada"
   if (estado === "devuelta_tarde") return "Devuelta tarde"

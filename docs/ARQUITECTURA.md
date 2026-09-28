@@ -1258,6 +1258,18 @@ tener presentes antes de tocarlo:
   todas las líneas del grupo y el `ReservaGrupo` mediante
   `DELETE /dashboard/api/reservas/grupo/<grupo_id>`; el toast solo informa
   el resultado posterior.
+- **Sin leyenda: el estado se lee en el tooltip.** Cada bloque sigue pintado
+  con el color de su estado (`ESTILO_ESTADO.chip`), y al pasar el mouse
+  muestra `Reserva #N · estado` más horario, activos y usuario
+  (`calendario-utils.tooltipEvento`). El tooltip es el de shadcn, no el
+  `title` nativo, porque se colorea con el mismo estado
+  (`TooltipEvento.tsx`, tabla `COLOR_TOOLTIP`). Un estado nuevo tiene que
+  agregarse ahí también.
+- **Una sola barra de desplazamiento.** En semana y día la rejilla de horas
+  mide lo que queda de ventana debajo de ella (`VistaTiempo`, recalculado en
+  `resize`, mínimo 240 px), no un `65vh` fijo. Así la página no scrollea
+  además de la rejilla. Si cambia el padding inferior de `<main>` (`p-6`),
+  hay que ajustar los 25 px que resta la medida.
 
 ### Crear reservas desde el dashboard
 
@@ -1964,6 +1976,14 @@ Esto solo tiene margen para respirar porque el `<main>` de
 y 1799 px). Por debajo de 1536 px el comportamiento no cambió. Sin este
 cambio, ninguna de las columnas-absorbentes de arriba tiene sobrante que
 absorber.
+
+`App.tsx` ya no tiene cabecera sobre el contenido: el `<main>` empieza
+arriba de todo. El botón de abrir/cerrar el sidebar (`SidebarTrigger`) vive
+en el `SidebarHeader` y sigue visible con el sidebar colapsado a íconos; el
+de tema (`ThemeToggle`) vive en el `SidebarFooter`. Los dos usan
+`variant="outline"` para no confundirse con las pestañas. En móvil el
+sidebar es un panel flotante, así que hay un segundo `SidebarTrigger` con
+`md:hidden` arriba del `<main>`.
 
 ## Analítica en tiempo real
 

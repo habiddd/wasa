@@ -18,14 +18,12 @@ import {
   type ReservaCreada,
   type Sesion,
 } from "@/lib/api"
-import { cn } from "@/lib/utils"
 
 import {
   agruparEnEventos,
   desplazar,
   diaDe,
   diasDelPeriodo,
-  estiloDe,
   etiquetaPeriodo,
   finDelDia,
   hoy,
@@ -63,17 +61,6 @@ const ESTADOS: { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: "cancelada", etiqueta: "Canceladas" },
   { valor: "denegada", etiqueta: "Denegadas" },
   { valor: "no_show", etiqueta: "No show" },
-]
-
-const LEYENDA: EstadoReserva[] = [
-  "confirmada",
-  "entregada",
-  "pendiente",
-  "completada",
-  "devuelta_tarde",
-  "cancelada",
-  "denegada",
-  "no_show",
 ]
 
 function guardado<T extends string>(clave: string, valores: readonly T[], porDefecto: T): T {
@@ -371,16 +358,6 @@ export function CalendarioPanel() {
           onSeleccionar={(evento) => setIdSeleccionado(evento.reservas[0].id)}
         />
       )}
-
-      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-        {LEYENDA.map((estado) => (
-          <span key={estado} className="flex items-center gap-1.5">
-            <span className={cn("size-2 rounded-full", estiloDe(estado).barra)} />
-            {estado}
-          </span>
-        ))}
-        <span className="ml-auto">Horarios en hora local de la LACS (America/Bogota).</span>
-      </div>
 
       <ReservaDetalle
         evento={seleccionado}

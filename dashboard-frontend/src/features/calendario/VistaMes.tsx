@@ -5,7 +5,6 @@ import {
   claveDe,
   estiloDe,
   etiquetaEvento,
-  hora,
   horaCompacta,
   hoy,
   mismoDia,
@@ -14,6 +13,7 @@ import {
   type EventoCalendario,
 } from "./calendario-utils"
 import { IconoTipo } from "./IconoTipo"
+import { TooltipEvento } from "./TooltipEvento"
 
 // Más de esto en una celda y el mes deja de leerse; el resto se ve entrando
 // al día.
@@ -28,10 +28,10 @@ function ChipEvento({
 }) {
   const estilo = estiloDe(evento.estado)
   return (
+    <TooltipEvento evento={evento}>
     <button
       type="button"
       onClick={() => onSeleccionar(evento)}
-      title={`${hora(evento.inicio)} · ${etiquetaEvento(evento)} · ${evento.usuarioNombre}`}
       className={cn(
         "flex w-full items-center gap-1 rounded-sm border px-1 py-0.5 text-left text-[11px] leading-tight transition-colors",
         estilo.chip
@@ -41,6 +41,7 @@ function ChipEvento({
       <span className="shrink-0 tabular-nums opacity-80">{horaCompacta(evento.inicio)}</span>
       <span className="truncate">{etiquetaEvento(evento)}</span>
     </button>
+    </TooltipEvento>
   )
 }
 

@@ -27,6 +27,7 @@ import {
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -225,33 +226,25 @@ function App() {
           <TooltipProvider>
             <Sidebar collapsible="icon">
               <SidebarHeader>
-                <div className="px-2 py-1.5 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:text-center">
-                  <p className="text-sm font-semibold group-data-[collapsible=icon]:hidden">
-                    LACS Reservas Bot
-                  </p>
-                  <p className="text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-                    Panel de monitoreo
-                  </p>
+                <div className="flex items-center justify-between gap-2 px-2 py-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+                  <div className="group-data-[collapsible=icon]:hidden">
+                    <p className="text-sm font-semibold">LACS Reservas Bot</p>
+                    <p className="text-xs text-muted-foreground">Panel de monitoreo</p>
+                  </div>
+                  <SidebarTrigger variant="outline" className="shrink-0" />
                 </div>
               </SidebarHeader>
               <SidebarContent>
                 <MenuLateral tab={tab} onTabChange={handleTabChange} />
               </SidebarContent>
+              <SidebarFooter className="items-start group-data-[collapsible=icon]:items-center">
+                <ThemeToggle />
+              </SidebarFooter>
             </Sidebar>
 
             <SidebarInset>
-              <header className="flex items-start justify-between gap-3 border-b px-6 py-5">
-                <div className="flex items-start gap-3">
-                  <SidebarTrigger className="mt-1" />
-                  <div>
-                    <h1 className="text-lg font-semibold">Dashboard — LACS Reservas Bot</h1>
-                    <p className="text-sm text-muted-foreground">
-                      Estado de servicios, vinculación de WhatsApp y métricas de uso.
-                    </p>
-                  </div>
-                </div>
-                <ThemeToggle />
-              </header>
+              {/* En móvil el sidebar es un panel flotante: sin este botón no habría cómo abrirlo. */}
+              <SidebarTrigger variant="outline" className="m-4 mb-0 md:hidden" />
 
               <main className="mx-auto w-full max-w-6xl p-6 2xl:max-w-7xl min-[1800px]:max-w-none">
                 <activa.Panel />

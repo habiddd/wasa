@@ -20,6 +20,7 @@ import {
   type EventoCalendario,
 } from "./calendario-utils"
 import { IconoTipo } from "./IconoTipo"
+import { TooltipEvento } from "./TooltipEvento"
 
 const ALTO_HORA = 48
 const HORAS = Array.from({ length: 24 }, (_, h) => h)
@@ -56,10 +57,10 @@ function BloqueEvento({
   const compacto = bloque.altoPct < 3 || (anchoPx > 0 && anchoPx < ANCHO_MINIMO_DETALLE)
 
   return (
+    <TooltipEvento evento={bloque}>
     <button
       type="button"
       onClick={() => onSeleccionar(bloque)}
-      title={`${hora(bloque.inicio)} – ${hora(bloque.fin)} · ${etiquetaEvento(bloque)} · ${bloque.usuarioNombre}`}
       style={{
         top: `${bloque.topPct}%`,
         height: `${bloque.altoPct}%`,
@@ -88,6 +89,7 @@ function BloqueEvento({
         </>
       )}
     </button>
+    </TooltipEvento>
   )
 }
 
@@ -133,6 +135,22 @@ export function VistaTiempo({
     if (scrollRef.current) scrollRef.current.scrollTop = HORA_INICIAL_VISIBLE * ALTO_HORA
   }, [])
 
+  // La rejilla llena lo que queda de ventana bajo ella, para que solo haya
+  // una barra de desplazamiento (la de las horas) y no también la de la página.
+  const [altoVisible, setAltoVisible] = useState<number>()
+  useEffect(() => {
+    const medir = () => {
+      const el = scrollRef.current
+      if (!el) return
+      const top = el.getBoundingClientRect().top + window.scrollY
+      // 24px = padding inferior de <main> (p-6), 1px = borde del recuadro.
+      setAltoVisible(Math.max(240, window.innerHeight - top - 25))
+    }
+    medir()
+    window.addEventListener("resize", medir)
+    return () => window.removeEventListener("resize", medir)
+  }, [])
+
   // Todas las columnas de día miden lo mismo (1fr): con el ancho de una basta
   // para saber cuánto texto cabe en cada bloque.
   useEffect(() => {
@@ -168,7 +186,7 @@ export function VistaTiempo({
         })}
       </div>
 
-      <div ref={scrollRef} className="max-h-[65vh] overflow-y-auto">
+      <div ref={scrollRef} className="overflow-y-auto" style={{ height: altoVisible ?? "65vh" }}>
         <div className="grid" style={{ gridTemplateColumns: columnas }}>
           <div className="relative" style={{ height: alto }}>
             {HORAS.map((h) => (
