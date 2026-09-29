@@ -270,7 +270,7 @@ En la vista de tiempo, el mismo estado se traduce a una **barra**: sólida para 
 Es un `<details>` nativo bajo la barra del calendario ("Qué significa cada color"). Muestra los nueve chips reales en el orden de vida del préstamo (Pendiente → Confirmada → Entregada → Completada → Devuelta tarde → No devuelta → No se presentó → Cancelada → Denegada), sin su hover, y después el icono de activo y el de lugar. Una segunda fila explica, con los badges reales, las marcas que no son estados propios: Parcial, Estados mixtos, Retrasada y Entrega tardía. Un estado nuevo entra en esta lista al mismo tiempo que en `ESTILO_ESTADO`.
 
 ### Vista "Hoy" (signature)
-Es la pantalla de inicio del mostrador. Lleva un `h1` "Hoy" con la fecha larga y cuatro secciones en orden de urgencia: **Retrasados y no devueltos** (incluye los `no_devuelta` de cualquier fecha), **Por entregar hoy**, **Por recibir hoy** y **Por confirmar**. Cada reserva cae en la primera sección que le corresponde y nunca aparece dos veces.
+Es la pantalla de inicio del mostrador. Lleva un `h1` "Hoy" con la fecha larga y cuatro secciones: **Por entregar hoy**, **Por recibir hoy**, **Por confirmar** y, al final, **Retrasados y no devueltos** (incluye los `no_devuelta` de cualquier fecha mientras el activo siga en `no_devuelto`). Cada reserva cae en la primera sección que le corresponde y nunca aparece dos veces.
 - **Encabezados de sección:** un `h2` con el contador al lado. El contador de "Retrasados y no devueltos" va en rojo si es mayor que cero.
 - **Filas:** una lista con bordes (`divide-y`) sin tarjetas. Cada fila tiene:
   - una columna de hora con el tiempo relativo ("en 20 min"): rojo si ya venció y ámbar si falta menos de una hora;

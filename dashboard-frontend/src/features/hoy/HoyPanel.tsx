@@ -19,27 +19,39 @@ import { IconoTipo } from "@/features/calendario/IconoTipo"
 import { ReservaDetalle } from "@/features/calendario/ReservaDetalle"
 import { BotonActaPdf } from "@/features/reservas/BotonActaPdf"
 import { useReservasVentana } from "@/features/reservas/use-reservas-ventana"
+import type { EstadoRecurso, Sesion } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 type Bloque = "atrasados" | "por_entregar" | "por_recibir" | "por_confirmar"
 
-// Orden de urgencia: primero lo que ya es un problema, al final lo que espera
-// una decisión. Un evento cae en el PRIMER bloque que le corresponde, así no
-// aparece dos veces (una reserva parcial de hoy va a "Por entregar").
+// El orden del array solo controla cómo se pinta. `bloqueDe` decide el bloque
+// con su propio orden de chequeo (atrasados primero), así un evento vencido
+// nunca cae en por_recibir y no aparece dos veces.
 const BLOQUES: { valor: Bloque; titulo: string; vacio: string }[] = [
-  { valor: "atrasados", titulo: "Retrasados y no devueltos", vacio: "Nada retrasado ni sin devolver." },
   { valor: "por_entregar", titulo: "Por entregar hoy", vacio: "No hay entregas pendientes hoy." },
   { valor: "por_recibir", titulo: "Por recibir hoy", vacio: "No hay devoluciones pendientes hoy." },
   { valor: "por_confirmar", titulo: "Por confirmar", vacio: "No hay solicitudes esperando respuesta." },
+  { valor: "atrasados", titulo: "Retrasados y no devueltos", vacio: "Nada retrasado ni sin devolver." },
 ]
 
 const HORA_MS = 60 * 60 * 1000
 
-function bloqueDe(evento: EventoCalendario, dia: ReturnType<typeof hoy>, ahora: number): Bloque | null {
+// Una línea no_devuelta sigue abierta mientras su activo siga en "no_devuelto".
+// Activo desconocido (catálogo aún cargando) = abierta, para no parpadear.
+function sinDevolver(r: Sesion, estadoDe: Map<number, EstadoRecurso>) {
+  return r.estado === "no_devuelta" && (estadoDe.get(r.recurso_id) ?? "no_devuelto") === "no_devuelto"
+}
+
+function bloqueDe(
+  evento: EventoCalendario,
+  dia: ReturnType<typeof hoy>,
+  ahora: number,
+  estadoDe: Map<number, EstadoRecurso>
+): Bloque | null {
   const estados = new Set(evento.reservas.map((r) => r.estado))
-  // No devuelta: el préstamo se cerró sin el equipo -- sigue siendo lo primero
-  // que hay que perseguir, aunque ya no esté "retrasada" (solo aplica a entregada).
-  if (evento.retrasada || estados.has("no_devuelta")) return "atrasados"
+  // No devuelta: el préstamo se cerró sin el equipo -- sigue en Hoy hasta que el
+  // activo salga de "no_devuelto" (aunque ya no esté "retrasada", que solo aplica a entregada).
+  if (evento.retrasada || evento.reservas.some((r) => sinDevolver(r, estadoDe))) return "atrasados"
   if (estados.has("confirmada") && mismoDia(diaDe(evento.inicio), dia)) return "por_entregar"
   if (estados.has("entregada") && mismoDia(diaDe(evento.fin), dia)) return "por_recibir"
   if (evento.porConfirmar && evento.fin.getTime() > ahora) return "por_confirmar"
@@ -71,12 +83,14 @@ function Fila({
   evento,
   bloque,
   ahora,
+  sinDevolver,
   onAbrir,
   onRegistrada,
 }: {
   evento: EventoCalendario
   bloque: Bloque
   ahora: number
+  sinDevolver: boolean
   onAbrir: () => void
   onRegistrada: () => void
 }) {
@@ -118,9 +132,7 @@ function Fila({
 
       <div className="col-start-2 flex items-center gap-2 sm:col-start-auto sm:shrink-0">
         {evento.parcial && <Badge variant="warning">Parcial</Badge>}
-        {evento.reservas.some((r) => r.estado === "no_devuelta") && (
-          <Badge variant="destructive">No devuelta</Badge>
-        )}
+        {sinDevolver && <Badge variant="destructive">No devuelta</Badge>}
         {firmable ? (
           <BotonActaPdf
             grupoId={evento.numeros[0] ?? null}
@@ -142,8 +154,8 @@ function Fila({
 }
 
 /**
- * Pantalla de inicio del mostrador: qué hay que hacer ahora, en orden de
- * urgencia. No trae datos propios -- es la misma ventana de Reservas
+ * Pantalla de inicio del mostrador: qué hay que hacer ahora (los retrasados
+ * y no devueltos van al final). No trae datos propios -- es la misma ventana de Reservas
  * (useReservasVentana, sondeo cada 30 s) filtrada en cliente.
  */
 export function HoyPanel() {
@@ -158,20 +170,21 @@ export function HoyPanel() {
     recargarActivos()
   }, [recargarActivos])
 
-  const { porBloque, eventos } = useMemo(() => {
+  const { porBloque, eventos, estadoDe } = useMemo(() => {
     const ahora = Date.now()
     const dia = hoy()
     const eventos = agruparEnEventos(ubicarReservas(reservas))
+    const estadoDe = new Map(activos.map((a) => [a.id, a.estado]))
     const porBloque = new Map<Bloque, EventoCalendario[]>(BLOQUES.map((b) => [b.valor, []]))
     for (const evento of eventos) {
-      const bloque = bloqueDe(evento, dia, ahora)
+      const bloque = bloqueDe(evento, dia, ahora, estadoDe)
       if (bloque) porBloque.get(bloque)!.push(evento)
     }
     for (const [bloque, lista] of porBloque) {
       lista.sort((a, b) => momentoDe(a, bloque).getTime() - momentoDe(b, bloque).getTime())
     }
-    return { porBloque, eventos }
-  }, [reservas])
+    return { porBloque, eventos, estadoDe }
+  }, [reservas, activos])
 
   const seleccionado = useMemo(
     () => eventos.find((e) => e.reservas.some((r) => r.id === idSeleccionado)) ?? null,
@@ -233,6 +246,7 @@ export function HoyPanel() {
                       evento={evento}
                       bloque={valor}
                       ahora={ahora}
+                      sinDevolver={evento.reservas.some((r) => sinDevolver(r, estadoDe))}
                       onAbrir={() => setIdSeleccionado(evento.reservas[0].id)}
                       onRegistrada={reload}
                     />
