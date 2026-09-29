@@ -1258,13 +1258,23 @@ tener presentes antes de tocarlo:
   todas las líneas del grupo y el `ReservaGrupo` mediante
   `DELETE /dashboard/api/reservas/grupo/<grupo_id>`; el toast solo informa
   el resultado posterior.
-- **Sin leyenda: el estado se lee en el tooltip.** Cada bloque sigue pintado
+- **Leyenda plegada, detalle en el tooltip.** Cada bloque sigue pintado
   con el color de su estado (`ESTILO_ESTADO.chip`), y al pasar el mouse
   muestra `Reserva #N · estado` más horario, activos y usuario
   (`calendario-utils.tooltipEvento`). El tooltip es el de shadcn, no el
   `title` nativo, porque se colorea con el mismo estado
-  (`TooltipEvento.tsx`, tabla `COLOR_TOOLTIP`). Un estado nuevo tiene que
-  agregarse ahí también.
+  (`TooltipEvento.tsx`, tabla `COLOR_TOOLTIP`). Sobre la rejilla hay además
+  una leyenda plegable, "Qué significa cada color" (`LeyendaEstados.tsx`, un
+  `<details>` nativo cerrado por defecto): los nueve estados con los mismos
+  chips del calendario, y en una segunda fila las marcas que no son estado
+  propio (Parcial, Estados mixtos, Retrasada, Entrega tardía). Un estado
+  nuevo tiene que agregarse en `COLOR_TOOLTIP`, en `ETIQUETA_ESTADO` y en el
+  `ORDEN` de la leyenda.
+- **Un solo vocabulario de estados.** Las etiquetas visibles salen de
+  `calendario-utils.ETIQUETA_ESTADO` (`etiquetaEstado`), y los filtros que
+  comparten Calendario y Reservas de `FILTROS_ESTADO_COMUNES`: cada panel
+  solo antepone los suyos ("Vigentes"/"Todas" y "Por confirmar"). Así un
+  estado no se llama distinto según la pestaña.
 - **Una sola barra de desplazamiento.** En semana y día la rejilla de horas
   mide lo que queda de ventana debajo de ella (`VistaTiempo`, recalculado en
   `resize`, mínimo 240 px), no un `65vh` fijo. Así la página no scrollea
@@ -1387,6 +1397,59 @@ el selector de periodo del panel de Reservas (`ReservasPanel.tsx`,
 - **`idx_reservas_fin` (`postgres/init/02-schema.sql`)** existe para cuando la
   tabla de reservas crezca: hoy, con unas pocas decenas de filas, Postgres
   sigue prefiriendo un seq scan y el índice no cambia nada medible.
+- **`&incluir_abiertas=1` agrega los préstamos que siguen afuera.** Con él, el
+  corte pasa a `fin > now() - intervalo OR estado IN ('entregada',
+  'no_devuelta')`: un equipo que no ha vuelto importa aunque su `fin` quede
+  antes de la ventana. Solo lo usa la vista Hoy
+  (`useReservasVentana("30d", true)`); el recorte en cliente al estrechar la
+  ventana (`recortarAVentana`) respeta la misma regla.
+- **Buscador en cliente.** Sobre la ventana ya cargada, el panel filtra por
+  estudiante, teléfono, código, número de reserva, activo o placa, sin
+  distinguir tildes ni mayúsculas (`normalizar`: NFD sin diacríticos, en
+  minúsculas). No pide nada al servidor; si no encuentra nada, sugiere
+  limpiar la búsqueda o ampliar el periodo, porque lo buscado puede estar
+  fuera de la ventana.
+
+### Vista Hoy (`features/hoy/HoyPanel.tsx`)
+
+Pestaña de inicio del dashboard (la primera del menú, y la que abre por
+defecto): qué tiene que hacer ahora la persona del mostrador. No trae datos
+propios: es la ventana de 30 días del panel de Reservas, con
+`incluir_abiertas`, agrupada en eventos (`agruparEnEventos`) y repartida en
+cuatro bloques, en este orden en pantalla:
+
+1. **Por entregar hoy**: tiene líneas `confirmada` y empieza hoy.
+2. **Por recibir hoy**: tiene líneas `entregada` y termina hoy.
+3. **Por confirmar**: solicitud pendiente cuyo horario no ha pasado.
+4. **Retrasados y no devueltos**, al final: `entregada` ya vencida
+   (`evento.retrasada`) o con alguna línea `no_devuelta` cuyo activo **sigue**
+   en `no_devuelto`.
+
+- **El orden de pantalla no es el orden de clasificación.** `bloqueDe` revisa
+  primero los atrasados y un evento cae en el primer bloque que le
+  corresponde, así nunca aparece dos veces ni un vencido se cuela en "Por
+  recibir". `BLOQUES` solo decide cómo se pinta.
+- **Un no devuelto sale de Hoy cuando su activo sale de `no_devuelto`.** Que
+  la LACS lo pase a otro estado desde Activos (con el motivo que pide
+  `MotivoNoDevueltoDialog`) significa que apareció o que se dio de baja;
+  dejarlo en la lista sería ruido. La reserva sigue `no_devuelta` para la
+  historia; solo deja de mostrarse. El estado del activo sale de
+  `useActivosContext()` (ya cargado para el resto del dashboard), no del
+  payload de reservas, así que el backend no cambió.
+- **Con varios activos, basta uno perdido.** El evento sigue en el bloque
+  mientras alguna de sus líneas `no_devuelta` apunte a un activo aún en
+  `no_devuelto`; el badge "No devuelta" sigue la misma regla.
+- **Activo desconocido cuenta como perdido.** Mientras carga el catálogo, el
+  mapa de estados está vacío: tratar eso como resuelto haría que las filas
+  desaparecieran y volvieran al cargar.
+- **Límites conocidos.** Las reservas se refrescan cada 30 s, pero los
+  activos no: si otro equipo cambia el estado del activo, en esta pantalla la
+  fila se va al volver a abrir Hoy. Y si un activo aparece, se presta y se
+  vuelve a perder, la reserva vieja `no_devuelta` reaparecería; resolverlo
+  bien requiere cruzar con `recurso_estado_historial.reserva_id` en el
+  servidor.
+- **Cada fila lleva su acción.** El botón del acta (`BotonActaPdf principal`)
+  abre directamente la firma del momento que toca: entrega o devolución.
 
 ### Acta de entrega y devolución (PDF)
 
@@ -1684,6 +1747,14 @@ en pantalla. Solo se listan las líneas que ese momento puede mover:
   la que el lienzo cubría el cuadro entero para escribir la cédula a pulso, y
   se descartó tras probarla: escribir números con el ratón es incómodo y el
   resultado se ve peor que el texto impreso.
+- **El navegador recuerda al administrador.** Nombre y cédula se precargan
+  desde `localStorage` (`dashboard-lacs-monitor-acta`) y se guardan solo
+  después de registrar un acta con éxito. Se pueden editar. Ojo: en un
+  equipo de mostrador compartido, el siguiente monitor verá la cédula del
+  anterior.
+- **No se pierde una firma por un clic de más.** Si ya hay un trazo, Escape,
+  el clic fuera del diálogo y "Cancelar" abren "¿Descartar las firmas?",
+  con el foco en "Seguir firmando".
 - **La fecha se congela al abrir el diálogo**, no al componer el PDF ni al
   guardarlo, y se replica en los dos cuadros del momento que se firma. Así la
   devolución lleva la fecha del momento en que se pidió firmarla, no la que

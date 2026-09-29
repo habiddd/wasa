@@ -66,17 +66,29 @@ curl http://localhost:5000/webhook/qr
 
 ## 5. Dashboard interno de monitoreo
 
-En `http://localhost:8080/dashboard` tienes un panel con seis secciones en
-un sidebar colapsable (cada una con su propio ícono; en modo colapsado el
-sidebar muestra solo los íconos, con el label como tooltip al pasar el
-mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
+En `http://localhost:8080/dashboard` tienes un panel con un sidebar
+colapsable. Cada sección tiene su propio ícono; en modo colapsado el sidebar
+muestra solo los íconos, con el nombre como tooltip al pasar el mouse. La
+sección activa se recuerda entre recargas (`localStorage`), y la primera vez
+abre en **Hoy**. El menú lleva, en orden, Hoy, Métricas, Calendario,
+Reservas, Excepciones, Usuarios, Activos y Lugares. **Servicios** va aparte,
+al pie del sidebar. Todo el menú se puede recorrer con el teclado, incluidos
+los submenús.
 
-- **Servicios**: submenú desplegable de dos entradas (clic en "Servicios"
-  para contraerlo/expandirlo). "Estado" muestra el estado en vivo de
-  Postgres, Redis, Baileys/WhatsApp, el LLM local y el propio Flask (se
-  refresca solo cada 10s); "QR / WhatsApp" muestra el código QR de
-  vinculación mientras no esté conectado, o el número vinculado una vez lo
-  esté (se refresca sola cada 5s).
+- **Hoy**: la pantalla de inicio del mostrador. Reparte las reservas en
+  cuatro bloques: **Por entregar hoy**, **Por recibir hoy**, **Por
+  confirmar** y, al final, **Retrasados y no devueltos**. Cada fila trae la
+  hora, el tiempo que falta y el botón para firmar el acta que toca, sea de
+  entrega o de devolución. Un préstamo `no_devuelta` sigue en la lista
+  mientras su activo esté en "No devuelto". Cuando la LACS lo pasa a otro
+  estado desde Activos (porque apareció o se dio de baja), sale de Hoy. Se
+  refresca solo cada 30s. Ver `docs/ARQUITECTURA.md`, sección "Vista Hoy".
+- **Servicios** (al pie del sidebar, con un punto verde o rojo según la
+  salud de los servicios): submenú desplegable de dos entradas. "Estado"
+  muestra el estado en vivo de Postgres, Redis, Baileys/WhatsApp, el LLM
+  local y el propio Flask (se refresca solo cada 10s). "QR / WhatsApp"
+  muestra el código QR de vinculación mientras no esté conectado, o el
+  número vinculado una vez lo esté (se refresca solo cada 5s).
 - **Métricas**: reservas y mensajes bloqueados por guardrails en los
   últimos 30 días, un gráfico de reservas por día del mismo periodo, y las
   últimas interacciones registradas en `auditoria_bot`.
@@ -85,8 +97,10 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   reservas del mismo usuario y horario se muestran como **un solo evento**
   (una sola reserva puede cubrir varios activos: una cámara y sus lentes),
   etiquetado como "Cámara Canon EOS R +2". El color indica el estado
-  (confirmada / entregada / completada / devuelta_tarde / cancelada /
-  denegada / no_show) y el ícono si es un activo o un lugar. Se puede filtrar por tipo, por recurso concreto y por estado
+  (por confirmar / confirmada / entregada / completada / devuelta tarde /
+  no devuelta / no se presentó / cancelada / denegada) y el ícono si es un
+  activo o un lugar. La leyenda plegable "Qué significa cada color" explica
+  cada estado. Se puede filtrar por tipo, por recurso concreto y por estado
   (por defecto oculta las canceladas), y al hacer clic en un evento se abre
   un modal con su **número de reserva**, el usuario, el horario y la lista
   de activos, desde donde se puede **editar** la reserva (horario, estado y,
@@ -98,8 +112,10 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   local de la LACS (`America/Bogota`), sin importar la zona del equipo desde
   el que se abra el dashboard. Se refresca solo cada 60s.
 - **Reservas**: la misma lista de sesiones en tabla (o tarjetas en pantallas
-  angostas), filtrable por estado (incluidas "Entregadas", "Retrasadas" y
-  "Devueltas tarde") y por si necesita seguro. Cada fila tiene un botón que
+  angostas), filtrable por periodo, por estado (con los mismos filtros del
+  Calendario, más "Por confirmar") y por si necesita seguro. Un buscador
+  encuentra por estudiante, teléfono, código, número de reserva, activo o
+  placa, sin importar tildes ni mayúsculas. Cada fila tiene un botón que
   abre el **acta de entrega y devolución** en un modal con la vista previa
   del PDF (todos los datos de la reserva más los 4 cuadros de firma de
   entrega/devolución), el botón de descarga y el historial de versiones
@@ -114,13 +130,24 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
       └─(sin recoger, automático 30 min después)──> no_show ──(acta de ENTREGA, si su horario sigue vigente)┘
   ```
 
-  Hay dos formas de registrar el acta: **firmar en pantalla** (un asistente de
-  tres pasos — primero firma el usuario, después el administrador, y el
-  tercero muestra el PDF compuesto antes de guardarlo) o **subir un PDF ya
-  firmado** desde otro dispositivo. A mano solo va la firma: la cédula del
-  usuario la imprime el servidor, la del administrador se teclea, y la fecha
-  y hora se ponen solas. Una reserva entregada cuyo horario ya venció se
-  marca como "Retrasada" mientras el equipo siga fuera.
+  Hay dos formas de registrar el acta. La primera es **firmar en pantalla**,
+  con un asistente de cuatro pasos:
+
+  1. marcar los equipos que se entregan o se devuelven, con una nota
+     opcional;
+  2. la firma del usuario;
+  3. los datos y la firma del administrador;
+  4. revisar el PDF compuesto antes de guardarlo.
+
+  La segunda es **subir un PDF ya firmado** desde otro dispositivo.
+
+  A mano solo va la firma: la cédula del usuario la imprime el servidor, la
+  del administrador se teclea, y la fecha y la hora se ponen solas. El
+  navegador recuerda el nombre y la cédula del administrador para la próxima
+  acta. Si ya hay una firma, cerrar el asistente pide confirmación antes de
+  descartarla. Una reserva entregada cuyo horario ya venció se marca como
+  "Retrasada" mientras el equipo siga fuera. Un equipo que no se marca en
+  la devolución deja su línea en `no_devuelta` y el activo en "No devuelto".
 
   **No-show automático**: una `confirmada` que nadie recoge pasa sola a
   `no_show` 30 minutos después de su hora de inicio (configurable,
@@ -137,6 +164,10 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
 
   Cada firma o subida guarda un archivo nuevo en el volumen `actas_pdf`; no se
   sobrescribe nunca ninguna versión. Ver `docs/ARQUITECTURA.md` para el detalle.
+- **Excepciones**: los días en que el bot no acepta reservas (días de la
+  semana bloqueados, festivos de Colombia y fechas sueltas bloqueadas o
+  desbloqueadas), editables en vista calendario o en vista lista. Ver
+  `docs/ARQUITECTURA.md`, sección "Excepciones: lista negra de fechas".
 - **Usuarios**: submenú desplegable de dos entradas, mismo patrón que
   "Servicios". "Usuarios" lista los usuarios que completaron el registro
   por WhatsApp (`registro_completo=True` -- deja afuera contactos a medio
@@ -154,8 +185,10 @@ mouse; la sección activa se recuerda entre recargas, vía `localStorage`):
   lentes -- los hijos se pueden desplegar/colapsar por tarjeta). Permite
   editar cualquier dato del activo, cambiar su estado (Disponible / En
   mantenimiento / No disponible) desde un selector en la propia tarjeta sin
-  abrir el formulario completo, y reasignar su padre (la UI no deja elegir
-  un descendiente propio, para no crear un ciclo). Solo los activos
+  abrir el formulario completo, y reasignar su padre. "No devuelto" solo lo
+  pone el acta de devolución, y para sacar un activo de ahí se pide un
+  motivo. Al reasignar el padre, la UI no deja elegir un descendiente
+  propio, para no crear un ciclo. Solo los activos
   "Disponible" entran al catálogo que ofrece el bot por WhatsApp. El botón
   "+ Agregar activo" crea uno nuevo, decidiendo ahí mismo si es un activo
   independiente (padre) o un hijo de otro equipo ya existente. No se
