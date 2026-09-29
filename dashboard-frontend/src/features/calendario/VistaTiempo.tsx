@@ -82,10 +82,10 @@ function BloqueEvento({
       </span>
       {!compacto && (
         <>
-          <span className="block w-full truncate tabular-nums opacity-80">
+          <span className="block w-full truncate tabular-nums">
             {hora(bloque.inicio)} – {hora(bloque.fin)}
           </span>
-          <span className="block w-full truncate opacity-80">{bloque.usuarioNombre}</span>
+          <span className="block w-full truncate">{bloque.usuarioNombre}</span>
         </>
       )}
     </button>
@@ -143,7 +143,7 @@ export function VistaTiempo({
       const el = scrollRef.current
       if (!el) return
       const top = el.getBoundingClientRect().top + window.scrollY
-      // 24px = padding inferior de <main> (p-6), 1px = borde del recuadro.
+      // 24px = padding inferior del contenedor del panel (p-6, ver App.tsx), 1px = borde del recuadro.
       setAltoVisible(Math.max(240, window.innerHeight - top - 25))
     }
     medir()

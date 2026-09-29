@@ -412,7 +412,7 @@ export function NuevaReservaDialog({
             </div>
           </div>
 
-          {inicioYaPaso && <p className="text-xs text-warning">Ojo: el inicio ya pasó.</p>}
+          {inicioYaPaso && <p className="text-xs text-warning-text">Ojo: el inicio ya pasó.</p>}
           <AvisosFechasReserva minimaHoy={minimaHoy} incumplePlazo={incumplePlazo} avisosBloqueo={avisosBloqueo} />
           <p className="text-xs text-muted-foreground">
             Horarios en hora local de la LACS (America/Bogota).

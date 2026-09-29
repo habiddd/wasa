@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react"
+import { AlertTriangle, CircleCheck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,10 +15,17 @@ const NOMBRES: Record<string, string> = {
   flask: "Flask",
 }
 
+// Baileys reporta el estado crudo de su socket; el resto ya manda texto.
+const DETALLE_BAILEYS: Record<string, string> = {
+  open: "conectado",
+  connecting: "conectando…",
+  close: "desconectado",
+}
+
 function EstadoBadge({ ok }: { ok: boolean }) {
   return (
     <Badge variant={ok ? "success" : "destructive"}>
-      {ok ? "OK" : "FALLA"}
+      {ok ? "Funcionando" : "Con falla"}
     </Badge>
   )
 }
@@ -33,10 +40,12 @@ function ServicioCard({ clave, servicio }: { clave: string; servicio: EstadoServ
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-1 text-sm text-muted-foreground">
-        <p className="break-words">{servicio.detalle || ""}</p>
+        <p className="break-words">
+          {(clave === "baileys" && DETALLE_BAILEYS[servicio.detalle ?? ""]) || servicio.detalle || ""}
+        </p>
         {clave === "baileys" && servicio.numero && <p>Número: {servicio.numero}</p>}
         {clave === "baileys" && servicio.buffer_atascado && (
-          <p className="flex items-center gap-1 text-warning">
+          <p className="flex items-center gap-1 text-warning-text">
             <AlertTriangle className="size-3.5" />
             Buffer de eventos atascado (reintentando solo)
           </p>
@@ -51,6 +60,7 @@ export function EstadoServiciosPanel() {
 
   return (
     <div className="space-y-3">
+      <h1 className="text-xl font-semibold tracking-tight">Estado de los servicios</h1>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
         {loading && !data
           ? Array.from({ length: 5 }).map((_, i) => (
@@ -65,7 +75,7 @@ export function EstadoServiciosPanel() {
               />
             ))}
       </div>
-      {error && <p className="text-sm text-destructive">No se pudo consultar el estado.</p>}
+      {error && <p className="text-sm text-destructive-text">No se pudo consultar el estado.</p>}
       {data && (
         <p className="text-xs text-muted-foreground">
           Última actualización: {formatearHoraLACS(data.chequeado_en)}
@@ -83,7 +93,7 @@ export function QrWhatsappPanel() {
     texto = "No se pudo consultar el estado de WhatsApp."
   } else if (data) {
     if (data.conectado) {
-      texto = "✅ WhatsApp conectado" + (data.numero ? ` (número ${data.numero})` : "")
+      texto = "WhatsApp conectado" + (data.numero ? ` (número ${data.numero})` : "")
     } else if (data.qr_imagen) {
       texto = "Escanea este código con WhatsApp → Dispositivos vinculados:"
     } else {
@@ -92,13 +102,17 @@ export function QrWhatsappPanel() {
   }
 
   return (
-    <div className="text-center">
-      <p className="text-muted-foreground">{texto}</p>
+    <div className="space-y-4">
+      <h1 className="text-xl font-semibold tracking-tight">Vincular WhatsApp</h1>
+      <p className="flex items-center justify-center gap-1.5 text-center text-muted-foreground">
+        {data?.conectado && <CircleCheck className="size-4 text-success-text" aria-hidden />}
+        {texto}
+      </p>
       {data && !data.conectado && data.qr_imagen && (
         <img
           src={data.qr_imagen}
           alt="Código QR de vinculación"
-          className="mx-auto mt-4 max-w-[260px] rounded-lg border"
+          className="mx-auto max-w-[260px] rounded-lg border"
         />
       )}
     </div>

@@ -57,9 +57,9 @@ export function ExcepcionesPanel() {
   return (
     <div className="@container space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <h1 className="text-xl font-semibold tracking-tight">
           Excepciones: fechas sin reservas
-        </h2>
+        </h1>
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setMostrarNueva(true)}>
             <Plus />

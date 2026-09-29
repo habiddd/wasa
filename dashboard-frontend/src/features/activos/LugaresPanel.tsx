@@ -83,9 +83,9 @@ export function LugaresPanel() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <h1 className="text-xl font-semibold tracking-tight">
           Lugares
-        </h2>
+        </h1>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={() => setMostrarNuevo((v) => !v)}>
             + Agregar lugar
@@ -119,7 +119,7 @@ export function LugaresPanel() {
       )}
 
       {error && !activos.length && (
-        <p className="text-sm text-destructive">No se pudieron cargar los lugares.</p>
+        <p className="text-sm text-destructive-text">No se pudieron cargar los lugares.</p>
       )}
       {!error && espacios.length === 0 && (
         <p className="text-sm text-muted-foreground">No hay lugares registrados.</p>

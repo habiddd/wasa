@@ -8,6 +8,7 @@ import {
   CalendarOff,
   ChevronRight,
   ClipboardList,
+  ConciergeBell,
   ListChecks,
   MapPin,
   QrCode,
@@ -41,18 +42,24 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { usePolling } from "@/hooks/use-polling"
 import { ActivosPanel } from "@/features/activos/ActivosPanel"
 import { ActivosProvider } from "@/features/activos/activos-context"
 import { LugaresPanel } from "@/features/activos/LugaresPanel"
 import { CalendarioPanel } from "@/features/calendario/CalendarioPanel"
 import { ExcepcionesPanel } from "@/features/excepciones/ExcepcionesPanel"
+import { HoyPanel } from "@/features/hoy/HoyPanel"
 import { MetricasPanel } from "@/features/metricas/MetricasPanel"
 import { ReservasPanel } from "@/features/reservas/ReservasPanel"
 import { EstadoServiciosPanel, QrWhatsappPanel } from "@/features/servicios/ServiciosPanel"
 import { SesionesTab } from "@/features/usuarios/SesionesTab"
 import { ListaUsuariosPanel } from "@/features/usuarios/UsuariosPanel"
+import { fetchStatus, type EstadoServicio } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
-const TAB_STORAGE_KEY = "dashboard-lacs-tab-activa"
+// -v2: al estrenar la vista "Hoy" todos aterrizan una vez en ella; después se
+// vuelve a recordar la última pestaña como antes.
+const TAB_STORAGE_KEY = "dashboard-lacs-tab-activa-v2"
 
 type ItemMenu = {
   value: string
@@ -66,18 +73,40 @@ type GrupoMenu = {
   label: string
   icon: LucideIcon
   children: ItemMenu[]
+  /** Indicador sobre el icono del grupo (ej. salud de los servicios). */
+  Adorno?: ComponentType
+}
+
+/**
+ * Punto de salud sobre el icono de Servicios: verde si todo responde, rojo si
+ * algo falla. Se ve también con el menú retraído, que es cuando más sirve.
+ */
+function PuntoSalud() {
+  const { data } = usePolling(fetchStatus, 30000)
+  if (!data) return null
+  const fallas = Object.values(data).filter(
+    (v): v is EstadoServicio => typeof v === "object" && v !== null && !v.ok
+  ).length
+  const texto = fallas
+    ? `${fallas} servicio${fallas === 1 ? "" : "s"} con falla`
+    : "Todos los servicios funcionando"
+  return (
+    <>
+      <span
+        aria-hidden
+        title={texto}
+        className={cn(
+          "pointer-events-none absolute top-1.5 left-5 size-2 rounded-full ring-2 ring-sidebar",
+          fallas ? "bg-destructive" : "bg-success"
+        )}
+      />
+      <span className="sr-only">{texto}</span>
+    </>
+  )
 }
 
 const MENU: (ItemMenu | GrupoMenu)[] = [
-  {
-    value: "servicios",
-    label: "Servicios",
-    icon: Activity,
-    children: [
-      { value: "servicios-estado", label: "Estado", icon: ListChecks, Panel: EstadoServiciosPanel },
-      { value: "servicios-qr", label: "QR / WhatsApp", icon: QrCode, Panel: QrWhatsappPanel },
-    ],
-  },
+  { value: "hoy", label: "Hoy", icon: ConciergeBell, Panel: HoyPanel },
   { value: "metricas", label: "Métricas", icon: BarChart3, Panel: MetricasPanel },
   { value: "calendario", label: "Calendario", icon: CalendarDays, Panel: CalendarioPanel },
   { value: "reservas", label: "Reservas", icon: ClipboardList, Panel: ReservasPanel },
@@ -95,11 +124,28 @@ const MENU: (ItemMenu | GrupoMenu)[] = [
   { value: "lugares", label: "Lugares", icon: MapPin, Panel: LugaresPanel },
 ]
 
+// La infraestructura no es el trabajo del mostrador: vive al pie del menú y
+// solo pide atención con su punto rojo.
+const MENU_PIE: (ItemMenu | GrupoMenu)[] = [
+  {
+    value: "servicios",
+    label: "Servicios",
+    icon: Activity,
+    Adorno: PuntoSalud,
+    children: [
+      { value: "servicios-estado", label: "Estado", icon: ListChecks, Panel: EstadoServiciosPanel },
+      { value: "servicios-qr", label: "QR / WhatsApp", icon: QrCode, Panel: QrWhatsappPanel },
+    ],
+  },
+]
+
 function esGrupo(item: ItemMenu | GrupoMenu): item is GrupoMenu {
   return "children" in item
 }
 
-const TABS: ItemMenu[] = MENU.flatMap((item) => (esGrupo(item) ? item.children : [item]))
+const TABS: ItemMenu[] = [...MENU, ...MENU_PIE].flatMap((item) =>
+  esGrupo(item) ? item.children : [item]
+)
 
 function tabInicial() {
   try {
@@ -108,13 +154,15 @@ function tabInicial() {
   } catch {
     // localStorage no disponible
   }
-  return "servicios-estado"
+  return "hoy"
 }
 
 function MenuLateral({
+  items,
   tab,
   onTabChange,
 }: {
+  items: (ItemMenu | GrupoMenu)[]
   tab: string
   onTabChange: (value: string) => void
 }) {
@@ -123,7 +171,7 @@ function MenuLateral({
 
   const [gruposAbiertos, setGruposAbiertos] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
-      MENU.filter(esGrupo).map((grupo) => [
+      items.filter(esGrupo).map((grupo) => [
         grupo.value,
         grupo.children.some((c) => c.value === tab),
       ])
@@ -144,7 +192,7 @@ function MenuLateral({
 
   return (
     <SidebarMenu className="gap-0.5">
-      {MENU.map((item) =>
+      {items.map((item) =>
         esGrupo(item) ? (
           <Collapsible
             key={item.value}
@@ -160,12 +208,13 @@ function MenuLateral({
                 <SidebarMenuButton
                   isActive={item.children.some((c) => c.value === tab)}
                   tooltip={item.label}
-                  className="h-9 text-lg"
+                  className="relative h-9"
                   onClick={() => {
                     if (colapsado) irAlGrupo(item)
                   }}
                 >
                   <item.icon />
+                  {item.Adorno && <item.Adorno />}
                   <span>{item.label}</span>
                   <ChevronRight className="ml-auto transition-transform group-data-[state=open]/collapsible:rotate-90" />
                 </SidebarMenuButton>
@@ -174,12 +223,18 @@ function MenuLateral({
                 <SidebarMenuSub>
                   {item.children.map((child) => (
                     <SidebarMenuSubItem key={child.value}>
-                      <SidebarMenuSubButton
-                        isActive={tab === child.value}
-                        onClick={() => onTabChange(child.value)}
-                      >
-                        <child.icon />
-                        <span>{child.label}</span>
+                      {/* asChild + <button>: el <a> sin href de shadcn no entra
+                          en el orden de tabulación ni se anuncia como control. */}
+                      <SidebarMenuSubButton asChild isActive={tab === child.value}>
+                        <button
+                          type="button"
+                          className="w-full text-left"
+                          aria-current={tab === child.value ? "page" : undefined}
+                          onClick={() => onTabChange(child.value)}
+                        >
+                          <child.icon />
+                          <span>{child.label}</span>
+                        </button>
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
                   ))}
@@ -193,7 +248,7 @@ function MenuLateral({
               isActive={tab === item.value}
               onClick={() => onTabChange(item.value)}
               tooltip={item.label}
-              className="h-9 text-lg"
+              className="h-9"
             >
               <item.icon />
               <span>{item.label}</span>
@@ -235,10 +290,15 @@ function App() {
                 </div>
               </SidebarHeader>
               <SidebarContent>
-                <MenuLateral tab={tab} onTabChange={handleTabChange} />
+                <MenuLateral items={MENU} tab={tab} onTabChange={handleTabChange} />
               </SidebarContent>
-              <SidebarFooter className="items-start group-data-[collapsible=icon]:items-center">
-                <ThemeToggle />
+              {/* px-0: el menú del pie se alinea con el de arriba (SidebarContent
+                  no tiene padding lateral); solo el conmutador conserva el suyo. */}
+              <SidebarFooter className="items-start px-0 group-data-[collapsible=icon]:items-center">
+                <MenuLateral items={MENU_PIE} tab={tab} onTabChange={handleTabChange} />
+                <div className="px-2">
+                  <ThemeToggle />
+                </div>
               </SidebarFooter>
             </Sidebar>
 
@@ -246,9 +306,9 @@ function App() {
               {/* En móvil el sidebar es un panel flotante: sin este botón no habría cómo abrirlo. */}
               <SidebarTrigger variant="outline" className="m-4 mb-0 md:hidden" />
 
-              <main className="mx-auto w-full max-w-6xl p-6 2xl:max-w-7xl min-[1800px]:max-w-none">
+              <div className="mx-auto w-full max-w-6xl p-6 2xl:max-w-7xl min-[1800px]:max-w-none">
                 <activa.Panel />
-              </main>
+              </div>
             </SidebarInset>
           </TooltipProvider>
         </SidebarProvider>

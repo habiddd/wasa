@@ -154,7 +154,7 @@ export function VistaListaExcepciones({
         </span>
       </div>
 
-      {error && <p className="text-sm text-destructive">No se pudo cargar: {error}</p>}
+      {error && <p className="text-sm text-destructive-text">No se pudo cargar: {error}</p>}
 
       {cargando && !lista.length ? (
         <div className="space-y-2">
@@ -233,7 +233,7 @@ export function VistaListaExcepciones({
                           <Button
                             size="xs"
                             variant="outline"
-                            className="text-destructive hover:text-destructive"
+                            className="text-destructive-text hover:text-destructive-text"
                             disabled={quitando === dia.fecha}
                             onClick={() => quitarExcepcion(dia.fecha)}
                           >

@@ -11,9 +11,9 @@ import type { EstadoRecurso } from "@/lib/api"
 import { ESTADOS_ACTIVO } from "./tree-utils"
 
 const VARIANT_CLASSES: Record<string, string> = {
-  success: "bg-success/10 text-success",
-  warning: "bg-warning/10 text-warning",
-  destructive: "bg-destructive/10 text-destructive",
+  success: "bg-success/10 text-success-text",
+  warning: "bg-warning/10 text-warning-text",
+  destructive: "bg-destructive/10 text-destructive-text",
 }
 
 export function ActivoEstadoSelect({
@@ -38,8 +38,9 @@ export function ActivoEstadoSelect({
           para que el Select del theme no rompa el aspecto de la píldora. */}
       <SelectTrigger
         size="sm"
+        aria-label={`Estado del activo: ${ESTADOS_ACTIVO[estado].texto}. Cambiar estado`}
         className={cn(
-          "h-5 w-fit gap-1 rounded-full border-none bg-transparent px-2 py-0 text-xs font-medium data-[size=sm]:h-5 data-[size=sm]:rounded-full [&_svg]:size-3",
+          "h-6 w-fit gap-1 rounded-full border-none bg-transparent px-2.5 py-0 text-xs font-medium data-[size=sm]:h-6 data-[size=sm]:rounded-full [&_svg]:size-3",
           variantClass,
           disabled && "opacity-60"
         )}

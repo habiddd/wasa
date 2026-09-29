@@ -259,7 +259,7 @@ export function ActivoNuevoForm({
             </Select>
           </div>
 
-          {error && <p className="col-span-full text-sm text-destructive">{error}</p>}
+          {error && <p className="col-span-full text-sm text-destructive-text">{error}</p>}
           <div className="col-span-full flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onCancel} disabled={guardando}>
               Cancelar

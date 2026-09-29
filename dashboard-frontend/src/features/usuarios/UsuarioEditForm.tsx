@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { CambiosUsuario, Rol, Usuario } from "@/lib/api"
+import { etiquetaRol, type CambiosUsuario, type Rol, type Usuario } from "@/lib/api"
 
 const ROLES: Rol[] = ["estudiante", "staff", "admin"]
 
@@ -107,7 +107,7 @@ export function UsuarioEditForm({
           <SelectContent>
             {ROLES.map((r) => (
               <SelectItem key={r} value={r}>
-                {r}
+                {etiquetaRol(r)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -117,7 +117,7 @@ export function UsuarioEditForm({
         <Checkbox checked={activo} onCheckedChange={(v) => setActivo(v === true)} id={`activo-${usuario.id}`} />
         <Label htmlFor={`activo-${usuario.id}`}>Activo</Label>
       </div>
-      {error && <p className="col-span-full text-sm text-destructive">{error}</p>}
+      {error && <p className="col-span-full text-sm text-destructive-text">{error}</p>}
       <div className="col-span-full flex gap-2">
         <Button
           type="button"
@@ -149,7 +149,7 @@ export function UsuarioEditForm({
               puede deshacer.
             </DialogDescription>
           </DialogHeader>
-          {errorEliminar && <p className="text-sm text-destructive">{errorEliminar}</p>}
+          {errorEliminar && <p className="text-sm text-destructive-text">{errorEliminar}</p>}
           <DialogFooter>
             <Button
               type="button"

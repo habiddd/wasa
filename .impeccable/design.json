@@ -1,45 +1,323 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-29T00:00:00Z",
+  "generatedAt": "2026-09-29T16:01:18.008Z",
   "title": "Design System: LACS Reservas Bot — Dashboard",
   "extensions": {
     "colorMeta": {
-      "grafito": { "role": "primary", "displayName": "Grafito", "canonical": "oklch(0.205 0 0)", "dark": "oklch(0.922 0 0)", "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.205 0 0)", "oklch(0.3 0 0)", "oklch(0.42 0 0)", "oklch(0.55 0 0)", "oklch(0.7 0 0)", "oklch(0.85 0 0)", "oklch(0.95 0 0)"] },
-      "tinta": { "role": "neutral", "displayName": "Tinta", "canonical": "oklch(0.145 0 0)", "dark": "oklch(0.985 0 0)", "tonalRamp": ["oklch(0.145 0 0)", "oklch(0.2 0 0)", "oklch(0.3 0 0)", "oklch(0.42 0 0)", "oklch(0.55 0 0)", "oklch(0.7 0 0)", "oklch(0.85 0 0)", "oklch(0.95 0 0)"] },
-      "papel": { "role": "neutral", "displayName": "Papel", "canonical": "oklch(1 0 0)", "dark": "oklch(0.145 0 0)", "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.3 0 0)", "oklch(0.45 0 0)", "oklch(0.6 0 0)", "oklch(0.75 0 0)", "oklch(0.88 0 0)", "oklch(0.95 0 0)", "oklch(1 0 0)"] },
-      "papel-lateral": { "role": "neutral", "displayName": "Papel Lateral", "canonical": "oklch(0.985 0 0)", "dark": "oklch(0.205 0 0)", "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.3 0 0)", "oklch(0.45 0 0)", "oklch(0.6 0 0)", "oklch(0.75 0 0)", "oklch(0.88 0 0)", "oklch(0.95 0 0)", "oklch(0.985 0 0)"] },
-      "niebla": { "role": "neutral", "displayName": "Niebla", "canonical": "oklch(0.97 0 0)", "dark": "oklch(0.269 0 0)", "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.269 0 0)", "oklch(0.4 0 0)", "oklch(0.55 0 0)", "oklch(0.7 0 0)", "oklch(0.85 0 0)", "oklch(0.93 0 0)", "oklch(0.97 0 0)"] },
-      "lapiz": { "role": "neutral", "displayName": "Lápiz", "canonical": "oklch(0.556 0 0)", "dark": "oklch(0.708 0 0)", "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.27 0 0)", "oklch(0.37 0 0)", "oklch(0.44 0 0)", "oklch(0.556 0 0)", "oklch(0.708 0 0)", "oklch(0.87 0 0)", "oklch(0.95 0 0)"] },
-      "trazo": { "role": "neutral", "displayName": "Trazo", "canonical": "oklch(0.922 0 0)", "dark": "oklch(1 0 0 / 10%)", "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.3 0 0)", "oklch(0.45 0 0)", "oklch(0.6 0 0)", "oklch(0.75 0 0)", "oklch(0.85 0 0)", "oklch(0.922 0 0)", "oklch(0.97 0 0)"] },
-      "anillo": { "role": "neutral", "displayName": "Anillo", "canonical": "oklch(0.708 0 0)", "dark": "oklch(0.556 0 0)", "tonalRamp": ["oklch(0.15 0 0)", "oklch(0.3 0 0)", "oklch(0.45 0 0)", "oklch(0.556 0 0)", "oklch(0.708 0 0)", "oklch(0.82 0 0)", "oklch(0.9 0 0)", "oklch(0.96 0 0)"] },
-      "verde-confirmado": { "role": "tertiary", "displayName": "Verde Confirmado", "canonical": "oklch(0.6 0.15 145)", "dark": "oklch(0.7 0.17 145)", "tonalRamp": ["oklch(0.15 0.15 145)", "oklch(0.26 0.15 145)", "oklch(0.37 0.15 145)", "oklch(0.48 0.15 145)", "oklch(0.6 0.15 145)", "oklch(0.72 0.15 145)", "oklch(0.84 0.1 145)", "oklch(0.95 0.04 145)"] },
-      "ambar-pendiente": { "role": "tertiary", "displayName": "Ámbar Pendiente", "canonical": "oklch(0.75 0.15 75)", "dark": "oklch(0.8 0.16 75)", "tonalRamp": ["oklch(0.15 0.1 75)", "oklch(0.27 0.12 75)", "oklch(0.39 0.14 75)", "oklch(0.51 0.15 75)", "oklch(0.63 0.15 75)", "oklch(0.75 0.15 75)", "oklch(0.86 0.1 75)", "oklch(0.95 0.04 75)"] },
-      "rojo-incidencia": { "role": "tertiary", "displayName": "Rojo Incidencia", "canonical": "oklch(0.577 0.245 27.325)", "dark": "oklch(0.704 0.191 22.216)", "tonalRamp": ["oklch(0.15 0.1 27.325)", "oklch(0.26 0.14 27.325)", "oklch(0.37 0.19 27.325)", "oklch(0.47 0.22 27.325)", "oklch(0.577 0.245 27.325)", "oklch(0.7 0.18 27.325)", "oklch(0.83 0.1 27.325)", "oklch(0.95 0.03 27.325)"] }
+      "grafito": {
+        "role": "primary",
+        "displayName": "Grafito",
+        "canonical": "oklch(0.205 0 0)",
+        "dark": "oklch(0.922 0 0)",
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.205 0 0)",
+          "oklch(0.3 0 0)",
+          "oklch(0.42 0 0)",
+          "oklch(0.55 0 0)",
+          "oklch(0.7 0 0)",
+          "oklch(0.85 0 0)",
+          "oklch(0.95 0 0)"
+        ]
+      },
+      "tinta": {
+        "role": "neutral",
+        "displayName": "Tinta",
+        "canonical": "oklch(0.145 0 0)",
+        "dark": "oklch(0.985 0 0)",
+        "tonalRamp": [
+          "oklch(0.145 0 0)",
+          "oklch(0.2 0 0)",
+          "oklch(0.3 0 0)",
+          "oklch(0.42 0 0)",
+          "oklch(0.55 0 0)",
+          "oklch(0.7 0 0)",
+          "oklch(0.85 0 0)",
+          "oklch(0.95 0 0)"
+        ]
+      },
+      "papel": {
+        "role": "neutral",
+        "displayName": "Papel",
+        "canonical": "oklch(1 0 0)",
+        "dark": "oklch(0.145 0 0)",
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.3 0 0)",
+          "oklch(0.45 0 0)",
+          "oklch(0.6 0 0)",
+          "oklch(0.75 0 0)",
+          "oklch(0.88 0 0)",
+          "oklch(0.95 0 0)",
+          "oklch(1 0 0)"
+        ]
+      },
+      "papel-lateral": {
+        "role": "neutral",
+        "displayName": "Papel Lateral",
+        "canonical": "oklch(0.985 0 0)",
+        "dark": "oklch(0.205 0 0)",
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.3 0 0)",
+          "oklch(0.45 0 0)",
+          "oklch(0.6 0 0)",
+          "oklch(0.75 0 0)",
+          "oklch(0.88 0 0)",
+          "oklch(0.95 0 0)",
+          "oklch(0.985 0 0)"
+        ]
+      },
+      "niebla": {
+        "role": "neutral",
+        "displayName": "Niebla",
+        "canonical": "oklch(0.97 0 0)",
+        "dark": "oklch(0.269 0 0)",
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.269 0 0)",
+          "oklch(0.4 0 0)",
+          "oklch(0.55 0 0)",
+          "oklch(0.7 0 0)",
+          "oklch(0.85 0 0)",
+          "oklch(0.93 0 0)",
+          "oklch(0.97 0 0)"
+        ]
+      },
+      "lapiz": {
+        "role": "neutral",
+        "displayName": "Lápiz",
+        "canonical": "oklch(0.52 0 0)",
+        "dark": "oklch(0.708 0 0)",
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.27 0 0)",
+          "oklch(0.37 0 0)",
+          "oklch(0.44 0 0)",
+          "oklch(0.556 0 0)",
+          "oklch(0.708 0 0)",
+          "oklch(0.87 0 0)",
+          "oklch(0.95 0 0)"
+        ]
+      },
+      "trazo": {
+        "role": "neutral",
+        "displayName": "Trazo",
+        "canonical": "oklch(0.922 0 0)",
+        "dark": "oklch(1 0 0 / 10%)",
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.3 0 0)",
+          "oklch(0.45 0 0)",
+          "oklch(0.6 0 0)",
+          "oklch(0.75 0 0)",
+          "oklch(0.85 0 0)",
+          "oklch(0.922 0 0)",
+          "oklch(0.97 0 0)"
+        ]
+      },
+      "anillo": {
+        "role": "neutral",
+        "displayName": "Anillo",
+        "canonical": "oklch(0.55 0 0)",
+        "dark": "oklch(0.556 0 0)",
+        "tonalRamp": [
+          "oklch(0.15 0 0)",
+          "oklch(0.3 0 0)",
+          "oklch(0.45 0 0)",
+          "oklch(0.556 0 0)",
+          "oklch(0.708 0 0)",
+          "oklch(0.82 0 0)",
+          "oklch(0.9 0 0)",
+          "oklch(0.96 0 0)"
+        ]
+      },
+      "verde-confirmado": {
+        "role": "tertiary",
+        "displayName": "Verde Confirmado",
+        "canonical": "oklch(0.6 0.15 145)",
+        "dark": "oklch(0.7 0.17 145)",
+        "tonalRamp": [
+          "oklch(0.15 0.15 145)",
+          "oklch(0.26 0.15 145)",
+          "oklch(0.37 0.15 145)",
+          "oklch(0.48 0.15 145)",
+          "oklch(0.6 0.15 145)",
+          "oklch(0.72 0.15 145)",
+          "oklch(0.84 0.1 145)",
+          "oklch(0.95 0.04 145)"
+        ]
+      },
+      "ambar-pendiente": {
+        "role": "tertiary",
+        "displayName": "Ámbar Pendiente",
+        "canonical": "oklch(0.75 0.15 75)",
+        "dark": "oklch(0.8 0.16 75)",
+        "tonalRamp": [
+          "oklch(0.15 0.1 75)",
+          "oklch(0.27 0.12 75)",
+          "oklch(0.39 0.14 75)",
+          "oklch(0.51 0.15 75)",
+          "oklch(0.63 0.15 75)",
+          "oklch(0.75 0.15 75)",
+          "oklch(0.86 0.1 75)",
+          "oklch(0.95 0.04 75)"
+        ]
+      },
+      "rojo-incidencia": {
+        "role": "tertiary",
+        "displayName": "Rojo Incidencia",
+        "canonical": "oklch(0.577 0.245 27.325)",
+        "dark": "oklch(0.704 0.191 22.216)",
+        "tonalRamp": [
+          "oklch(0.15 0.1 27.325)",
+          "oklch(0.26 0.14 27.325)",
+          "oklch(0.37 0.19 27.325)",
+          "oklch(0.47 0.22 27.325)",
+          "oklch(0.577 0.245 27.325)",
+          "oklch(0.7 0.18 27.325)",
+          "oklch(0.83 0.1 27.325)",
+          "oklch(0.95 0.03 27.325)"
+        ]
+      },
+      "verde-confirmado-texto": {
+        "role": "tertiary",
+        "displayName": "Verde Confirmado (texto)",
+        "canonical": "oklch(0.5 0.13 145)",
+        "dark": "oklch(0.7 0.17 145)",
+        "tonalRamp": [
+          "oklch(0.15 0.13 145)",
+          "oklch(0.26 0.13 145)",
+          "oklch(0.37 0.13 145)",
+          "oklch(0.48 0.13 145)",
+          "oklch(0.6 0.13 145)",
+          "oklch(0.72 0.13 145)",
+          "oklch(0.84 0.13 145)",
+          "oklch(0.95 0.13 145)"
+        ]
+      },
+      "ambar-pendiente-texto": {
+        "role": "tertiary",
+        "displayName": "Ámbar Pendiente (texto)",
+        "canonical": "oklch(0.52 0.13 65)",
+        "dark": "oklch(0.8 0.16 75)",
+        "tonalRamp": [
+          "oklch(0.15 0.13 65)",
+          "oklch(0.26 0.13 65)",
+          "oklch(0.37 0.13 65)",
+          "oklch(0.48 0.13 65)",
+          "oklch(0.6 0.13 65)",
+          "oklch(0.72 0.13 65)",
+          "oklch(0.84 0.13 65)",
+          "oklch(0.95 0.13 65)"
+        ]
+      },
+      "rojo-incidencia-texto": {
+        "role": "tertiary",
+        "displayName": "Rojo Incidencia (texto)",
+        "canonical": "oklch(0.53 0.22 27.325)",
+        "dark": "oklch(0.704 0.191 22.216)",
+        "tonalRamp": [
+          "oklch(0.15 0.2 27.325)",
+          "oklch(0.26 0.2 27.325)",
+          "oklch(0.37 0.2 27.325)",
+          "oklch(0.48 0.2 27.325)",
+          "oklch(0.6 0.2 27.325)",
+          "oklch(0.72 0.2 27.325)",
+          "oklch(0.84 0.2 27.325)",
+          "oklch(0.95 0.2 27.325)"
+        ]
+      }
     },
     "typographyMeta": {
-      "display": { "displayName": "Display", "purpose": "Cifras KPI del panel de Métricas; lo único grande de la app." },
-      "title": { "displayName": "Title", "purpose": "Títulos de tarjeta y de diálogo." },
-      "nav": { "displayName": "Nav", "purpose": "Ítems de primer nivel de la barra lateral." },
-      "body": { "displayName": "Body", "purpose": "Tablas, formularios, cuerpo de tarjetas y diálogos." },
-      "label": { "displayName": "Label", "purpose": "Encabezado h2 de cada panel, en MAYÚSCULAS y color lápiz." },
-      "caption": { "displayName": "Caption", "purpose": "Metadatos, badges y cabeceras de la grilla; el tamaño más usado." },
-      "micro": { "displayName": "Micro", "purpose": "Chips de evento en la vista de mes, con cifras tabulares." }
+      "display": {
+        "displayName": "Display",
+        "purpose": "Cifras KPI del panel de Métricas; lo único grande de la app."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Títulos de tarjeta y de diálogo."
+      },
+      "nav": {
+        "displayName": "Nav",
+        "purpose": "Ítems de la barra lateral, por debajo del título de página."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Tablas, formularios, cuerpo de tarjetas y diálogos."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Encabezados h2 de sección dentro de un panel, con contador al lado."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Metadatos, badges y cabeceras de la grilla; el tamaño más usado."
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "Chips de evento en la vista de mes, con cifras tabulares."
+      },
+      "page-title": {
+        "displayName": "Page title",
+        "purpose": "El h1 de cada panel; uno por panel."
+      }
     },
     "shadows": [
-      { "name": "menu-flotante", "value": "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)", "purpose": "Desplegables y selects, siempre con anillo de tinta al 10%." },
-      { "name": "capa-modal", "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)", "purpose": "Diálogos y submenús. Nada en reposo lleva sombra." }
+      {
+        "name": "menu-flotante",
+        "value": "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)",
+        "purpose": "Desplegables y selects, siempre con anillo de tinta al 10%."
+      },
+      {
+        "name": "capa-modal",
+        "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        "purpose": "Diálogos y submenús. Nada en reposo lleva sombra."
+      }
     ],
     "motion": [
-      { "name": "dialog-in", "value": "150ms fade-in + zoom-in-95", "purpose": "Apertura y cierre de diálogos (tw-animate-css)." },
-      { "name": "menu-in", "value": "100ms fade-in + zoom-in-95 + slide-in 8px desde el lado de anclaje", "purpose": "Desplegables y selects." },
-      { "name": "state-color", "value": "transition-colors (150ms, ease por defecto de Tailwind)", "purpose": "Hover de botones, chips y filas." },
-      { "name": "press", "value": "translateY(1px)", "purpose": "Botón presionado." }
+      {
+        "name": "dialog-in",
+        "value": "150ms fade-in + zoom-in-95",
+        "purpose": "Apertura y cierre de diálogos (tw-animate-css)."
+      },
+      {
+        "name": "menu-in",
+        "value": "100ms fade-in + zoom-in-95 + slide-in 8px desde el lado de anclaje",
+        "purpose": "Desplegables y selects."
+      },
+      {
+        "name": "state-color",
+        "value": "transition-colors (150ms, ease por defecto de Tailwind)",
+        "purpose": "Hover de botones, chips y filas."
+      },
+      {
+        "name": "press",
+        "value": "translateY(1px)",
+        "purpose": "Botón presionado."
+      }
     ],
     "breakpoints": [
-      { "name": "md", "value": "768px", "note": "La barra lateral pasa de panel flotante a fija y retráctil." },
-      { "name": "2xl", "value": "1536px", "note": "El contenido pasa de max 72rem a 80rem." },
-      { "name": "wide", "value": "1800px", "note": "Sin ancho máximo." },
-      { "name": "@3xl / @4xl / @6xl", "value": "48rem / 56rem / 72rem (container)", "note": "Columnas de tabla adicionales; @6xl sube a texto base." }
+      {
+        "name": "md",
+        "value": "768px",
+        "note": "La barra lateral pasa de panel flotante a fija y retráctil."
+      },
+      {
+        "name": "2xl",
+        "value": "1536px",
+        "note": "El contenido pasa de max 72rem a 80rem."
+      },
+      {
+        "name": "wide",
+        "value": "1800px",
+        "note": "Sin ancho máximo."
+      },
+      {
+        "name": "@3xl / @4xl / @6xl",
+        "value": "48rem / 56rem / 72rem (container)",
+        "note": "Columnas de tabla adicionales; @6xl sube a texto base."
+      }
     ]
   },
   "components": [
@@ -49,7 +327,7 @@
       "refersTo": "button-primary",
       "description": "Acción principal de un diálogo o panel. Grafito sólido, 32px.",
       "html": "<button class=\"ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14\"/><path d=\"M12 5v14\"/></svg>Nueva reserva</button>",
-      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px 0 8px; font-family: 'Geist Variable', 'Geist', sans-serif; font-size: 14px; font-weight: 500; background: oklch(0.205 0 0); color: oklch(0.985 0 0); border: 1px solid transparent; border-radius: 10px; cursor: pointer; transition: background-color .15s, box-shadow .15s; } .ds-btn-primary:hover { background: oklch(0.205 0 0 / 0.8); } .ds-btn-primary:focus-visible { outline: none; border-color: oklch(0.708 0 0); box-shadow: 0 0 0 3px oklch(0.708 0 0 / 0.5); } .ds-btn-primary:active { transform: translateY(1px); }"
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px 0 8px; font-family: 'Geist Variable', 'Geist', sans-serif; font-size: 14px; font-weight: 500; background: oklch(0.205 0 0); color: oklch(0.985 0 0); border: 1px solid transparent; border-radius: 10px; cursor: pointer; transition: background-color .15s, box-shadow .15s; } .ds-btn-primary:hover { background: oklch(0.205 0 0 / 0.8); } .ds-btn-primary:focus-visible { outline: none; border-color: oklch(0.55 0 0); box-shadow: 0 0 0 3px oklch(0.55 0 0 / 0.5); } .ds-btn-primary:active { transform: translateY(1px); }"
     },
     {
       "name": "Botón outline",
@@ -57,7 +335,7 @@
       "refersTo": "button-outline",
       "description": "Acción secundaria y disparador de filtros.",
       "html": "<button class=\"ds-btn-outline\">Hoy</button>",
-      "css": ".ds-btn-outline { display: inline-flex; align-items: center; height: 32px; padding: 0 10px; font-family: 'Geist Variable', 'Geist', sans-serif; font-size: 14px; font-weight: 500; background: oklch(1 0 0); color: oklch(0.145 0 0); border: 1px solid oklch(0.922 0 0); border-radius: 10px; cursor: pointer; transition: background-color .15s, box-shadow .15s; } .ds-btn-outline:hover { background: oklch(0.97 0 0); } .ds-btn-outline:focus-visible { outline: none; border-color: oklch(0.708 0 0); box-shadow: 0 0 0 3px oklch(0.708 0 0 / 0.5); } .ds-btn-outline:active { transform: translateY(1px); }"
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; height: 32px; padding: 0 10px; font-family: 'Geist Variable', 'Geist', sans-serif; font-size: 14px; font-weight: 500; background: oklch(1 0 0); color: oklch(0.145 0 0); border: 1px solid oklch(0.922 0 0); border-radius: 10px; cursor: pointer; transition: background-color .15s, box-shadow .15s; } .ds-btn-outline:hover { background: oklch(0.97 0 0); } .ds-btn-outline:focus-visible { outline: none; border-color: oklch(0.55 0 0); box-shadow: 0 0 0 3px oklch(0.55 0 0 / 0.5); } .ds-btn-outline:active { transform: translateY(1px); }"
     },
     {
       "name": "Botón destructivo",
@@ -73,7 +351,7 @@
       "refersTo": "input",
       "description": "Input de 32px con borde trazo y halo de foco.",
       "html": "<label class=\"ds-field\"><span class=\"ds-field-label\">Teléfono</span><input class=\"ds-input\" placeholder=\"569XXXXXXXX\" /></label>",
-      "css": ".ds-field { display: grid; gap: 6px; font-family: 'Geist Variable', 'Geist', sans-serif; width: 240px; } .ds-field-label { font-size: 14px; font-weight: 500; color: oklch(0.145 0 0); } .ds-input { height: 32px; padding: 4px 10px; font: inherit; font-size: 14px; color: oklch(0.145 0 0); background: transparent; border: 1px solid oklch(0.922 0 0); border-radius: 10px; outline: none; transition: border-color .15s, box-shadow .15s; } .ds-input::placeholder { color: oklch(0.556 0 0); } .ds-input:focus-visible { border-color: oklch(0.708 0 0); box-shadow: 0 0 0 3px oklch(0.708 0 0 / 0.5); } .ds-input[aria-invalid=true] { border-color: oklch(0.577 0.245 27.325); box-shadow: 0 0 0 3px oklch(0.577 0.245 27.325 / 0.2); }"
+      "css": ".ds-field { display: grid; gap: 6px; font-family: 'Geist Variable', 'Geist', sans-serif; width: 240px; } .ds-field-label { font-size: 14px; font-weight: 500; color: oklch(0.145 0 0); } .ds-input { height: 32px; padding: 4px 10px; font: inherit; font-size: 14px; color: oklch(0.145 0 0); background: transparent; border: 1px solid oklch(0.922 0 0); border-radius: 10px; outline: none; transition: border-color .15s, box-shadow .15s; } .ds-input::placeholder { color: oklch(0.52 0 0); } .ds-input:focus-visible { border-color: oklch(0.55 0 0); box-shadow: 0 0 0 3px oklch(0.55 0 0 / 0.5); } .ds-input[aria-invalid=true] { border-color: oklch(0.577 0.245 27.325); box-shadow: 0 0 0 3px oklch(0.577 0.245 27.325 / 0.2); }"
     },
     {
       "name": "Badges de estado",
@@ -81,7 +359,7 @@
       "refersTo": "badge",
       "description": "Vocabulario de estados: tinte, punteado, tachado y sólido.",
       "html": "<div class=\"ds-badges\"><span class=\"ds-badge ds-b-ok\">confirmada</span><span class=\"ds-badge ds-b-pend\">pendiente</span><span class=\"ds-badge ds-b-entregada\">Entregada</span><span class=\"ds-badge ds-b-warn\">Entrega tardía</span><span class=\"ds-badge ds-b-bad\">Retrasada</span><span class=\"ds-badge ds-b-den\">denegada</span><span class=\"ds-badge ds-b-done\">completada</span><span class=\"ds-badge ds-b-mix\">estados mixtos</span></div>",
-      "css": ".ds-badges { display: flex; flex-wrap: wrap; gap: 6px; font-family: 'Geist Variable', 'Geist', sans-serif; } .ds-badge { display: inline-flex; align-items: center; height: 20px; padding: 2px 8px; font-size: 12px; font-weight: 500; white-space: nowrap; border: 1px solid transparent; border-radius: 26px; } .ds-b-ok { background: oklch(0.6 0.15 145 / 0.1); color: oklch(0.6 0.15 145); } .ds-b-pend { border: 1px dashed oklch(0.75 0.15 75); color: oklch(0.75 0.15 75); } .ds-b-entregada { background: oklch(0.205 0 0); color: oklch(0.985 0 0); } .ds-b-warn { background: oklch(0.75 0.15 75 / 0.1); color: oklch(0.75 0.15 75); } .ds-b-bad { background: oklch(0.577 0.245 27.325 / 0.1); color: oklch(0.577 0.245 27.325); } .ds-b-den { border-color: oklch(0.577 0.245 27.325 / 0.5); color: oklch(0.577 0.245 27.325); } .ds-b-done { background: oklch(0.97 0 0); color: oklch(0.205 0 0); } .ds-b-mix { background: oklch(0.75 0.15 75); color: oklch(0.145 0 0); }"
+      "css": ".ds-badges { display: flex; flex-wrap: wrap; gap: 6px; font-family: 'Geist Variable', 'Geist', sans-serif; } .ds-badge { display: inline-flex; align-items: center; height: 20px; padding: 2px 8px; font-size: 12px; font-weight: 500; white-space: nowrap; border: 1px solid transparent; border-radius: 26px; } .ds-b-ok { background: oklch(0.6 0.15 145 / 0.1); color: oklch(0.5 0.13 145); } .ds-b-pend { border: 1px dashed oklch(0.75 0.15 75); color: oklch(0.52 0.13 65); } .ds-b-entregada { background: oklch(0.205 0 0); color: oklch(0.985 0 0); } .ds-b-warn { background: oklch(0.75 0.15 75 / 0.1); color: oklch(0.52 0.13 65); } .ds-b-bad { background: oklch(0.577 0.245 27.325 / 0.1); color: oklch(0.53 0.22 27.325); } .ds-b-den { border-color: oklch(0.577 0.245 27.325 / 0.5); color: oklch(0.53 0.22 27.325); } .ds-b-done { background: oklch(0.97 0 0); color: oklch(0.205 0 0); } .ds-b-mix { border-color: oklch(0.75 0.15 75); color: oklch(0.52 0.13 65); }"
     },
     {
       "name": "Tarjeta KPI",
@@ -89,23 +367,23 @@
       "refersTo": "card",
       "description": "Tarjeta plana con anillo al 10%, 14px de radio y cifra display.",
       "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Reservas (30 días)</div><div class=\"ds-card-kpi\">128</div><div class=\"ds-card-desc\">Incluye pendientes y confirmadas</div></div>",
-      "css": ".ds-card { display: flex; flex-direction: column; gap: 4px; width: 240px; padding: 16px; font-family: 'Geist Variable', 'Geist', sans-serif; background: oklch(1 0 0); color: oklch(0.145 0 0); border-radius: 14px; box-shadow: 0 0 0 1px oklch(0.145 0 0 / 0.1); } .ds-card-title { font-size: 16px; font-weight: 500; line-height: 1.375; } .ds-card-kpi { font-size: 24px; font-weight: 700; line-height: 1.333; font-variant-numeric: tabular-nums; } .ds-card-desc { font-size: 14px; color: oklch(0.556 0 0); }"
+      "css": ".ds-card { display: flex; flex-direction: column; gap: 4px; width: 240px; padding: 16px; font-family: 'Geist Variable', 'Geist', sans-serif; background: oklch(1 0 0); color: oklch(0.145 0 0); border-radius: 14px; box-shadow: 0 0 0 1px oklch(0.145 0 0 / 0.1); } .ds-card-title { font-size: 16px; font-weight: 500; line-height: 1.375; } .ds-card-kpi { font-size: 24px; font-weight: 700; line-height: 1.333; font-variant-numeric: tabular-nums; } .ds-card-desc { font-size: 14px; color: oklch(0.52 0 0); }"
     },
     {
-      "name": "Encabezado de panel",
+      "name": "Título de panel",
       "kind": "custom",
-      "refersTo": "section-heading",
-      "description": "Encabezado susurrado: título en mayúsculas y color lápiz a la izquierda, filtros a la derecha.",
+      "refersTo": "page-title",
+      "description": "Un solo h1 de 20px en tinta a la izquierda; filtros y acciones a la derecha.",
       "html": "<div class=\"ds-panel-head\"><h2 class=\"ds-panel-h2\">Calendario de reservas</h2><button class=\"ds-panel-btn\">Activos y lugares</button></div>",
-      "css": ".ds-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; width: 520px; font-family: 'Geist Variable', 'Geist', sans-serif; } .ds-panel-h2 { margin: 0; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.025em; color: oklch(0.556 0 0); } .ds-panel-btn { height: 28px; padding: 0 10px; font: inherit; font-size: 13px; background: transparent; color: oklch(0.145 0 0); border: 1px solid oklch(0.922 0 0); border-radius: 8px; cursor: pointer; } .ds-panel-btn:hover { background: oklch(0.97 0 0); } .ds-panel-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.708 0 0 / 0.5); }"
+      "css": ".ds-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; width: 520px; font-family: 'Geist Variable', 'Geist', sans-serif; } .ds-panel-h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.025em; color: oklch(0.145 0 0); } .ds-panel-btn { height: 28px; padding: 0 10px; font: inherit; font-size: 13px; background: transparent; color: oklch(0.145 0 0); border: 1px solid oklch(0.922 0 0); border-radius: 8px; cursor: pointer; } .ds-panel-btn:hover { background: oklch(0.97 0 0); } .ds-panel-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.55 0 0 / 0.5); }"
     },
     {
       "name": "Chips de evento",
       "kind": "custom",
       "refersTo": "event-chip",
       "description": "Firma del sistema: una reserva en la celda del mes, con la piel de su estado.",
-      "html": "<div class=\"ds-cell\"><span class=\"ds-cell-day\">14</span><button class=\"ds-ev ds-ev-ok\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"/></svg><span class=\"ds-ev-h\">09:00</span><span class=\"ds-ev-t\">Cámara Sony A7</span></button><button class=\"ds-ev ds-ev-pend\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M20 10c0 5-8 12-8 12s-8-7-8-12a8 8 0 0 1 16 0Z\"/><circle cx=\"12\" cy=\"10\" r=\"3\"/></svg><span class=\"ds-ev-h\">11:30</span><span class=\"ds-ev-t\">Sala de edición</span></button><button class=\"ds-ev ds-ev-entregada\"><span class=\"ds-ev-h\">14:00</span><span class=\"ds-ev-t\">Trípode Manfrotto</span></button><button class=\"ds-ev ds-ev-cancel\"><span class=\"ds-ev-h\">16:00</span><span class=\"ds-ev-t\">Micrófono Rode</span></button></div>",
-      "css": ".ds-cell { display: flex; flex-direction: column; gap: 2px; width: 160px; padding: 4px; font-family: 'Geist Variable', 'Geist', sans-serif; border: 1px solid oklch(0.922 0 0); border-radius: 8px; background: oklch(1 0 0); } .ds-cell-day { font-size: 12px; font-weight: 500; color: oklch(0.145 0 0); padding: 0 2px 2px; } .ds-ev { display: flex; align-items: center; gap: 4px; width: 100%; padding: 2px 4px; font: inherit; font-size: 11px; line-height: 1.25; text-align: left; border: 1px solid; border-radius: 6px; cursor: pointer; transition: background-color .15s; } .ds-ev svg { flex-shrink: 0; } .ds-ev-h { flex-shrink: 0; font-variant-numeric: tabular-nums; opacity: .8; } .ds-ev-t { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .ds-ev-ok { border-color: oklch(0.6 0.15 145 / 0.4); background: oklch(0.6 0.15 145 / 0.1); color: oklch(0.6 0.15 145); } .ds-ev-ok:hover { background: oklch(0.6 0.15 145 / 0.2); } .ds-ev-pend { border-style: dashed; border-color: oklch(0.75 0.15 75); background: oklch(0.75 0.15 75 / 0.05); color: oklch(0.75 0.15 75); } .ds-ev-pend:hover { background: oklch(0.75 0.15 75 / 0.15); } .ds-ev-entregada { border-color: oklch(0.205 0 0 / 0.4); background: oklch(0.205 0 0 / 0.1); color: oklch(0.205 0 0); } .ds-ev-entregada:hover { background: oklch(0.205 0 0 / 0.2); } .ds-ev-cancel { border-color: oklch(0.577 0.245 27.325 / 0.4); background: oklch(0.577 0.245 27.325 / 0.1); color: oklch(0.577 0.245 27.325); text-decoration: line-through; } .ds-ev:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.708 0 0 / 0.5); }"
+      "html": "<div class=\"ds-cell\"><span class=\"ds-cell-day\">14</span><button class=\"ds-ev ds-ev-ok\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"/></svg><span class=\"ds-ev-t\">Cámara Sony A7</span><span class=\"ds-ev-h\">09:00</span></button><button class=\"ds-ev ds-ev-pend\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M20 10c0 5-8 12-8 12s-8-7-8-12a8 8 0 0 1 16 0Z\"/><circle cx=\"12\" cy=\"10\" r=\"3\"/></svg><span class=\"ds-ev-t\">Sala de edición</span><span class=\"ds-ev-h\">11:30</span></button><button class=\"ds-ev ds-ev-entregada\"><span class=\"ds-ev-t\">Trípode Manfrotto</span><span class=\"ds-ev-h\">14:00</span></button><button class=\"ds-ev ds-ev-cancel\"><span class=\"ds-ev-t\">Micrófono Rode</span><span class=\"ds-ev-h\">16:00</span></button></div>",
+      "css": ".ds-cell { display: flex; flex-direction: column; gap: 2px; width: 160px; padding: 4px; font-family: 'Geist Variable', 'Geist', sans-serif; border: 1px solid oklch(0.922 0 0); border-radius: 8px; background: oklch(1 0 0); } .ds-cell-day { font-size: 12px; font-weight: 500; color: oklch(0.145 0 0); padding: 0 2px 2px; } .ds-ev { display: flex; align-items: center; gap: 4px; width: 100%; padding: 2px 4px; font: inherit; font-size: 11px; line-height: 1.25; text-align: left; border: 1px solid; border-radius: 6px; cursor: pointer; transition: background-color .15s; } .ds-ev svg { flex-shrink: 0; } .ds-ev-h { flex-shrink: 0; font-variant-numeric: tabular-nums; opacity: .8; } .ds-ev-t { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .ds-ev-ok { border-color: oklch(0.6 0.15 145 / 0.4); background: oklch(0.6 0.15 145 / 0.1); color: oklch(0.5 0.13 145); } .ds-ev-ok:hover { background: oklch(0.6 0.15 145 / 0.2); } .ds-ev-pend { border-style: dashed; border-color: oklch(0.75 0.15 75); background: oklch(0.75 0.15 75 / 0.05); color: oklch(0.52 0.13 65); } .ds-ev-pend:hover { background: oklch(0.75 0.15 75 / 0.15); } .ds-ev-entregada { border-color: oklch(0.205 0 0 / 0.4); background: oklch(0.205 0 0 / 0.1); color: oklch(0.205 0 0); } .ds-ev-entregada:hover { background: oklch(0.205 0 0 / 0.2); } .ds-ev-cancel { border-color: oklch(0.577 0.245 27.325 / 0.4); background: oklch(0.577 0.245 27.325 / 0.1); color: oklch(0.577 0.245 27.325); text-decoration: line-through; } .ds-ev-cancel { color: oklch(0.53 0.22 27.325); } .ds-ev:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.55 0 0 / 0.5); }"
     },
     {
       "name": "Barra lateral",
@@ -113,7 +391,7 @@
       "refersTo": "nav",
       "description": "Navegación principal: cabecera de marca, ítems de 36px con icono y grupo desplegable.",
       "html": "<nav class=\"ds-nav\"><div class=\"ds-nav-brand\"><strong>LACS Reservas Bot</strong><span>Panel de monitoreo</span></div><a class=\"ds-nav-item\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M3 3v16a2 2 0 0 0 2 2h16\"/><path d=\"M18 17V9\"/><path d=\"M13 17V5\"/><path d=\"M8 17v-3\"/></svg>Métricas</a><a class=\"ds-nav-item is-active\" href=\"#\" aria-current=\"page\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/><path d=\"M16 2v4M8 2v4M3 10h18\"/></svg>Calendario</a><a class=\"ds-nav-item\" href=\"#\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect width=\"8\" height=\"4\" x=\"8\" y=\"2\" rx=\"1\"/><path d=\"M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2\"/></svg>Reservas</a></nav>",
-      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; width: 240px; padding: 8px; font-family: 'Geist Variable', 'Geist', sans-serif; background: oklch(0.985 0 0); border: 1px solid oklch(0.922 0 0); border-radius: 10px; } .ds-nav-brand { display: flex; flex-direction: column; padding: 6px 8px 10px; } .ds-nav-brand strong { font-size: 14px; font-weight: 600; color: oklch(0.145 0 0); } .ds-nav-brand span { font-size: 12px; color: oklch(0.556 0 0); } .ds-nav-item { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px; font-size: 18px; color: oklch(0.145 0 0); text-decoration: none; border-radius: 8px; transition: background-color .15s; } .ds-nav-item:hover { background: oklch(0.97 0 0); } .ds-nav-item.is-active { background: oklch(0.97 0 0); font-weight: 500; } .ds-nav-item:focus-visible { outline: none; box-shadow: 0 0 0 2px oklch(0.708 0 0); }"
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; width: 240px; padding: 8px; font-family: 'Geist Variable', 'Geist', sans-serif; background: oklch(0.985 0 0); border: 1px solid oklch(0.922 0 0); border-radius: 10px; } .ds-nav-brand { display: flex; flex-direction: column; padding: 6px 8px 10px; } .ds-nav-brand strong { font-size: 14px; font-weight: 600; color: oklch(0.145 0 0); } .ds-nav-brand span { font-size: 12px; color: oklch(0.52 0 0); } .ds-nav-item { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px; font-size: 18px; color: oklch(0.145 0 0); text-decoration: none; border-radius: 8px; transition: background-color .15s; } .ds-nav-item:hover { background: oklch(0.97 0 0); } .ds-nav-item.is-active { background: oklch(0.97 0 0); font-weight: 500; } .ds-nav-item:focus-visible { outline: none; box-shadow: 0 0 0 2px oklch(0.55 0 0); }"
     }
   ],
   "narrative": {
@@ -128,18 +406,47 @@
       "Modo claro y oscuro con paridad completa, alternados desde la barra lateral."
     ],
     "rules": [
-      { "name": "La Regla del Semáforo", "body": "El color cromático solo expresa el estado de un préstamo o el riesgo de una acción. Ningún encabezado, icono de navegación ni fondo decorativo lleva verde, ámbar o rojo.", "section": "colors" },
-      { "name": "La Regla de los Tokens", "body": "No se usan colores de la paleta de Tailwind (bg-red-500, text-green-600). Todo sale de un token semántico (success, warning, destructive, muted…) y así el modo oscuro funciona gratis. Hoy el código no tiene ni una excepción.", "section": "colors" },
-      { "name": "La Regla del Diez por Ciento", "body": "Los estados se pintan como tinte: fondo al 10%, borde al 40% y texto al 100% del color. El relleno sólido se reserva para las barras de la vista de tiempo y para estados mixtos, que tiene que gritar.", "section": "colors" },
-      { "name": "La Regla del Encabezado Susurrado", "body": "Los paneles no tienen un título grande. Se anuncian con una etiqueta en mayúsculas y color lápiz y dejan que los datos ocupen la vista.", "section": "typography" },
-      { "name": "La Regla de las Cifras Alineadas", "body": "Horas, contadores y columnas numéricas llevan tabular-nums.", "section": "typography" },
-      { "name": "La Regla del Mostrador Plano", "body": "Lo que vive en la página no proyecta sombra. Si algo necesita separarse, lleva un borde o un anillo al 10%.", "section": "elevation" }
+      {
+        "name": "La Regla del Semáforo",
+        "body": "El color cromático solo expresa el estado de un préstamo o el riesgo de una acción. Ningún encabezado, icono de navegación ni fondo decorativo lleva verde, ámbar o rojo.",
+        "section": "colors"
+      },
+      {
+        "name": "La Regla de los Tokens",
+        "body": "No se usan colores de la paleta de Tailwind (bg-red-500, text-green-600). Todo sale de un token semántico (success, warning, destructive, muted…) y así el modo oscuro funciona gratis. Hoy el código no tiene ni una excepción.",
+        "section": "colors"
+      },
+      {
+        "name": "La Regla del Diez por Ciento",
+        "body": "Los estados se pintan como tinte: fondo al 10%, borde al 40% y texto en el token *-texto del mismo color. El relleno sólido se reserva para las barras de la vista de tiempo.",
+        "section": "colors"
+      },
+      {
+        "name": "La Regla de las Cifras Alineadas",
+        "body": "Horas, contadores y columnas numéricas llevan tabular-nums.",
+        "section": "typography"
+      },
+      {
+        "name": "La Regla del Mostrador Plano",
+        "body": "Lo que vive en la página no proyecta sombra. Si algo necesita separarse, lleva un borde o un anillo al 10%.",
+        "section": "elevation"
+      },
+      {
+        "name": "La Regla del Texto Legible",
+        "body": "Los colores semánticos base son para rellenos, bordes, barras y puntos. Como texto sobre fondo claro no llegan a 4.5:1, así que el texto siempre usa text-success-text / text-warning-text / text-destructive-text (≥4.9:1). En modo oscuro esos tokens valen lo mismo que el color base.",
+        "section": "colors"
+      },
+      {
+        "name": "La Regla del Título Único",
+        "body": "Cada panel abre con un solo h1 de 20px en tinta; las secciones usan h2 de 14px. Nada en la barra lateral es más grande que el título de la página.",
+        "section": "typography"
+      }
     ],
     "dos": [
       "Do tomar todo color de un token semántico (success, warning, destructive, primary, muted, border) para que el modo oscuro funcione sin tocar nada.",
       "Do pintar los estados como tinte: fondo al 10%, borde al 40% y texto al 100% del color semántico.",
       "Do agregar un estado nuevo como una entrada más en ESTILO_ESTADO (chip, barra y badge) y combinar relleno, punteado y tachado antes de sumar un color nuevo.",
-      "Do abrir los paneles con el encabezado susurrado: h2 de 14px, peso 600, en mayúsculas, con tracking amplio y color lápiz.",
+      "Do abrir cada panel con un h1 de 20px, peso 600, en tinta; las secciones internas con h2 de 14px.",
       "Do mostrar el detalle de un elemento en un diálogo centrado con opción de editar.",
       "Do usar container queries (@3xl, @4xl, @6xl) para revelar columnas de tabla."
     ],
@@ -149,7 +456,8 @@
       "Don't poner sombra en tarjetas, tablas o superficies en reposo.",
       "Don't usar rojo sólido en botones destructivos; se usa el tinte al 10%.",
       "Don't mostrar detalles en un panel lateral (Sheet) cuando se puede usar un diálogo.",
-      "Don't introducir una segunda familia tipográfica ni títulos de panel grandes."
+      "Don't introducir una segunda familia tipográfica ni hacer la navegación más grande que el título de página.",
+      "Don't usar text-success, text-warning o text-destructive para texto: siempre sus variantes *-text."
     ]
   }
 }

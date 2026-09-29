@@ -10,7 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { usePolling } from "@/hooks/use-polling"
-import { actualizarUsuario, eliminarUsuario, fetchUsuarios, type CambiosUsuario, type Usuario } from "@/lib/api"
+import { actualizarUsuario, eliminarUsuario, etiquetaRol, fetchUsuarios, type CambiosUsuario, type Usuario } from "@/lib/api"
 import { formatearFechaHoraLACS } from "@/lib/fechas"
 
 import { UsuarioEditForm } from "./UsuarioEditForm"
@@ -46,7 +46,7 @@ function ListaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar, onElim
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            {u.rol} · {u.activo ? "activo" : "inactivo"} · {formatearFechaHoraLACS(u.creado_en)}
+            {etiquetaRol(u.rol)} · {u.activo ? "activo" : "inactivo"} · {formatearFechaHoraLACS(u.creado_en)}
           </p>
           {codigoYCedula(u) && (
             <p className="text-xs text-muted-foreground">{codigoYCedula(u)}</p>
@@ -110,7 +110,7 @@ function TablaUsuarios({ usuarios, editandoId, onToggleEditar, onGuardar, onElim
                 <TableCell className="hidden @4xl:table-cell @6xl:py-3">
                   {u.cedula || "-"}
                 </TableCell>
-                <TableCell className="@6xl:py-3">{u.rol}</TableCell>
+                <TableCell className="@6xl:py-3">{etiquetaRol(u.rol)}</TableCell>
                 <TableCell className="@6xl:py-3">{u.activo ? "sí" : "no"}</TableCell>
                 <TableCell className="hidden text-muted-foreground @5xl:table-cell @6xl:py-3">
                   {formatearFechaHoraLACS(u.creado_en)}
@@ -164,16 +164,16 @@ export function ListaUsuariosPanel() {
   return (
     <div className="@container space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <h1 className="text-xl font-semibold tracking-tight">
           Usuarios registrados
-        </h2>
+        </h1>
         <Button size="sm" variant="outline" onClick={() => reload()}>
           Refrescar
         </Button>
       </div>
 
       {error && !data && (
-        <p className="text-sm text-destructive">No se pudieron cargar los usuarios.</p>
+        <p className="text-sm text-destructive-text">No se pudieron cargar los usuarios.</p>
       )}
 
       {data && data.length === 0 && (

@@ -59,7 +59,7 @@ export function VistaCalendarioExcepciones({
         </div>
       </div>
 
-      {error && <p className="text-sm text-destructive">No se pudo cargar: {error}</p>}
+      {error && <p className="text-sm text-destructive-text">No se pudo cargar: {error}</p>}
 
       {cargando && !mapaDias.size ? (
         <Skeleton className="h-96 w-full" />

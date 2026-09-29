@@ -1,14 +1,36 @@
 const BASE = "/dashboard/api"
 
+// fetch() solo rechaza cuando no hubo respuesta (servidor caído, red cortada);
+// su TypeError dice "Failed to fetch", que no le sirve a nadie en un toast.
+async function conectar(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch {
+    throw new Error("No hay conexión con el servidor. Revisa la red e intenta de nuevo.")
+  }
+}
+
+// El backend manda `{error}` en español para los errores esperados; esto es
+// solo el respaldo cuando no hay cuerpo (un 500, un 502 de nginx, etc.).
+function errorHttp(status: number, data: { error?: string } | null): Error {
+  if (data?.error) return new Error(data.error)
+  if (status === 401 || status === 403) {
+    return new Error("La sesión del panel expiró. Recarga la página para volver a entrar.")
+  }
+  if (status === 404) return new Error("Lo que buscas ya no existe. Recarga para ver los datos al día.")
+  if (status >= 500) {
+    return new Error(`El servidor falló al procesar el pedido (error ${status}). Intenta de nuevo en un momento.`)
+  }
+  return new Error(`El servidor rechazó el pedido (error ${status}).`)
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
+  const resp = await conectar(`${BASE}${path}`, {
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
     ...init,
   })
   const data = await resp.json().catch(() => null)
-  if (!resp.ok) {
-    throw new Error((data && data.error) || `HTTP ${resp.status}`)
-  }
+  if (!resp.ok) throw errorHttp(resp.status, data)
   return data as T
 }
 
@@ -72,6 +94,17 @@ export function fetchMetricas() {
 // --- Usuarios --------------------------------------------------------------
 
 export type Rol = "estudiante" | "staff" | "admin"
+
+const ETIQUETA_ROL: Record<Rol, string> = {
+  estudiante: "Estudiante",
+  staff: "Staff",
+  admin: "Administrador",
+}
+
+export function etiquetaRol(rol: string | null | undefined): string {
+  if (!rol) return "-"
+  return ETIQUETA_ROL[rol as Rol] ?? rol
+}
 
 export type Usuario = {
   id: number
@@ -205,8 +238,11 @@ export type ReservasEnVentana = {
   ventana: VentanaReservas
 }
 
-export function fetchReservasVentana(ventana: VentanaReservas) {
-  return request<ReservasEnVentana>(`/reservas?ventana=${ventana}`)
+// `incluirAbiertas`: suma los préstamos que siguen afuera (entregada /
+// no_devuelta) aunque su fin quede antes de la ventana -- ver la vista "Hoy".
+export function fetchReservasVentana(ventana: VentanaReservas, incluirAbiertas = false) {
+  const extra = incluirAbiertas ? "&incluir_abiertas=1" : ""
+  return request<ReservasEnVentana>(`/reservas?ventana=${ventana}${extra}`)
 }
 
 // La conversación de WhatsApp de una sesión NO viaja dentro de `Sesion`: el
@@ -300,10 +336,10 @@ export function eliminarReservaGrupo(grupoId: number) {
 // aparte hace el mismo manejo de errores (intenta leer `{error}` del cuerpo
 // para que el toast diga algo útil) pero devuelve el blob si todo salió bien.
 export async function descargarActaPdf(grupoId: number): Promise<Blob> {
-  const resp = await fetch(`${BASE}/reservas/grupo/${grupoId}/pdf`)
+  const resp = await conectar(`${BASE}/reservas/grupo/${grupoId}/pdf`)
   if (!resp.ok) {
     const data = await resp.json().catch(() => null)
-    throw new Error((data && data.error) || `HTTP ${resp.status}`)
+    throw errorHttp(resp.status, data)
   }
   return resp.blob()
 }
@@ -369,10 +405,10 @@ export function obtenerEstadoActa(grupoId: number) {
 
 // Igual que descargarActaPdf: respuesta binaria, no pasa por `request<T>`.
 export async function descargarActaHistorica(grupoId: number, actaId: number): Promise<Blob> {
-  const resp = await fetch(`${BASE}/reservas/grupo/${grupoId}/actas/${actaId}/pdf`)
+  const resp = await conectar(`${BASE}/reservas/grupo/${grupoId}/actas/${actaId}/pdf`)
   if (!resp.ok) {
     const data = await resp.json().catch(() => null)
-    throw new Error((data && data.error) || `HTTP ${resp.status}`)
+    throw errorHttp(resp.status, data)
   }
   return resp.blob()
 }
@@ -403,13 +439,13 @@ export async function registrarActa(
   if (datos.nota) formData.append("nota", datos.nota)
   if (datos.equipos) formData.append("equipos", datos.equipos.join(","))
 
-  const resp = await fetch(`${BASE}/reservas/grupo/${grupoId}/actas`, {
+  const resp = await conectar(`${BASE}/reservas/grupo/${grupoId}/actas`, {
     method: "POST",
     body: formData,
   })
   const data = await resp.json().catch(() => null)
   if (!resp.ok) {
-    throw new Error((data && data.error) || `HTTP ${resp.status}`)
+    throw errorHttp(resp.status, data)
   }
   return data as { reservas: Sesion[]; acta: ActaRegistrada }
 }

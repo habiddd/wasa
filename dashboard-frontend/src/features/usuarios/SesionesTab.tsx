@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/table"
 import { EstadoReservaBadge } from "@/features/calendario/EstadoBadge"
 import { usePolling } from "@/hooks/use-polling"
-import { fetchSesiones, type Sesion } from "@/lib/api"
+import { etiquetaRol, fetchSesiones, type Sesion } from "@/lib/api"
 import { formatearFechaHoraLACS } from "@/lib/fechas"
 
 import { ConversacionSesionDialog } from "./ConversacionSesionDialog"
@@ -74,7 +74,7 @@ function ListaSesiones({ sesiones, onAbrir }: { sesiones: Sesion[]; onAbrir: (s:
             <EstadoReservaBadge estado={s.estado} />
           </span>
           <span className="block text-xs text-muted-foreground">
-            {s.usuario_rol} · {s.recurso_nombre || "-"} · {usoDe(s)}
+            {etiquetaRol(s.usuario_rol)} · {s.recurso_nombre || "-"} · {usoDe(s)}
           </span>
           <span className="block text-xs text-muted-foreground">
             {fecha(s.inicio)} – {fecha(s.fin)}
@@ -114,7 +114,7 @@ function TablaSesiones({ sesiones, onAbrir }: { sesiones: Sesion[]; onAbrir: (s:
           <TableRow key={s.id} {...propsFilaClicable(onAbrir, s)}>
             <TableCell className="whitespace-normal @3xl:whitespace-nowrap @6xl:py-3">
               <p>{s.usuario_nombre || s.usuario_telefono}</p>
-              <p className="text-xs text-muted-foreground">{s.usuario_rol}</p>
+              <p className="text-xs text-muted-foreground">{etiquetaRol(s.usuario_rol)}</p>
               <p className="mt-0.5 text-xs text-muted-foreground @3xl:hidden">
                 {s.recurso_nombre || "-"} · {usoDe(s)}
               </p>
@@ -199,7 +199,7 @@ function SesionesPorUsuario({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               {grupo.nombre}
-              <Badge variant="outline">{grupo.rol}</Badge>
+              <Badge variant="outline">{etiquetaRol(grupo.rol)}</Badge>
               <span className="text-xs font-normal text-muted-foreground">
                 {grupo.sesiones.length} sesión{grupo.sesiones.length === 1 ? "" : "es"}
               </span>
@@ -239,9 +239,9 @@ export function SesionesTab() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <h1 className="text-xl font-semibold tracking-tight">
           Sesiones de uso
-        </h2>
+        </h1>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={orden} onValueChange={(v) => setOrden(v as Orden)}>
             <SelectTrigger size="sm">
@@ -260,7 +260,7 @@ export function SesionesTab() {
               <SelectItem value="todos">Todas las categorías</SelectItem>
               {roles.map((r) => (
                 <SelectItem key={r} value={r}>
-                  {r}
+                  {etiquetaRol(r)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -280,7 +280,7 @@ export function SesionesTab() {
       )}
 
       {error && !data && (
-        <p className="text-sm text-destructive">No se pudieron cargar las sesiones.</p>
+        <p className="text-sm text-destructive-text">No se pudieron cargar las sesiones.</p>
       )}
 
       {data &&

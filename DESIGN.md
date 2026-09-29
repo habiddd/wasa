@@ -7,13 +7,22 @@ colors:
   papel: "oklch(1 0 0)"
   papel-lateral: "oklch(0.985 0 0)"
   niebla: "oklch(0.97 0 0)"
-  lapiz: "oklch(0.556 0 0)"
+  lapiz: "oklch(0.52 0 0)"
   trazo: "oklch(0.922 0 0)"
-  anillo: "oklch(0.708 0 0)"
+  anillo: "oklch(0.55 0 0)"
   verde-confirmado: "oklch(0.6 0.15 145)"
   ambar-pendiente: "oklch(0.75 0.15 75)"
   rojo-incidencia: "oklch(0.577 0.245 27.325)"
+  verde-confirmado-texto: "oklch(0.5 0.13 145)"
+  ambar-pendiente-texto: "oklch(0.52 0.13 65)"
+  rojo-incidencia-texto: "oklch(0.53 0.22 27.325)"
 typography:
+  page-title:
+    fontFamily: "'Geist Variable', sans-serif"
+    fontSize: "1.25rem"
+    fontWeight: 600
+    lineHeight: 1.4
+    letterSpacing: "-0.025em"
   display:
     fontFamily: "'Geist Variable', sans-serif"
     fontSize: "1.5rem"
@@ -26,9 +35,9 @@ typography:
     lineHeight: 1.375
   nav:
     fontFamily: "'Geist Variable', sans-serif"
-    fontSize: "1.125rem"
+    fontSize: "0.875rem"
     fontWeight: 400
-    lineHeight: 1.556
+    lineHeight: 1.429
   body:
     fontFamily: "'Geist Variable', sans-serif"
     fontSize: "0.875rem"
@@ -39,7 +48,6 @@ typography:
     fontSize: "0.875rem"
     fontWeight: 600
     lineHeight: 1.429
-    letterSpacing: "0.025em"
   caption:
     fontFamily: "'Geist Variable', sans-serif"
     fontSize: "0.75rem"
@@ -104,17 +112,20 @@ components:
     padding: "2px 8px"
     height: "20px"
   badge-confirmada:
-    textColor: "{colors.verde-confirmado}"
+    textColor: "{colors.verde-confirmado-texto}"
   badge-pendiente:
-    textColor: "{colors.ambar-pendiente}"
+    textColor: "{colors.ambar-pendiente-texto}"
   badge-incidencia:
-    textColor: "{colors.rojo-incidencia}"
+    textColor: "{colors.rojo-incidencia-texto}"
   event-chip:
     typography: "{typography.micro}"
     rounded: "{rounded.sm}"
     padding: "2px 4px"
+  page-title:
+    textColor: "{colors.tinta}"
+    typography: "{typography.page-title}"
   section-heading:
-    textColor: "{colors.lapiz}"
+    textColor: "{colors.tinta}"
     typography: "{typography.label}"
 ---
 
@@ -147,7 +158,7 @@ Paleta acromática de papel y grafito, con tres acentos semánticos que se usan 
 
 ### Tertiary (semánticos de estado)
 - **Verde Confirmado** (`verde-confirmado`): reserva `confirmada`. Chip con tinte al 10% y borde al 40%, y barra sólida en la vista de tiempo. En oscuro sube a oklch(0.7 0.17 145).
-- **Ámbar Pendiente** (`ambar-pendiente`): `pendiente` (borde punteado), `no_show` y `entrega tardía` (tinte), `estados mixtos` (sólido, con texto en tinta). En oscuro sube a oklch(0.8 0.16 75).
+- **Ámbar Pendiente** (`ambar-pendiente`): `pendiente` (borde punteado), `no_show` y `entrega tardía` (tinte), `estados mixtos` (solo contorno sólido, para distinguirlo del punteado de pendiente). En oscuro sube a oklch(0.8 0.16 75).
 - **Rojo Incidencia** (`rojo-incidencia`): `cancelada` (tinte + tachado), `denegada` (solo borde + tachado), `no_devuelta` y `Retrasada`, además de acciones destructivas. En oscuro pasa a oklch(0.704 0.191 22.216).
 
 ### Neutral
@@ -155,16 +166,18 @@ Paleta acromática de papel y grafito, con tres acentos semánticos que se usan 
 - **Papel** (`papel`): fondo de la app, de las tarjetas y de los popovers.
 - **Papel Lateral** (`papel-lateral`): fondo de la barra lateral, un punto por debajo del papel.
 - **Niebla** (`niebla`): superficies `muted`/`secondary`/`accent`: hover de botones fantasma, cabecera de la grilla del calendario al 40% y chip de `completada`.
-- **Lápiz** (`lapiz`): texto secundario, descripciones, encabezados de sección y barra de `completada`/`devuelta_tarde`.
+- **Lápiz** (`lapiz`): 0.52 y no el 0.556 de shadcn, para que el texto secundario pase 4.5:1 también sobre `niebla` (5.0:1). Texto secundario, descripciones, encabezados de sección y barra de `completada`/`devuelta_tarde`.
 - **Trazo** (`trazo`): bordes y contorno de inputs. En oscuro es blanco al 10% (bordes) y al 15% (inputs).
-- **Anillo** (`anillo`): anillo de foco, siempre al 50% de opacidad.
+- **Anillo** (`anillo`): anillo de foco. El borde sólido de foco da 4.9:1 sobre papel (el mínimo para indicadores es 3:1); el halo va al 50% encima.
 
 ### Named Rules
 **La Regla del Semáforo.** El color cromático solo expresa el estado de un préstamo o el riesgo de una acción. Ningún encabezado, icono de navegación ni fondo decorativo lleva verde, ámbar o rojo.
 
 **La Regla de los Tokens.** No se usan colores de la paleta de Tailwind (`bg-red-500`, `text-green-600`). Todo sale de un token semántico (`success`, `warning`, `destructive`, `muted`…) y así el modo oscuro funciona gratis. Hoy el código no tiene ni una excepción.
 
-**La Regla del Diez por Ciento.** Los estados se pintan como tinte: fondo al 10%, borde al 40% y texto al 100% del color. El relleno sólido se reserva para las barras de la vista de tiempo y para `estados mixtos`, que tiene que gritar.
+**La Regla del Diez por Ciento.** Los estados se pintan como tinte: fondo al 10%, borde al 40% y texto en el token `*-texto` del mismo color. El relleno sólido se reserva para las barras de la vista de tiempo.
+
+**La Regla del Texto Legible.** Los colores semánticos base (`verde-confirmado`, `ambar-pendiente`, `rojo-incidencia`) son para rellenos, bordes, barras y puntos. Como texto sobre fondo claro no llegan a 4.5:1 (ámbar 2.1, verde 3.3, rojo 4.0 sobre su tinte), así que el texto siempre usa `text-success-text` / `text-warning-text` / `text-destructive-text`, que dan ≥4.9:1. En modo oscuro esos tokens valen lo mismo que el color base, que ya pasa.
 
 ## Typography
 
@@ -175,15 +188,16 @@ Paleta acromática de papel y grafito, con tres acentos semánticos que se usan 
 
 ### Hierarchy
 - **Display** (700, 1.5rem, 1.333): cifras KPI de Métricas ("reservas 30d", "bloqueadas 30d"). Es lo único grande de la app.
-- **Nav** (400, 1.125rem): ítems de primer nivel de la barra lateral. Son más grandes que el cuerpo para que la navegación sea fácil de tocar y escanear.
+- **Page title** (600, 1.25rem, tracking -0.025em, tinta): el `h1` de cada panel ("Hoy", "Calendario de reservas"). Uno por panel, siempre arriba a la izquierda.
+- **Nav** (400, 0.875rem): ítems de la barra lateral. Van por debajo del título de página: la navegación acompaña, no compite.
 - **Title** (500, 1rem, 1.375): títulos de tarjeta y de diálogo.
-- **Label** (600, 0.875rem, tracking 0.025em, MAYÚSCULAS, color lápiz): el encabezado `h2` de cada panel ("CALENDARIO DE RESERVAS"). Es el mismo patrón en los ocho paneles.
+- **Label** (600, 0.875rem, tinta): encabezados `h2` de sección dentro de un panel ("Atrasados", "Últimas interacciones del bot"), con el contador al lado en peso normal.
 - **Body** (400, 0.875rem, 1.429): tablas, formularios, cuerpo de tarjetas y diálogos. Los inputs suben a 16px en móvil para que iOS no haga zoom.
 - **Caption** (400, 0.75rem): metadatos bajo una fila, badges y cabeceras de la grilla del calendario. Es el tamaño más usado de la app.
 - **Micro** (400, 11px, cifras tabulares): chips de evento dentro de las celdas del mes.
 
 ### Named Rules
-**La Regla del Encabezado Susurrado.** Los paneles no tienen un título grande. Se anuncian con una etiqueta en mayúsculas y color lápiz y dejan que los datos ocupen la vista.
+**La Regla del Título Único.** Cada panel abre con un solo `h1` de 20px en tinta; las secciones usan `h2` de 14px. Nada en la barra lateral es más grande que el título de la página.
 
 **La Regla de las Cifras Alineadas.** Horas, contadores y columnas numéricas llevan `tabular-nums`.
 
@@ -239,12 +253,12 @@ Son compactos y discretos: no compiten con los datos.
 - **Error / Disabled:** con `aria-invalid`, borde rojo y halo rojo al 20%. Deshabilitado queda al 50% de opacidad sobre fondo input.
 
 ### Navigation
-- **Style:** la barra lateral usa el fondo papel lateral. La cabecera lleva el nombre "LACS Reservas Bot" (600, 14px) y el subtítulo "Panel de monitoreo" (caption, lápiz). Los ítems miden 36px de alto, con texto nav (18px) y un icono Lucide.
+- **Style:** la barra lateral usa el fondo papel lateral. La cabecera lleva el nombre "LACS Reservas Bot" (600, 14px) y el subtítulo "Panel de monitoreo" (caption, lápiz). Los ítems miden 36px de alto, con texto nav (14px) y un icono Lucide. "Hoy" es la primera entrada y la pestaña de inicio.
 - **Estados:** el ítem activo lleva fondo `sidebar-accent`. Los grupos muestran un chevron que gira 90° al abrirse. Retraída, cada ítem muestra un tooltip con su nombre.
-- **Pie:** el conmutador de tema claro/oscuro.
+- **Pie:** el grupo Servicios (Estado, QR / WhatsApp) con un **punto de salud** sobre su icono (verde si todo funciona, rojo si algo falla; visible también con la barra retraída) y el conmutador de tema claro/oscuro. La infraestructura no ocupa el menú principal.
 
 ### Chip de evento (signature)
-Es la pieza que define el sistema. Cada reserva en la vista de mes es un botón de ancho completo con esquinas de 6px, texto micro (11px), un icono de tipo (caja para activos, pin para lugares), la hora con cifras tabulares al 80% de opacidad y el nombre truncado. Su piel sale de `ESTILO_ESTADO`:
+Es la pieza que define el sistema. Cada reserva en la vista de mes es un botón de ancho completo con esquinas de 6px, texto micro (11px), un icono de tipo (caja para activos, pin para lugares), el nombre (que se trunca primero) y al final la hora con cifras tabulares al 80% de opacidad, que nunca se recorta. Su piel sale de `ESTILO_ESTADO`:
 - **Sólido tintado:** confirmada (verde), no_show (ámbar), entregada (grafito), cancelada y no_devuelta (rojo).
 - **Punteado:** pendiente (borde ámbar punteado y fondo al 5%).
 - **Tachado:** cancelada y denegada. Denegada es solo borde, sin relleno.
@@ -252,13 +266,34 @@ Es la pieza que define el sistema. Cada reserva en la vista de mes es un botón 
 
 En la vista de tiempo, el mismo estado se traduce a una **barra**: sólida para los estados firmes y solo con borde para pendiente y denegada. Al pasar el cursor aparece un tooltip con el detalle, y el clic abre un diálogo centrado (nunca un panel lateral).
 
+### Leyenda de estados
+Es un `<details>` nativo bajo la barra del calendario ("Qué significa cada color"). Muestra los nueve chips reales en el orden de vida del préstamo (Pendiente → Confirmada → Entregada → Completada → Devuelta tarde → No devuelta → No se presentó → Cancelada → Denegada), sin su hover, y después el icono de activo y el de lugar. Una segunda fila explica, con los badges reales, las marcas que no son estados propios: Parcial, Estados mixtos, Retrasada y Entrega tardía. Un estado nuevo entra en esta lista al mismo tiempo que en `ESTILO_ESTADO`.
+
+### Vista "Hoy" (signature)
+Es la pantalla de inicio del mostrador. Lleva un `h1` "Hoy" con la fecha larga y cuatro secciones en orden de urgencia: **Retrasados y no devueltos** (incluye los `no_devuelta` de cualquier fecha), **Por entregar hoy**, **Por recibir hoy** y **Por confirmar**. Cada reserva cae en la primera sección que le corresponde y nunca aparece dos veces.
+- **Encabezados de sección:** un `h2` con el contador al lado. El contador de "Retrasados y no devueltos" va en rojo si es mayor que cero.
+- **Filas:** una lista con bordes (`divide-y`) sin tarjetas. Cada fila tiene:
+  - una columna de hora con el tiempo relativo ("en 20 min"): rojo si ya venció y ámbar si falta menos de una hora;
+  - los activos y el estudiante, que al hacer clic abren el diálogo de detalle;
+  - la acción del paso siguiente como botón principal: "Firmar entrega", "Firmar devolución" o "Revisar y confirmar".
+- **Vacíos:** una sección vacía es una línea tranquila ("Nada atrasado."), sin recuadro.
+
+### Acta firmada
+Es un asistente de 4 pasos en diálogo. Una vez que hay algún trazo de firma, **nada lo cierra sin preguntar**: Escape, el clic afuera y "Cancelar" abren "¿Descartar las firmas?", con "Seguir firmando" (outline) y "Descartar firmas" (tinte rojo). El nombre y la cédula de quien firma por la LACS se recuerdan en el navegador después de cada acta registrada.
+
+### Buscador de Reservas
+Es un input de búsqueda de 288px con icono de lupa, a la izquierda de los filtros. Busca en el cliente, sin tildes ni mayúsculas, por estudiante, teléfono, código, número de reserva, activo o placa, y se combina con los filtros (los contadores del select también lo reflejan). Si no hay resultados, lo dice con la consulta citada y ofrece "Limpiar búsqueda".
+
+### Pie del detalle de reserva
+"Eliminar reserva" queda sola a la izquierda, con tinte rojo. A la derecha, de menor a mayor peso, van "Editar reserva" y **una sola** acción principal, que es el siguiente paso del préstamo: "Confirmar todo" si hay pendientes; si no, "Firmar entrega" o "Firmar devolución".
+
 ## Do's and Don'ts
 
 ### Do:
 - **Do** tomar todo color de un token semántico (`success`, `warning`, `destructive`, `primary`, `muted`, `border`) para que el modo oscuro funcione sin tocar nada.
 - **Do** pintar los estados como tinte: fondo al 10%, borde al 40% y texto al 100% del color semántico.
 - **Do** agregar un estado nuevo como una entrada más en `ESTILO_ESTADO` (chip, barra y badge) y combinar relleno, punteado y tachado antes de sumar un color nuevo.
-- **Do** abrir los paneles con el encabezado susurrado: `h2` de 14px, peso 600, en mayúsculas, con tracking amplio y color lápiz.
+- **Do** abrir cada panel con un `h1` de 20px, peso 600, en tinta; las secciones internas con `h2` de 14px.
 - **Do** mostrar el detalle de un elemento en un diálogo centrado con opción de editar.
 - **Do** usar container queries (`@3xl`, `@4xl`, `@6xl`) para revelar columnas de tabla.
 
@@ -268,4 +303,5 @@ En la vista de tiempo, el mismo estado se traduce a una **barra**: sólida para 
 - **Don't** poner sombra en tarjetas, tablas o superficies en reposo.
 - **Don't** usar rojo sólido en botones destructivos; se usa el tinte al 10%.
 - **Don't** mostrar detalles en un panel lateral (`Sheet`) cuando se puede usar un diálogo.
-- **Don't** introducir una segunda familia tipográfica ni títulos de panel grandes.
+- **Don't** introducir una segunda familia tipográfica ni hacer la navegación más grande que el título de página.
+- **Don't** usar `text-success`, `text-warning` o `text-destructive` para texto: siempre sus variantes `*-text`.

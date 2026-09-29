@@ -92,7 +92,7 @@ export function NuevaExcepcionDialog({
             </div>
           </div>
           {rangoInvalido && (
-            <p className="text-xs text-destructive">
+            <p className="text-xs text-destructive-text">
               "Hasta" debe ser igual o después de "Desde".
             </p>
           )}

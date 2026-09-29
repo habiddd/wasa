@@ -18,13 +18,15 @@
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  /* 0.52 y no el 0.556 de shadcn: sobre `muted` (chips de completada)
+     daba 4.3:1; así queda en 5.0:1, y 5.5:1 sobre blanco. */
+  --muted-foreground: oklch(0.52 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --ring: oklch(0.55 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -37,12 +39,19 @@
   --sidebar-accent: oklch(0.97 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-ring: oklch(0.55 0 0);
 
   --success: oklch(0.6 0.15 145);
   --success-foreground: oklch(0.985 0 0);
   --warning: oklch(0.75 0.15 75);
   --warning-foreground: oklch(0.145 0 0);
+
+  /* Texto semántico sobre fondo claro: los colores de arriba sirven para
+     rellenos, bordes y barras, pero como texto sobre su propio tinte al 10%
+     no llegan a 4.5:1 (ámbar 2.1, verde 3.3, rojo 4.0). Estos sí (≥4.9). */
+  --success-text: oklch(0.5 0.13 145);
+  --warning-text: oklch(0.52 0.13 65);
+  --destructive-text: oklch(0.53 0.22 27.325);
 }
 
 .dark {
@@ -71,8 +80,8 @@
   --chart-5: oklch(0.269 0 0);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.922 0 0);
+  --sidebar-primary-foreground: oklch(0.205 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
@@ -82,6 +91,12 @@
   --success-foreground: oklch(0.145 0 0);
   --warning: oklch(0.8 0.16 75);
   --warning-foreground: oklch(0.145 0 0);
+
+  /* Sobre fondo oscuro los colores base ya pasan como texto (≥5.3:1 incluso
+     sobre su tinte al 20%). */
+  --success-text: var(--success);
+  --warning-text: var(--warning);
+  --destructive-text: var(--destructive);
 }
 
 @theme inline {
@@ -124,11 +139,31 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-success-text: var(--success-text);
+  --color-warning-text: var(--warning-text);
+  --color-destructive-text: var(--destructive-text);
   --font-heading: var(--font-sans);
   --font-sans: 'Geist Variable', sans-serif;
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Con movimiento reducido, diálogos y menús aparecen solo con fundido: sin el
+   zoom-in-95 ni el deslizamiento de tw-animate, pero sin perder la señal de
+   que algo se abrió o cerró. !important porque las clases zoom-in-95 /
+   slide-in-from-* fijan estas variables con más especificidad que `*`. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    --tw-enter-scale: 1 !important;
+    --tw-exit-scale: 1 !important;
+    --tw-enter-translate-x: 0 !important;
+    --tw-enter-translate-y: 0 !important;
+    --tw-exit-translate-x: 0 !important;
+    --tw-exit-translate-y: 0 !important;
+  }
 }
 
 @layer base {

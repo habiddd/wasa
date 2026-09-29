@@ -23,18 +23,18 @@ export const ESTILO_ORIGEN: Record<
   },
   festivo: {
     etiqueta: "Festivo",
-    celda: "border-warning/40 bg-warning/10 text-warning",
-    badge: "border-warning/40 bg-warning/10 text-warning",
+    celda: "border-warning/40 bg-warning/10 text-warning-text",
+    badge: "border-warning/40 bg-warning/10 text-warning-text",
   },
   manual: {
     etiqueta: "Bloqueo manual",
-    celda: "border-destructive/40 bg-destructive/10 text-destructive",
-    badge: "border-destructive/40 bg-destructive/10 text-destructive",
+    celda: "border-destructive/40 bg-destructive/10 text-destructive-text",
+    badge: "border-destructive/40 bg-destructive/10 text-destructive-text",
   },
   desbloqueada: {
     etiqueta: "Desbloqueada",
-    celda: "border-dashed border-success bg-success/5 text-success",
-    badge: "border-dashed border-success bg-success/5 text-success",
+    celda: "border-dashed border-success bg-success/5 text-success-text",
+    badge: "border-dashed border-success bg-success/5 text-success-text",
   },
 }
 

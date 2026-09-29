@@ -75,7 +75,7 @@ export function ReglasCard({ version, onCambio }: { version: number; onCambio: (
         {cargando && !reglas ? (
           <Skeleton className="h-24 w-full" />
         ) : error && !reglas ? (
-          <p className="text-sm text-destructive">No se pudieron cargar las reglas: {error}</p>
+          <p className="text-sm text-destructive-text">No se pudieron cargar las reglas: {error}</p>
         ) : (
           <>
             <div className="flex flex-wrap gap-x-4 gap-y-2">
@@ -108,7 +108,7 @@ export function ReglasCard({ version, onCambio }: { version: number; onCambio: (
               Las excepciones de un día concreto mandan sobre estas reglas.
             </p>
             {los7Bloqueados && (
-              <p className="text-xs text-destructive">
+              <p className="text-xs text-destructive-text">
                 No se pueden bloquear los 7 días de la semana.
               </p>
             )}

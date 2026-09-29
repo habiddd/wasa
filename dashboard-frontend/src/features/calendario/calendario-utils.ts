@@ -261,8 +261,8 @@ export function tooltipEvento(evento: EventoCalendario) {
 
 /** Lo que dice el badge de estado de una reserva completa. */
 export function etiquetaEstadoEvento(evento: EventoCalendario) {
-  if (evento.parcial) return "parcial"
-  return evento.estadosMixtos ? "estados mixtos" : evento.estado
+  if (evento.parcial) return "Parcial"
+  return evento.estadosMixtos ? "Estados mixtos" : etiquetaEstado(evento.estado)
 }
 
 /** "N.º 8" o "N.º 8, 9" cuando el evento junta dos reservas del mismo horario. */
@@ -402,8 +402,13 @@ function capitalizar(texto: string) {
   return texto.charAt(0).toUpperCase() + texto.slice(1)
 }
 
+/** Intl es-CO escribe "p. m." (con espacio duro); el dashboard usa "p.m." en todas partes. */
+export function normalizarAmPm(texto: string) {
+  return texto.replace(/([ap])\.\s?m\./g, "$1.m.")
+}
+
 export function hora(fecha: Date) {
-  return HORA.format(fecha)
+  return normalizarAmPm(HORA.format(fecha))
 }
 
 /**
@@ -433,7 +438,7 @@ export function horaCompacta(fecha: Date) {
 }
 
 export function fechaHora(fecha: Date) {
-  return `${capitalizar(FECHA_LARGA.format(fecha))}, ${HORA.format(fecha)}`
+  return `${capitalizar(FECHA_LARGA.format(fecha))}, ${hora(fecha)}`
 }
 
 /** "2026-09-25" -> "Viernes, 25 de septiembre de 2026" -- fechas del backend
@@ -481,15 +486,15 @@ export const ESTILO_ESTADO: Record<
   }
 > = {
   confirmada: {
-    chip: "border-success/40 bg-success/10 text-success hover:bg-success/20",
+    chip: "border-success/40 bg-success/10 text-success-text hover:bg-success/20",
     barra: "bg-success",
     badge: "success",
   },
   pendiente: {
-    chip: "border-dashed border-warning bg-warning/5 text-warning hover:bg-warning/15",
+    chip: "border-dashed border-warning bg-warning/5 text-warning-text hover:bg-warning/15",
     barra: "border border-dashed border-warning",
     badge: "outline",
-    badgeClase: "border-dashed border-warning text-warning",
+    badgeClase: "border-dashed border-warning text-warning-text",
   },
   completada: {
     chip: "border-border bg-muted text-muted-foreground hover:bg-muted/70",
@@ -497,18 +502,18 @@ export const ESTILO_ESTADO: Record<
     badge: "secondary",
   },
   cancelada: {
-    chip: "border-destructive/40 bg-destructive/10 text-destructive line-through hover:bg-destructive/20",
+    chip: "border-destructive/40 bg-destructive/10 text-destructive-text line-through hover:bg-destructive/20",
     barra: "bg-destructive",
     badge: "destructive",
   },
   denegada: {
-    chip: "border-destructive/40 text-destructive line-through hover:bg-destructive/10",
+    chip: "border-destructive/40 text-destructive-text line-through hover:bg-destructive/10",
     barra: "border border-destructive",
     badge: "outline",
-    badgeClase: "border-destructive/50 text-destructive",
+    badgeClase: "border-destructive/50 text-destructive-text",
   },
   no_show: {
-    chip: "border-warning/40 bg-warning/10 text-warning hover:bg-warning/20",
+    chip: "border-warning/40 bg-warning/10 text-warning-text hover:bg-warning/20",
     barra: "bg-warning",
     badge: "warning",
   },
@@ -524,7 +529,7 @@ export const ESTILO_ESTADO: Record<
     badgeClase: "border-warning",
   },
   no_devuelta: {
-    chip: "border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20",
+    chip: "border-destructive bg-destructive/10 text-destructive-text hover:bg-destructive/20",
     barra: "bg-destructive",
     badge: "destructive",
   },
@@ -534,16 +539,42 @@ export function estiloDe(estado: EstadoReserva) {
   return ESTILO_ESTADO[estado] ?? ESTILO_ESTADO.completada
 }
 
-// Etiquetas en español para los estados nuevos, cuyo valor crudo ("entregada",
-// "devuelta_tarde") ya es legible pero "devuelta_tarde" no lo es tal cual sale
-// de la BD -- el resto de estados se pinta crudo en badges/tooltips (ver
-// EstadoReservaBadge, tooltipEvento) y no hace falta tocarlos.
-export function etiquetaEstado(estado: EstadoReserva) {
-  if (estado === "entregada") return "Entregada"
-  if (estado === "devuelta_tarde") return "Devuelta tarde"
-  if (estado === "no_devuelta") return "No devuelta"
-  return estado
+// Único lugar donde un estado de la BD se vuelve texto: badges, tooltips, el
+// select de edición y el acta pasan todos por acá, así que nunca se ve
+// "no_show" o "devuelta_tarde" crudo.
+const ETIQUETA_ESTADO: Record<EstadoReserva, string> = {
+  pendiente: "Pendiente",
+  confirmada: "Confirmada",
+  denegada: "Denegada",
+  cancelada: "Cancelada",
+  entregada: "Entregada",
+  completada: "Completada",
+  devuelta_tarde: "Devuelta tarde",
+  no_devuelta: "No devuelta",
+  no_show: "No se presentó",
 }
+
+export function etiquetaEstado(estado: EstadoReserva) {
+  return ETIQUETA_ESTADO[estado] ?? estado
+}
+
+/**
+ * Filtros de estado que comparten Calendario y Reservas, en el orden de vida
+ * del préstamo. Cada panel antepone los suyos ("Todas", "Por confirmar"...):
+ * así el mismo estado se llama igual y aparece en el mismo lugar en ambos.
+ * "pendiente" no está: cada panel lo nombra "Por confirmar" a su manera.
+ */
+export const FILTROS_ESTADO_COMUNES: { valor: Exclude<EstadoReserva, "pendiente"> | "retrasada"; etiqueta: string }[] = [
+  { valor: "confirmada", etiqueta: "Confirmadas" },
+  { valor: "entregada", etiqueta: "Entregadas" },
+  { valor: "retrasada", etiqueta: "Retrasadas" },
+  { valor: "completada", etiqueta: "Completadas" },
+  { valor: "devuelta_tarde", etiqueta: "Devueltas tarde" },
+  { valor: "no_devuelta", etiqueta: "No devueltas" },
+  { valor: "cancelada", etiqueta: "Canceladas" },
+  { valor: "denegada", etiqueta: "Denegadas" },
+  { valor: "no_show", etiqueta: "No se presentaron" },
+]
 
 export function etiquetaReserva(reserva: Sesion) {
   return reserva.recurso_nombre || `Recurso #${reserva.recurso_id}`

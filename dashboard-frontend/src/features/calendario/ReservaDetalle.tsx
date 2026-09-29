@@ -33,6 +33,7 @@ import {
   confirmarReservaGrupo,
   decidirReserva,
   eliminarReservaGrupo,
+  etiquetaRol,
   type CambiosReserva,
   type EstadoReserva,
   type Modalidad,
@@ -47,6 +48,7 @@ import {
   desdeInputLocal,
   diaDe,
   DIAS_MINIMOS_SEGURO,
+  etiquetaEstado,
   etiquetaEvento,
   etiquetaNumeros,
   etiquetaReserva,
@@ -191,7 +193,7 @@ function Detalle({
                 <Button
                   size="xs"
                   variant="outline"
-                  className="text-destructive hover:text-destructive"
+                  className="text-destructive-text hover:text-destructive-text"
                   onClick={() => onDecidir(reserva, "denegar")}
                 >
                   <X />
@@ -210,8 +212,10 @@ function Detalle({
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         <EstadoEventoBadge evento={evento} />
-        <Badge variant="outline">{evento.reservas[0].canal_origen}</Badge>
-        <Badge variant="outline">{evento.usuarioRol}</Badge>
+        <Badge variant="outline">
+          {evento.reservas[0].canal_origen === "dashboard" ? "Creada en el panel" : "Pedida por WhatsApp"}
+        </Badge>
+        <Badge variant="outline">{etiquetaRol(evento.usuarioRol)}</Badge>
       </div>
 
       {evento.porConfirmar && (
@@ -674,7 +678,7 @@ function FormularioEdicion({
           <SelectContent>
             {ESTADOS.map((e) => (
               <SelectItem key={e} value={e}>
-                {e}
+                {etiquetaEstado(e)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -931,7 +935,24 @@ function Contenido({
             recursos={recursos}
             onDecidir={(reserva, accion) => pedirDecision({ reserva, accion })}
           />
+          {/* Eliminar va aparte, a la izquierda, lejos de la mano que busca el
+              siguiente paso. A la derecha, de menor a mayor: editar, y la
+              única acción principal -- confirmar si hay pendientes, si no
+              firmar el acta que toque. */}
           <DialogFooter>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="sm:mr-auto"
+              onClick={solicitarEliminacion}
+            >
+              <Trash2 />
+              Eliminar reserva
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setEditando(true)}>
+              <Pencil />
+              Editar reserva
+            </Button>
             {/* Mismo criterio que el botón de la tabla de Reservas: el acta es
                 del grupo completo y con varios números (reservas legadas, de
                 antes del carrito) se usa el primero. */}
@@ -941,16 +962,9 @@ function Contenido({
               usuarioNombre={evento.usuarioNombre}
               fin={evento.fin}
               variante="boton"
+              principal={!puedeConfirmarTodo}
               onRegistrada={onGuardado}
             />
-            <Button size="sm" variant="destructive" onClick={solicitarEliminacion}>
-              <Trash2 />
-              Eliminar reserva
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setEditando(true)}>
-              <Pencil />
-              Editar reserva
-            </Button>
             {puedeConfirmarTodo && (
               <Button size="sm" onClick={() => pedirDecision({ reserva: null, accion: "confirmar" })}>
                 <Check />

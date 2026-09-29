@@ -178,7 +178,7 @@ export function ConversacionSesionDialog({
         </DialogHeader>
 
         {datos?.truncada && (
-          <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
+          <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning-text">
             Conversación recortada a los 100 mensajes más cercanos a la reserva.
           </p>
         )}
@@ -195,7 +195,7 @@ export function ConversacionSesionDialog({
 
           {!cargando && error && (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
-              <p className="text-sm text-destructive">No se pudo cargar la conversación.</p>
+              <p className="text-sm text-destructive-text">No se pudo cargar la conversación.</p>
               <Button size="sm" variant="outline" onClick={() => setIntento((n) => n + 1)}>
                 Reintentar
               </Button>

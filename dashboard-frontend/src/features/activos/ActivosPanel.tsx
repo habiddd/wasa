@@ -76,9 +76,9 @@ export function ActivosPanel() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <h1 className="text-xl font-semibold tracking-tight">
           Equipos y relaciones
-        </h2>
+        </h1>
         <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={() => setMostrarNuevo((v) => !v)}>
             + Agregar activo
@@ -123,6 +123,7 @@ export function ActivosPanel() {
               key={clave}
               type="button"
               onClick={() => setSubtabActiva(clave)}
+              aria-pressed={clave === subtabEfectiva}
               className={cn(
                 "rounded-full border px-2.5 py-1 text-xs",
                 clave === subtabEfectiva
@@ -149,8 +150,9 @@ export function ActivosPanel() {
                 key={clave}
                 type="button"
                 onClick={() => setSubsubtabActiva(clave)}
+                aria-pressed={clave === subsubtabEfectiva}
                 className={cn(
-                  "rounded-md border px-2 py-0.5 text-[11px]",
+                  "rounded-md border px-2 py-0.5 text-xs",
                   clave === subsubtabEfectiva
                     ? "border-primary/70 bg-primary/10 text-primary"
                     : "text-muted-foreground hover:border-primary/70"
@@ -164,7 +166,7 @@ export function ActivosPanel() {
       )}
 
       {error && !activos.length && (
-        <p className="text-sm text-destructive">No se pudieron cargar los activos.</p>
+        <p className="text-sm text-destructive-text">No se pudieron cargar los activos.</p>
       )}
       {!error && equipos.length === 0 && <p className="text-sm text-muted-foreground">No hay equipos registrados.</p>}
       {equipos.length > 0 &&

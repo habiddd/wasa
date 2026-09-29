@@ -25,6 +25,30 @@ import { recortarCuadro } from "./recorte-acta"
 
 type Paso = 1 | 2 | 3 | 4
 
+// Quien firma por la LACS suele ser el mismo monitor todo el turno: se
+// recuerda en este navegador tras cada acta registrada para no reescribirlo.
+const MONITOR_STORAGE_KEY = "dashboard-lacs-monitor-acta"
+
+function monitorGuardado(): { nombre: string; cedula: string } {
+  try {
+    const guardado = JSON.parse(localStorage.getItem(MONITOR_STORAGE_KEY) ?? "null")
+    if (guardado && typeof guardado.nombre === "string" && typeof guardado.cedula === "string") {
+      return guardado
+    }
+  } catch {
+    // localStorage no disponible o valor corrupto
+  }
+  return { nombre: "", cedula: "" }
+}
+
+function guardarMonitor(nombre: string, cedula: string) {
+  try {
+    localStorage.setItem(MONITOR_STORAGE_KEY, JSON.stringify({ nombre, cedula }))
+  } catch {
+    // localStorage no disponible
+  }
+}
+
 export function FirmarActaDialog({
   abierto,
   onOpenChange,
@@ -55,8 +79,9 @@ export function FirmarActaDialog({
   onRegistrada: (reservas: Sesion[]) => void
 }) {
   const [paso, setPaso] = useState<Paso>(1)
-  const [firmadoPor, setFirmadoPor] = useState("")
-  const [cedulaAdmin, setCedulaAdmin] = useState("")
+  const [firmadoPor, setFirmadoPor] = useState(() => monitorGuardado().nombre)
+  const [cedulaAdmin, setCedulaAdmin] = useState(() => monitorGuardado().cedula)
+  const [confirmandoDescarte, setConfirmandoDescarte] = useState(false)
   const [dejarNota, setDejarNota] = useState(false)
   const [nota, setNota] = useState("")
   // Equipos marcados como entregados/devueltos -- todos por defecto (un solo
@@ -151,8 +176,9 @@ export function FirmarActaDialog({
   // así que "Atrás" no pierde lo ya firmado dentro de una misma apertura.
   function resetearYCerrar() {
     setPaso(1)
-    setFirmadoPor("")
-    setCedulaAdmin("")
+    setFirmadoPor(monitorGuardado().nombre)
+    setCedulaAdmin(monitorGuardado().cedula)
+    setConfirmandoDescarte(false)
     setDejarNota(false)
     setNota("")
     setMarcados(new Set(equipos.map((e) => e.id)))
@@ -162,6 +188,14 @@ export function FirmarActaDialog({
     canvasUsuarioRef.current?.limpiar()
     canvasAdminRef.current?.limpiar()
     onOpenChange(false)
+  }
+
+  // Escape, clic afuera y "Cancelar" pasan por acá: con el estudiante
+  // presente, un toque de más no puede borrar firmas ya hechas sin preguntar.
+  function intentarCerrar() {
+    if (guardando) return
+    if (!usuarioVacio || !adminVacio) setConfirmandoDescarte(true)
+    else resetearYCerrar()
   }
 
   // Paso 1 (Equipos + nota) -> 2: en la entrega, cualquier combinación menos
@@ -227,6 +261,7 @@ export function FirmarActaDialog({
         equipos: [...marcados],
       })
       toast.success("Acta registrada.")
+      guardarMonitor(firmadoPor.trim(), cedulaAdmin.trim())
       onRegistrada(reservas)
       resetearYCerrar()
     } catch (err) {
@@ -241,7 +276,8 @@ export function FirmarActaDialog({
   const tituloDialogo = momento === "entrega" ? "Acta de entrega" : "Acta de devolución"
 
   return (
-    <Dialog open={abierto} onOpenChange={(v) => !v && resetearYCerrar()}>
+    <>
+    <Dialog open={abierto} onOpenChange={(v) => !v && intentarCerrar()}>
       <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-lg">
         {/* Ancho normal (no el sm:max-w-xl que se necesitó cuando el lienzo
             cubría el cuadro completo del acta): la franja de firma es mucho
@@ -442,7 +478,7 @@ export function FirmarActaDialog({
               Fecha y hora que quedan impresas: <strong>{formatearFechaActa(fechaPeticion)}</strong>
             </p>
             {noDevueltos.length > 0 && (
-              <p className="rounded-md border border-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <p className="rounded-md border border-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive-text">
                 Sin marcar, quedan registrados como <strong>no devueltos</strong>:{" "}
                 {noDevueltos.map((e) => e.nombre).join(", ")}. Esos activos pasan a "No devuelto" y no se
                 podrán reservar hasta cambiarlos en Activos.
@@ -452,7 +488,7 @@ export function FirmarActaDialog({
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={resetearYCerrar} disabled={guardando}>
+          <Button type="button" variant="outline" onClick={intentarCerrar} disabled={guardando}>
             Cancelar
           </Button>
           {paso > 1 && (
@@ -488,5 +524,25 @@ export function FirmarActaDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <Dialog open={confirmandoDescarte} onOpenChange={setConfirmandoDescarte}>
+      <DialogContent showCloseButton={false} className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>¿Descartar las firmas?</DialogTitle>
+          <DialogDescription>
+            Se borran las firmas y lo que llevas del acta. La reserva no cambia de estado.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setConfirmandoDescarte(false)}>
+            Seguir firmando
+          </Button>
+          <Button type="button" variant="destructive" onClick={resetearYCerrar}>
+            Descartar firmas
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }

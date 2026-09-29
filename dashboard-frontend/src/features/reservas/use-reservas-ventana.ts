@@ -33,11 +33,22 @@ const INTERVALO_MS: Record<VentanaReservas, number> = {
   todas: 120_000,
 }
 
-/** `fin > ahora - delta`, recalculando `ahora` en cada llamada (no al montar). */
-function recortarAVentana(reservas: Sesion[], ventana: VentanaReservas): Sesion[] {
+/** `fin > ahora - delta`, recalculando `ahora` en cada llamada (no al montar).
+ * Con `incluirAbiertas`, los préstamos que siguen afuera no se recortan (misma
+ * regla que el backend con ?incluir_abiertas=1). */
+function recortarAVentana(
+  reservas: Sesion[],
+  ventana: VentanaReservas,
+  incluirAbiertas: boolean
+): Sesion[] {
   if (ventana === "todas") return reservas
   const corte = Date.now() - DELTA_MS[ventana]
-  return reservas.filter((r) => !r.fin || new Date(r.fin).getTime() > corte)
+  return reservas.filter(
+    (r) =>
+      !r.fin ||
+      new Date(r.fin).getTime() > corte ||
+      (incluirAbiertas && (r.estado === "entregada" || r.estado === "no_devuelta"))
+  )
 }
 
 type Cache = {
@@ -52,7 +63,7 @@ type Cache = {
  * Reservas"). Sacado de ReservasPanel.tsx a su propio hook porque la lógica
  * de caché + carreras + intervalo variable no cabe cómoda en el componente.
  */
-export function useReservasVentana(ventana: VentanaReservas) {
+export function useReservasVentana(ventana: VentanaReservas, incluirAbiertas = false) {
   const [cache, setCache] = useState<Cache | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Solo true cuando todavía no hay ningún dato que mostrar (primera carga).
@@ -77,7 +88,7 @@ export function useReservasVentana(ventana: VentanaReservas) {
       setCargando(true)
     }
 
-    fetchReservasVentana(ventanaPedida)
+    fetchReservasVentana(ventanaPedida, incluirAbiertas)
       .then((resp) => {
         if (idPeticion !== idPeticionRef.current) return // respuesta obsoleta
         setCache({ ventana: resp.ventana, reservas: resp.reservas, truncado: resp.truncado })
@@ -92,7 +103,7 @@ export function useReservasVentana(ventana: VentanaReservas) {
         setCargando(false)
         setRefrescando(false)
       })
-  }, [])
+  }, [incluirAbiertas])
 
   useEffect(() => {
     const previa = cacheRef.current
@@ -111,8 +122,8 @@ export function useReservasVentana(ventana: VentanaReservas) {
 
   const reservas = useMemo(() => {
     if (!cache) return []
-    return recortarAVentana(cache.reservas, ventana)
-  }, [cache, ventana])
+    return recortarAVentana(cache.reservas, ventana, incluirAbiertas)
+  }, [cache, ventana, incluirAbiertas])
 
   // El aviso de truncado solo vale para la ventana que efectivamente se pidió
   // al servidor: si se está mostrando un recorte en cliente de una caché más

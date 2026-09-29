@@ -37,9 +37,12 @@ function ChipEvento({
         estilo.chip
       )}
     >
+      {/* El nombre primero: es lo que identifica la reserva de un vistazo.
+          La hora va al final y no se recorta; si falta espacio, se corta el
+          nombre (el tooltip lo muestra completo). */}
       <IconoTipo tipo={evento.tipo} className="size-3 shrink-0" />
-      <span className="shrink-0 tabular-nums opacity-80">{horaCompacta(evento.inicio)}</span>
-      <span className="truncate">{etiquetaEvento(evento)}</span>
+      <span className="min-w-0 flex-1 truncate">{etiquetaEvento(evento)}</span>
+      <span className="shrink-0 tabular-nums">{horaCompacta(evento.inicio)}</span>
     </button>
     </TooltipEvento>
   )

@@ -73,7 +73,7 @@ export function useAvisosFechasReserva(
   return { minimaHoy, incumplePlazo, avisosBloqueo }
 }
 
-/** Párrafos de aviso (`text-warning`) para lo que devuelve el hook de arriba. */
+/** Párrafos de aviso (`text-warning-text`) para lo que devuelve el hook de arriba. */
 export function AvisosFechasReserva({
   minimaHoy,
   incumplePlazo,
@@ -82,14 +82,14 @@ export function AvisosFechasReserva({
   return (
     <>
       {incumplePlazo && minimaHoy && (
-        <p className="text-xs text-warning">
+        <p className="text-xs text-warning-text">
           Ojo: el inicio queda antes de la fecha mínima del seguro (
           {fechaCivilLarga(minimaHoy.fecha_minima)}, {DIAS_MINIMOS_SEGURO} días hábiles desde
           hoy). Puedes guardar igual.
         </p>
       )}
       {avisosBloqueo.map(({ dia, cuando }) => (
-        <p key={dia.fecha} className="text-xs text-warning">
+        <p key={dia.fecha} className="text-xs text-warning-text">
           Ojo: el {fechaCivilLarga(dia.fecha)} (día en que {cuando} la reserva) está en la lista
           negra ({dia.excepcion?.motivo || dia.festivo || "no hábil"}). El bot no lo permitiría; el
           dashboard no lo bloquea.

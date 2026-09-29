@@ -21,6 +21,7 @@ import {
 
 import {
   agruparEnEventos,
+  FILTROS_ESTADO_COMUNES,
   desplazar,
   diaDe,
   diasDelPeriodo,
@@ -32,6 +33,7 @@ import {
   type DiaCivil,
   type Vista,
 } from "./calendario-utils"
+import { LeyendaEstados } from "./LeyendaEstados"
 import { ReservaDetalle } from "./ReservaDetalle"
 import { VistaMes } from "./VistaMes"
 import { VistaTiempo } from "./VistaTiempo"
@@ -46,22 +48,14 @@ type FiltroEstado = "vigentes" | "todas" | "retrasada" | EstadoReserva
 type FiltroTipo = "todos" | "equipo" | "espacio"
 const USUARIO_SIN_CODIGO = "__sin_codigo__"
 
-// Mismos filtros y mismo orden que ReservasPanel.FILTROS: es el mismo
+// Los estados salen de FILTROS_ESTADO_COMUNES, igual que en ReservasPanel: es el mismo
 // concepto de estado, solo que acá vive en un <Select> en vez de una barra
 // de chips.
 const ESTADOS: { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: "vigentes", etiqueta: "Sin canceladas ni denegadas" },
   { valor: "todas", etiqueta: "Todos los estados" },
-  { valor: "confirmada", etiqueta: "Confirmadas" },
-  { valor: "entregada", etiqueta: "Entregadas" },
-  { valor: "retrasada", etiqueta: "Retrasadas" },
-  { valor: "pendiente", etiqueta: "Pendientes de confirmación" },
-  { valor: "completada", etiqueta: "Completadas" },
-  { valor: "devuelta_tarde", etiqueta: "Devueltas tarde" },
-  { valor: "no_devuelta", etiqueta: "No devueltas" },
-  { valor: "cancelada", etiqueta: "Canceladas" },
-  { valor: "denegada", etiqueta: "Denegadas" },
-  { valor: "no_show", etiqueta: "No show" },
+  { valor: "pendiente", etiqueta: "Por confirmar" },
+  ...FILTROS_ESTADO_COMUNES,
 ]
 
 function guardado<T extends string>(clave: string, valores: readonly T[], porDefecto: T): T {
@@ -230,9 +224,9 @@ export function CalendarioPanel() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <h1 className="text-xl font-semibold tracking-tight">
           Calendario de reservas
-        </h2>
+        </h1>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={tipo} onValueChange={(v) => cambiarTipo(v as FiltroTipo)}>
             <SelectTrigger size="sm">
@@ -338,8 +332,10 @@ export function CalendarioPanel() {
         </div>
       </div>
 
+      <LeyendaEstados />
+
       {error && (
-        <p className="text-sm text-destructive">No se pudieron cargar las reservas: {error}</p>
+        <p className="text-sm text-destructive-text">No se pudieron cargar las reservas: {error}</p>
       )}
 
       {cargando && !reservas.length ? (

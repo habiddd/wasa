@@ -21,7 +21,7 @@ from pathlib import Path
 import qrcode
 import requests
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -572,7 +572,14 @@ def api_reservas():
     if ventana is not None:
         delta = VENTANAS_RESERVAS[ventana]
         if delta is not None:
-            consulta = consulta.filter(Reserva.fin > ahora - delta)
+            corte = Reserva.fin > ahora - delta
+            # ?incluir_abiertas=1 (vista "Hoy" del dashboard): un préstamo que
+            # sigue afuera (entregada / no_devuelta) importa aunque su `fin`
+            # haya quedado antes de la ventana -- es justo lo que hay que
+            # perseguir en el mostrador.
+            if request.args.get("incluir_abiertas") == "1":
+                corte = or_(corte, Reserva.estado.in_(("entregada", "no_devuelta")))
+            consulta = consulta.filter(corte)
         # Pedimos una fila de más que el tope para poder distinguir "hay
         # exactamente el tope" de "hay más y se truncó" sin un COUNT aparte.
         reservas = consulta.order_by(Reserva.inicio.desc()).limit(MAX_RESERVAS_VENTANA + 1).all()

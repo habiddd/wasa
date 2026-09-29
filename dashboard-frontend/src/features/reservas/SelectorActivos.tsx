@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
+import { ESTADOS_ACTIVO } from "@/features/activos/tree-utils"
 import { IconoTipo } from "@/features/calendario/IconoTipo"
 import type { Recurso } from "@/lib/api"
 
@@ -123,7 +124,7 @@ export function SelectorActivos({
           ) : (
             noDisponible && (
               <Badge variant="outline" className="shrink-0">
-                {recurso.estado}
+                {ESTADOS_ACTIVO[recurso.estado]?.texto ?? recurso.estado}
               </Badge>
             )
           )}

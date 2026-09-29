@@ -23,6 +23,7 @@ import {
   type MomentoActa,
   type Sesion,
 } from "@/lib/api"
+import { formatearFechaHoraLACS } from "@/lib/fechas"
 
 import { estadoResultante } from "./actas-pdf"
 import { FirmarActaDialog } from "./FirmarActaDialog"
@@ -46,11 +47,6 @@ function etiquetaBoton(momento: MomentoActa | null) {
   if (momento === "devolucion") return "Firmar devolución"
   return "Ver acta"
 }
-
-const FORMATO_HISTORIAL = new Intl.DateTimeFormat("es-CO", {
-  dateStyle: "short",
-  timeStyle: "short",
-})
 
 function descargarBlob(blob: Blob, nombreArchivo: string) {
   const objectUrl = URL.createObjectURL(blob)
@@ -81,6 +77,7 @@ export function BotonActaPdf({
   usuarioNombre,
   fin,
   variante = "icono",
+  principal = false,
   onRegistrada,
 }: {
   grupoId: number | null
@@ -90,6 +87,9 @@ export function BotonActaPdf({
   usuarioNombre: string
   fin: Date
   variante?: "icono" | "boton"
+  /** Pie del detalle: si firmar es el siguiente paso del préstamo, el botón
+   * va como acción principal (relleno) en vez de outline. */
+  principal?: boolean
   /** Refresca el listado del panel tras registrar un acta (firmada o
    * subida): el estado de la reserva cambió y conviene no esperar al
    * próximo sondeo periódico para que se note en pantalla. */
@@ -217,7 +217,10 @@ export function BotonActaPdf({
     await cargarActa()
   }
 
-  const etiqueta = variante === "boton" ? etiquetaBoton(momentoSiguienteAprox(reservas)) : undefined
+  const momentoAprox = momentoSiguienteAprox(reservas)
+  const etiqueta = variante === "boton" ? etiquetaBoton(momentoAprox) : undefined
+  const varianteBoton =
+    variante === "icono" ? "ghost" : principal && momentoAprox ? "default" : "outline"
 
   // Equipos para el paso "Equipos" de FirmarActaDialog: salen de
   // `estadoActa.lineas` (todas las líneas del grupo, del servidor), NO de la
@@ -242,7 +245,7 @@ export function BotonActaPdf({
     >
       <Button
         type="button"
-        variant={variante === "icono" ? "ghost" : "outline"}
+        variant={varianteBoton}
         size={variante === "icono" ? "icon-sm" : "sm"}
         aria-label={variante === "icono" ? "Ver acta de entrega y devolución" : undefined}
         title="Ver acta de entrega y devolución"
@@ -348,7 +351,7 @@ export function BotonActaPdf({
                             </Badge>
                           </span>
                           <span className="block text-xs text-muted-foreground">
-                            {acta.creado_en ? FORMATO_HISTORIAL.format(new Date(acta.creado_en)) : "-"}
+                            {formatearFechaHoraLACS(acta.creado_en)}
                             {acta.firmado_por && ` · ${acta.firmado_por}`}
                           </span>
                           {acta.nota && <span className="block text-xs italic text-muted-foreground">{acta.nota}</span>}

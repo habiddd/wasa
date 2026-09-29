@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
-import { Plus } from "lucide-react"
+import { Plus, Search } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -25,6 +26,7 @@ import { useActivosContext } from "@/features/activos/activos-context"
 import {
   ZONA_LACS,
   agruparEnEventos,
+  FILTROS_ESTADO_COMUNES,
   diaDe,
   etiquetaEvento,
   horaCompacta,
@@ -54,15 +56,7 @@ type FiltroEstado = "todas" | "por_confirmar" | "retrasada" | EstadoReserva
 const FILTROS: { valor: FiltroEstado; etiqueta: string }[] = [
   { valor: "todas", etiqueta: "Todas" },
   { valor: "por_confirmar", etiqueta: "Por confirmar" },
-  { valor: "confirmada", etiqueta: "Confirmadas" },
-  { valor: "entregada", etiqueta: "Entregadas" },
-  { valor: "retrasada", etiqueta: "Retrasadas" },
-  { valor: "completada", etiqueta: "Completadas" },
-  { valor: "devuelta_tarde", etiqueta: "Devueltas tarde" },
-  { valor: "no_devuelta", etiqueta: "No devueltas" },
-  { valor: "cancelada", etiqueta: "Canceladas" },
-  { valor: "denegada", etiqueta: "Denegadas" },
-  { valor: "no_show", etiqueta: "No show" },
+  ...FILTROS_ESTADO_COMUNES,
 ]
 
 function filtroInicial(): FiltroEstado {
@@ -175,6 +169,27 @@ function Activos({ evento }: { evento: EventoCalendario }) {
   )
 }
 
+/** Minúsculas y sin tildes: "Pérez" se encuentra escribiendo "perez". */
+function normalizar(texto: string) {
+  return texto.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase()
+}
+
+/** Todo lo que el mostrador puede tener a mano para encontrar una reserva. */
+function textoBuscable(evento: EventoCalendario, placaDe: Map<number, string | null>) {
+  const primera = evento.reservas[0]
+  return normalizar(
+    [
+      evento.usuarioNombre,
+      evento.usuarioTelefono,
+      primera.usuario_codigo_uninorte,
+      ...evento.numeros.map((n) => `${n} #${n}`),
+      ...evento.reservas.flatMap((r) => [r.recurso_nombre, placaDe.get(r.recurso_id)]),
+    ]
+      .filter(Boolean)
+      .join(" ")
+  )
+}
+
 /** Misma condición que el badge "Sale de Barranquilla · seguro". El dato es del grupo. */
 function necesitaSeguro(evento: EventoCalendario) {
   return evento.reservas[0].sale_de_barranquilla === true
@@ -280,7 +295,7 @@ function TablaReservas({ eventos, onSeleccionar, onActaRegistrada }: PropsVista)
               <TableRow
                 key={evento.clave}
                 tabIndex={0}
-                className="cursor-pointer"
+                className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 onClick={() => onSeleccionar(evento)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -336,6 +351,7 @@ export function ReservasPanel() {
   const { reservas, cargando, refrescando, error, truncado, reload } = useReservasVentana(ventana)
   const [filtro, setFiltro] = useState<FiltroEstado>(filtroInicial)
   const [soloSeguro, setSoloSeguro] = useState<boolean>(seguroInicial)
+  const [busqueda, setBusqueda] = useState("")
   const [idSeleccionado, setIdSeleccionado] = useState<number | null>(null)
   const [creando, setCreando] = useState(false)
 
@@ -378,14 +394,20 @@ export function ReservasPanel() {
     return porFiltro
   }, [ubicadas])
 
-  // El checkbox "Necesita seguro" combina con AND sobre el filtro de estado
-  // ya calculado; se recalcula aparte para no rehacer el agrupamiento.
+  const placaDe = useMemo(() => new Map(activos.map((a) => [a.id, a.placa])), [activos])
+
+  // El checkbox "Necesita seguro" y la búsqueda combinan con AND sobre el
+  // filtro de estado ya calculado; se recalculan aparte para no rehacer el
+  // agrupamiento.
   const eventosVisibles = useMemo(() => {
-    if (!soloSeguro) return eventosPorFiltro
+    const consulta = normalizar(busqueda.trim())
+    if (!soloSeguro && !consulta) return eventosPorFiltro
+    const pasa = (e: EventoCalendario) =>
+      (!soloSeguro || necesitaSeguro(e)) && (!consulta || textoBuscable(e, placaDe).includes(consulta))
     return new Map<FiltroEstado, EventoCalendario[]>(
-      [...eventosPorFiltro].map(([k, lista]) => [k, lista.filter(necesitaSeguro)])
+      [...eventosPorFiltro].map(([k, lista]) => [k, lista.filter(pasa)])
     )
-  }, [eventosPorFiltro, soloSeguro])
+  }, [eventosPorFiltro, soloSeguro, busqueda, placaDe])
 
   const eventos = eventosVisibles.get(filtro) ?? []
   const pendientes = eventosVisibles.get("por_confirmar")?.length ?? 0
@@ -435,9 +457,9 @@ export function ReservasPanel() {
   return (
     <div className="@container space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <h1 className="text-xl font-semibold tracking-tight">
           Reservas
-        </h2>
+        </h1>
         <div className="flex gap-2">
           <Button size="sm" onClick={() => setCreando(true)}>
             <Plus />
@@ -450,6 +472,21 @@ export function ReservasPanel() {
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="relative w-full sm:w-72">
+          <Search
+            className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            type="search"
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="Estudiante, N.º de reserva o placa"
+            aria-label="Buscar reservas por estudiante, número de reserva, activo o placa"
+            className="h-8 pl-8"
+          />
+        </div>
+
         <Select value={filtro} onValueChange={(v) => cambiarFiltro(v as FiltroEstado)}>
           <SelectTrigger size="sm" className="min-w-44" aria-label="Filtrar por estado">
             <SelectValue />
@@ -465,7 +502,7 @@ export function ReservasPanel() {
                   <span
                     className={cn(
                       "text-xs tabular-nums",
-                      resaltar ? "font-semibold text-warning" : "text-muted-foreground"
+                      resaltar ? "font-semibold text-warning-text" : "text-muted-foreground"
                     )}
                   >
                     {cargando ? "–" : cantidad}
@@ -494,7 +531,7 @@ export function ReservasPanel() {
         {/* Si el filtro activo no es "por confirmar", que las pendientes no
             se pierdan de vista igual. */}
         {filtro !== "por_confirmar" && pendientes > 0 && (
-          <p className="text-xs text-warning">
+          <p className="text-xs text-warning-text">
             {pendientes} por confirmar
           </p>
         )}
@@ -516,7 +553,7 @@ export function ReservasPanel() {
       </div>
 
       {truncado && (
-        <p className="text-xs text-warning">
+        <p className="text-xs text-warning-text">
           Mostrando las {TOPE_RESERVAS_VENTANA} reservas más recientes; hay más histórico.
         </p>
       )}
@@ -530,17 +567,29 @@ export function ReservasPanel() {
       )}
 
       {error && reservas.length === 0 && (
-        <p className="text-sm text-destructive">No se pudieron cargar las reservas: {error}</p>
+        <p className="text-sm text-destructive-text">No se pudieron cargar las reservas: {error}</p>
       )}
 
       {!cargando && !(error && reservas.length === 0) && eventos.length === 0 && (
-        <p className="rounded-md border p-4 text-sm text-muted-foreground">
-          {filtro === "por_confirmar" && !soloSeguro
-            ? "No hay reservas pendientes de confirmación."
-            : soloSeguro
-              ? "No hay reservas que requieran seguro para este filtro."
-              : "No hay reservas para este filtro."}
-        </p>
+        busqueda.trim() ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border p-4 text-sm text-muted-foreground">
+            <p>
+              Ninguna reserva coincide con «{busqueda.trim()}»
+              {ventana !== "todas" && " en este periodo; prueba con un periodo más amplio"}.
+            </p>
+            <Button size="sm" variant="outline" onClick={() => setBusqueda("")}>
+              Limpiar búsqueda
+            </Button>
+          </div>
+        ) : (
+          <p className="rounded-md border p-4 text-sm text-muted-foreground">
+            {filtro === "por_confirmar" && !soloSeguro
+              ? "No hay reservas pendientes de confirmación."
+              : soloSeguro
+                ? "No hay reservas que requieran seguro para este filtro."
+                : "No hay reservas para este filtro."}
+          </p>
+        )
       )}
 
       {!cargando && !(error && reservas.length === 0) && eventos.length > 0 && (

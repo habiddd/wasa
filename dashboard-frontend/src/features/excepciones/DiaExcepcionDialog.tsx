@@ -135,7 +135,7 @@ export function DiaExcepcionDialog({
         {cargando && !diaMostrado ? (
           <Skeleton className="h-32 w-full" />
         ) : error && !diaMostrado ? (
-          <p className="text-sm text-destructive">No se pudo cargar: {error}</p>
+          <p className="text-sm text-destructive-text">No se pudo cargar: {error}</p>
         ) : !diaMostrado ? null : editando ? (
           <div className="space-y-3">
             <div className="space-y-1.5">
