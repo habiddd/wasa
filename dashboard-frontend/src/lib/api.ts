@@ -76,6 +76,12 @@ export type Periodo = "30" | "90" | "todo" | "rango"
 // desde y hasta (YYYY-MM-DD, ambos incluidos) solo cuentan con periodo "rango".
 export type FiltroMetricas = { periodo: Periodo; desde?: string; hasta?: string }
 
+// Descargas: un <a href> basta, el navegador ya manda las credenciales del panel.
+export const URL_EXCEL_DATOS = `${BASE}/datos/excel`
+export function urlExcelMetricas(filtro: FiltroMetricas) {
+  return `${BASE}/metricas/excel?${queryMetricas(filtro)}`
+}
+
 function queryMetricas({ periodo, desde, hasta }: FiltroMetricas) {
   const q = new URLSearchParams({ periodo })
   if (periodo === "rango" && desde && hasta) {

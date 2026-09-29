@@ -2043,6 +2043,63 @@ reserva, para verlo desde un modal al hacer clic en una fila de la pestaña
   modal lo muestra como estado vacío explícito, en vez de intentar buscar
   mensajes que nunca existieron.
 
+### Métricas (`features/metricas/`)
+
+Todo se calcula en el momento con SQL sobre las tablas que ya existen. No hay
+tablas de agregados ni jobs que precalculen nada. Los endpoints viven en
+`app/routes/dashboard.py`:
+
+| Endpoint | Qué devuelve |
+|---|---|
+| `GET /api/metricas` | la subpestaña General |
+| `GET /api/metricas/activo/<id>` | las métricas de un solo activo (404 si no existe) |
+| `GET /api/metricas/activo/<id>/timeline` | los eventos del activo, del más nuevo al más viejo |
+| `GET /api/metricas/excel` | lo mismo que `/api/metricas`, pero en `.xlsx` |
+| `GET /api/datos/excel` | todas las tablas de `public`, una por hoja, sin filtro |
+
+**Periodo.** Todos, menos `/api/datos/excel`, aceptan `periodo=30|90|todo|rango`.
+Con `rango` se mandan también `desde` y `hasta` en formato `YYYY-MM-DD`,
+como fechas civiles de la LACS, y los dos días se incluyen. Por dentro,
+`hasta` se vuelve exclusivo: las 00:00 locales del día siguiente. Un periodo
+inválido responde 400 con el mensaje de error. `_periodo_metricas()` hace ese
+parseo y `_en_periodo(col)` arma el filtro SQL. `col` siempre es un literal
+del código y las fechas van como parámetros. Las reservas entran al periodo
+según su `inicio`, y los agrupamientos por día y por hora se hacen en la zona
+de la LACS, no en UTC.
+
+**Definiciones.**
+
+- **Préstamo**: una reserva en `entregada`, `completada`, `devuelta_tarde`
+  o `no_devuelta` (`_PRESTADAS`). El equipo salió.
+- **Dado de baja**: un activo en `no_disponible`. Se cuentan las transiciones
+  del periodo, tomadas de `recurso_estado_historial`, y el total de hoy.
+- **Mantenimiento**: se cuenta igual que dado de baja.
+- **Puntualidad**: sale de la vista `reserva_puntualidad`.
+- **Seguro**: son los grupos con `sale_de_barranquilla = TRUE`.
+
+**Timeline.** Es un `UNION ALL` de cuatro fuentes:
+`reserva_estado_historial` (alta, cambio de estado, cambio de horario y
+borrado de la reserva), `recurso_estado_historial`, el alta del activo y las
+`reserva_actas` de los grupos donde estuvo el activo. Devuelve como máximo 500
+eventos (`_LIMITE_TIMELINE`); si hay más, marca `truncado`.
+
+**Excel** (`openpyxl`, en modo `write_only`).
+
+- El de métricas llama a `api_metricas()` con el mismo query string. Así
+  los números son los mismos que se ven en pantalla. `_aplanar` convierte el
+  JSON en hojas: una por cada lista y una hoja "Resumen" con los valores
+  sueltos.
+- El raw hace `SELECT *` de cada tabla. Los nombres de las tablas salen de
+  `information_schema`, no del usuario.
+- `_celda` escribe todo texto como texto (`data_type = "s"`). Sin eso, un
+  mensaje de WhatsApp en `auditoria_bot` que empiece por `=` se ejecutaría
+  como fórmula al abrir el archivo. También quita los caracteres de control
+  que Excel rechaza.
+- Las fechas con zona horaria se escriben en hora local de la LACS; Excel no
+  guarda zonas.
+- El frontend descarga con un `<a href download>`. El navegador ya manda la
+  autenticación básica del panel, así que no hace falta `fetch` ni blob.
+
 ## Excepciones: lista negra de fechas
 
 Pestaña "Excepciones" del dashboard (`features/excepciones/`): días en que

@@ -1,6 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react"
 
+import { DownloadIcon } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -15,6 +26,8 @@ import {
 import { usePolling } from "@/hooks/use-polling"
 import {
   fetchMetricas,
+  URL_EXCEL_DATOS,
+  urlExcelMetricas,
   type EstadoRecurso,
   type FiltroMetricas,
   type Metricas,
@@ -417,6 +430,51 @@ function PanelActivos({ activos }: { activos: Metricas["activos"] }) {
 }
 
 /** Un rango necesita las dos fechas y hasta >= desde (YYYY-MM-DD se compara como texto). */
+function DescargarExcel({ filtro, valido }: { filtro: FiltroMetricas; valido: boolean }) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button variant="outline">
+          <DownloadIcon />
+          Descargar Excel
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Descargar Excel</DialogTitle>
+          <DialogDescription>Elige qué archivo quieres.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-2">
+          <Button variant="outline" className="h-auto justify-start whitespace-normal py-3 text-left" asChild={valido} disabled={!valido}>
+            {valido ? (
+              <a href={urlExcelMetricas(filtro)} download>
+                <span>
+                  <span className="block font-medium">Métricas</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Lo que ves en General, con el periodo elegido. Una hoja por tabla o gráfico.
+                  </span>
+                </span>
+              </a>
+            ) : (
+              <span>Métricas: primero corrige las fechas del periodo.</span>
+            )}
+          </Button>
+          <Button variant="outline" className="h-auto justify-start whitespace-normal py-3 text-left" asChild>
+            <a href={URL_EXCEL_DATOS} download>
+              <span>
+                <span className="block font-medium">Base de datos (raw)</span>
+                <span className="block text-xs text-muted-foreground">
+                  Todas las tablas completas, sin filtrar por periodo. Una hoja por tabla.
+                </span>
+              </span>
+            </a>
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function filtroValido(f: FiltroMetricas) {
   return f.periodo !== "rango" || Boolean(f.desde && f.hasta && f.hasta >= f.desde)
 }
@@ -466,6 +524,7 @@ export function MetricasPanel() {
               <TabsTrigger value="rango">Personalizado</TabsTrigger>
             </TabsList>
           </Tabs>
+          <DescargarExcel filtro={filtro} valido={valido} />
         </div>
       </div>
 

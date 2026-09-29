@@ -743,6 +743,89 @@ def api_timeline_activo(recurso_id):
     )
 
 
+_DIAS_SEMANA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]
+
+
+def _celda(ws, v):
+    """Valor listo para openpyxl. El texto va siempre como texto: un mensaje de WhatsApp que empiece
+    por '=' no puede convertirse en fórmula, y los caracteres de control que Excel no acepta se quitan."""
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    if isinstance(v, datetime) and v.tzinfo:
+        v = v.astimezone(recursos_service.ZONA_HORARIA_LACS).replace(tzinfo=None)
+    elif isinstance(v, (dict, list)):
+        v = json.dumps(v, ensure_ascii=False, default=str)
+    elif v is not None and not isinstance(v, (int, float, date, timedelta)):
+        v = str(v)
+    if isinstance(v, str):
+        c = WriteOnlyCell(ws, ILLEGAL_CHARACTERS_RE.sub("", v))
+        c.data_type = "s"
+        return c
+    return v
+
+
+def _excel(hojas: dict[str, list[list]], nombre: str):
+    from openpyxl import Workbook
+
+    wb = Workbook(write_only=True)
+    for titulo, filas in hojas.items():
+        ws = wb.create_sheet(titulo[:31])
+        for fila in filas:
+            ws.append([_celda(ws, v) for v in fila])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf, as_attachment=True, download_name=nombre,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def _hoy_lacs() -> str:
+    return datetime.now(recursos_service.ZONA_HORARIA_LACS).date().isoformat()
+
+
+def _aplanar(nombre: str, v, hojas: dict, resumen: list):
+    """Una hoja por cada lista del JSON de métricas; los valores sueltos van a la hoja Resumen."""
+    if isinstance(v, dict):
+        for k, x in v.items():
+            _aplanar(f"{nombre}.{k}" if nombre else k, x, hojas, resumen)
+    elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+        cols = list(dict.fromkeys(k for x in v for k in x))
+        hojas[nombre] = [cols] + [[x.get(c) for c in cols] for x in v]
+    elif isinstance(v, list):
+        etiquetas = _DIAS_SEMANA if nombre.endswith("por_dia_semana") else range(len(v))
+        hojas[nombre] = [["", "total"]] + [[e, x] for e, x in zip(etiquetas, v)] if v else [["sin datos"]]
+    else:
+        resumen.append([nombre, v])
+
+
+@bp.route("/api/metricas/excel")
+def api_metricas_excel():
+    # Mismo periodo y mismos números que la pestaña General.
+    resp = api_metricas()
+    if isinstance(resp, tuple):
+        return resp
+    hojas, resumen = {}, []
+    _aplanar("", resp.get_json(), hojas, resumen)
+    return _excel({"Resumen": [["métrica", "valor"], *resumen], **hojas}, f"metricas-{_hoy_lacs()}.xlsx")
+
+
+@bp.route("/api/datos/excel")
+def api_datos_excel():
+    # Cada tabla de la base tal cual, una por hoja. Los nombres vienen del catálogo, no del usuario.
+    tablas = db.session.execute(text(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name"
+    )).scalars().all()
+    hojas = {}
+    for t in tablas:
+        res = db.session.execute(text(f'SELECT * FROM "{t}" ORDER BY 1'))
+        hojas[t] = [list(res.keys()), *(list(f) for f in res)]
+    return _excel(hojas, f"base-de-datos-{_hoy_lacs()}.xlsx")
+
+
 # Campos que el panel de Usuarios puede modificar. No incluye `id`,
 # `registro_completo` ni `creado_en` -- el registro se completa vía el flujo
 # de WhatsApp (ver registro_service.py), no desde el dashboard.

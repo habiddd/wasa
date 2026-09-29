@@ -89,9 +89,25 @@ los submenús.
   local y el propio Flask (se refresca solo cada 10s). "QR / WhatsApp"
   muestra el código QR de vinculación mientras no esté conectado, o el
   número vinculado una vez lo esté (se refresca solo cada 5s).
-- **Métricas**: reservas y mensajes bloqueados por guardrails en los
-  últimos 30 días, un gráfico de reservas por día del mismo periodo, y las
-  últimas interacciones registradas en `auditoria_bot`.
+- **Métricas**: números sacados de los datos que ya guarda la base, para
+  un periodo de 30 días, 90 días, todo, o un rango de fechas a elección
+  ("Personalizado"). Tiene dos subpestañas:
+  - **General**: cuántas reservas, préstamos, denegadas, canceladas y
+    no-shows hubo; el top 10 de equipos y de espacios más prestados; el top 10
+    de usuarios; la puntualidad al recoger y al devolver; las reservas por
+    día, por día de la semana y por hora; y el uso del bot. También muestra
+    el inventario (activos agregados, dados de baja y en mantenimiento) y
+    cuántas reservas salieron de Barranquilla, es decir, las que llevan
+    seguro.
+  - **Por activo**: primero se escoge un equipo o un espacio. Después se
+    elige entre **Métricas**, que son los mismos números pero solo de ese
+    activo, y **Timeline**, que es su historia día por día: reservas,
+    cambios de estado, actas y cambios de estado del propio activo.
+
+  El botón **Descargar Excel** abre un popup con dos opciones: el Excel de
+  **métricas**, con los números de General en el periodo elegido, o la
+  **base de datos en raw**, con todas las tablas completas, una por hoja.
+  Ver `docs/ARQUITECTURA.md`, sección "Métricas".
 - **Calendario**: las reservas de activos y lugares en vistas de **mes,
   semana y día**, vía `GET /dashboard/api/reservas?desde&hasta`. Las
   reservas del mismo usuario y horario se muestran como **un solo evento**
