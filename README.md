@@ -100,8 +100,9 @@ los submenús.
   (por confirmar / confirmada / entregada / completada / devuelta tarde /
   no devuelta / no se presentó / cancelada / denegada) y el ícono si es un
   activo o un lugar. La leyenda plegable "Qué significa cada color" explica
-  cada estado. Se puede filtrar por tipo, por recurso concreto y por estado
-  (por defecto oculta las canceladas), y al hacer clic en un evento se abre
+  cada estado. Se puede filtrar por tipo, recurso, usuario y estado. Cada
+  filtro tiene buscador y deja marcar varias opciones; por defecto se
+  ocultan las canceladas y las denegadas. Al hacer clic en un evento se abre
   un modal con su **número de reserva**, el usuario, el horario y la lista
   de activos, desde donde se puede **editar** la reserva (horario, estado y,
   si es de un solo activo, el recurso) vía

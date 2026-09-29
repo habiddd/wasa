@@ -14,7 +14,6 @@ import { useActivosContext } from "@/features/activos/activos-context"
 import { NuevaReservaDialog } from "@/features/reservas/NuevaReservaDialog"
 import {
   fetchReservasRango,
-  type EstadoReserva,
   type ReservaCreada,
   type Sesion,
 } from "@/lib/api"
@@ -33,6 +32,7 @@ import {
   type DiaCivil,
   type Vista,
 } from "./calendario-utils"
+import { FiltroMultiple } from "./FiltroMultiple"
 import { LeyendaEstados } from "./LeyendaEstados"
 import { ReservaDetalle } from "./ReservaDetalle"
 import { VistaMes } from "./VistaMes"
@@ -41,21 +41,23 @@ import { VistaTiempo } from "./VistaTiempo"
 const PREFIJO_STORAGE = "dashboard-lacs-calendario-"
 const REFRESCO_MS = 60000
 
-// "retrasada" no es un estado de línea (ver el mismo comentario en
-// ReservasPanel): es un pseudo-filtro sobre evento.retrasada, derivado de
-// estado == "entregada" && fin < ahora.
-type FiltroEstado = "vigentes" | "todas" | "retrasada" | EstadoReserva
-type FiltroTipo = "todos" | "equipo" | "espacio"
 const USUARIO_SIN_CODIGO = "__sin_codigo__"
 
 // Los estados salen de FILTROS_ESTADO_COMUNES, igual que en ReservasPanel: es el mismo
-// concepto de estado, solo que acá vive en un <Select> en vez de una barra
-// de chips.
-const ESTADOS: { valor: FiltroEstado; etiqueta: string }[] = [
-  { valor: "vigentes", etiqueta: "Sin canceladas ni denegadas" },
-  { valor: "todas", etiqueta: "Todos los estados" },
+// concepto de estado, solo que acá vive en un selector múltiple con búsqueda
+// en vez de una barra de chips. "retrasada" no es un estado de línea (ver el
+// mismo comentario en ReservasPanel): es un pseudo-filtro sobre
+// evento.retrasada, derivado de estado == "entregada" && fin < ahora.
+const ESTADOS: { valor: string; etiqueta: string }[] = [
   { valor: "pendiente", etiqueta: "Por confirmar" },
   ...FILTROS_ESTADO_COMUNES,
+]
+const ESTADOS_POR_DEFECTO = ESTADOS.map((e) => e.valor).filter(
+  (v) => v !== "cancelada" && v !== "denegada"
+)
+const TIPOS = [
+  { valor: "equipo", etiqueta: "Activos" },
+  { valor: "espacio", etiqueta: "Lugares" },
 ]
 
 function guardado<T extends string>(clave: string, valores: readonly T[], porDefecto: T): T {
@@ -64,6 +66,18 @@ function guardado<T extends string>(clave: string, valores: readonly T[], porDef
     if (valor && valores.includes(valor)) return valor
   } catch {
     // localStorage no disponible
+  }
+  return porDefecto
+}
+
+// Lee un array JSON y descarta lo que no esté en la lista permitida; si falla
+// el parse o no es un array, devuelve el valor por defecto.
+function guardadoLista(clave: string, permitidos: string[], porDefecto: string[]): string[] {
+  try {
+    const valor = JSON.parse(localStorage.getItem(PREFIJO_STORAGE + clave) ?? "null")
+    if (Array.isArray(valor)) return valor.filter((v) => permitidos.includes(v))
+  } catch {
+    // localStorage no disponible o JSON inválido
   }
   return porDefecto
 }
@@ -83,13 +97,15 @@ export function CalendarioPanel() {
     guardado("vista", ["mes", "semana", "dia"] as const, "mes")
   )
   const [ancla, setAncla] = useState<DiaCivil>(hoy)
-  const [tipo, setTipo] = useState<FiltroTipo>(() =>
-    guardado("tipo", ["todos", "equipo", "espacio"] as const, "todos")
+  // En recursos y usuarios vacío = todos; en `tipos` y `estados` la selección
+  // es explícita y vacío = no mostrar nada.
+  const [tipos, setTipos] = useState<string[]>(() =>
+    guardadoLista("tipos-marcados", TIPOS.map((t) => t.valor), TIPOS.map((t) => t.valor))
   )
-  const [recursoId, setRecursoId] = useState("todos")
-  const [usuarioCodigo, setUsuarioCodigo] = useState("todos")
-  const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>(() =>
-    guardado("estado", ESTADOS.map((e) => e.valor) as FiltroEstado[], "vigentes")
+  const [recursoIds, setRecursoIds] = useState<string[]>([])
+  const [usuarioCodigos, setUsuarioCodigos] = useState<string[]>([])
+  const [estados, setEstados] = useState<string[]>(() =>
+    guardadoLista("estados", ESTADOS.map((e) => e.valor), ESTADOS_POR_DEFECTO)
   )
 
   const [reservas, setReservas] = useState<Sesion[]>([])
@@ -137,9 +153,9 @@ export function CalendarioPanel() {
   const ubicadas = useMemo(() => ubicarReservas(reservas), [reservas])
 
   const recursos = useMemo(() => {
-    const lista = tipo === "todos" ? activos : activos.filter((r) => r.tipo === tipo)
+    const lista = activos.filter((r) => tipos.includes(r.tipo))
     return [...lista].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
-  }, [activos, tipo])
+  }, [activos, tipos])
 
   const usuarios = useMemo(() => {
     const vistos = new Map<string, string>()
@@ -149,31 +165,31 @@ export function CalendarioPanel() {
         vistos.set(codigo, reserva.usuario_nombre || reserva.usuario_telefono)
       }
     }
+    // Un código elegido puede no estar en el periodo actual: se conserva para
+    // poder desmarcarlo.
+    for (const codigo of usuarioCodigos) {
+      if (!vistos.has(codigo)) vistos.set(codigo, codigo)
+    }
     return [...vistos.entries()].sort(([codigoA], [codigoB]) =>
       codigoA.localeCompare(codigoB, "es")
     )
-  }, [ubicadas])
+  }, [ubicadas, usuarioCodigos])
 
   const filtradas = useMemo(
     () =>
       ubicadas.filter(({ reserva }) => {
-        if (tipo !== "todos" && reserva.recurso_tipo !== tipo) return false
-        if (recursoId !== "todos" && String(reserva.recurso_id) !== recursoId) return false
-        if (usuarioCodigo !== "todos") {
+        if (!tipos.includes(reserva.recurso_tipo ?? "")) return false
+        if (recursoIds.length && !recursoIds.includes(String(reserva.recurso_id))) return false
+        if (usuarioCodigos.length) {
           const codigo = reserva.usuario_codigo_uninorte || USUARIO_SIN_CODIGO
-          if (codigo !== usuarioCodigo) return false
+          if (!usuarioCodigos.includes(codigo)) return false
         }
-        if (filtroEstado === "vigentes") {
-          return reserva.estado !== "cancelada" && reserva.estado !== "denegada"
-        }
-        // A diferencia de los demás valores de FiltroEstado, "retrasada" no
-        // compara contra `reserva.estado`: es el campo derivado que manda el
-        // backend (ver Sesion.retrasada / actas_service.esta_retrasada).
-        if (filtroEstado === "retrasada") return reserva.retrasada
-        if (filtroEstado !== "todas") return reserva.estado === filtroEstado
-        return true
+        // A diferencia de los demás estados, "retrasada" no compara contra
+        // `reserva.estado`: es el campo derivado que manda el backend (ver
+        // Sesion.retrasada / actas_service.esta_retrasada).
+        return estados.includes(reserva.estado) || (estados.includes("retrasada") && reserva.retrasada)
       }),
-    [ubicadas, tipo, recursoId, usuarioCodigo, filtroEstado]
+    [ubicadas, tipos, recursoIds, usuarioCodigos, estados]
   )
 
   // Se agrupa después de filtrar: si se filtra por un activo concreto, el
@@ -194,17 +210,32 @@ export function CalendarioPanel() {
     guardar("vista", nueva)
   }
 
-  function cambiarTipo(nuevo: FiltroTipo) {
-    setTipo(nuevo)
-    guardar("tipo", nuevo)
-    // El recurso elegido puede no pertenecer al nuevo tipo.
-    setRecursoId("todos")
+  function cambiarTipos(nuevos: string[]) {
+    setTipos(nuevos)
+    guardar("tipos-marcados", JSON.stringify(nuevos))
+    // Los recursos elegidos pueden no pertenecer a los nuevos tipos.
+    const permitidos = new Set(
+      activos.filter((r) => nuevos.includes(r.tipo)).map((r) => String(r.id))
+    )
+    setRecursoIds((ids) => ids.filter((id) => permitidos.has(id)))
   }
 
-  function cambiarEstado(nuevo: FiltroEstado) {
-    setFiltroEstado(nuevo)
-    guardar("estado", nuevo)
+  function cambiarEstados(nuevos: string[]) {
+    setEstados(nuevos)
+    guardar("estados", JSON.stringify(nuevos))
   }
+
+  const mismoConjunto = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((v) => b.includes(v))
+  const resumenEstados = mismoConjunto(estados, ESTADOS_POR_DEFECTO)
+    ? "Sin canceladas ni denegadas"
+    : estados.length === ESTADOS.length
+      ? "Todos los estados"
+      : !estados.length
+        ? "Ningún estado"
+        : estados.length === 1
+          ? (ESTADOS.find((e) => e.valor === estados[0])?.etiqueta ?? estados[0])
+          : `${estados.length} estados`
 
   function abrirDia(dia: DiaCivil) {
     setAncla(dia)
@@ -228,57 +259,45 @@ export function CalendarioPanel() {
           Calendario de reservas
         </h1>
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={tipo} onValueChange={(v) => cambiarTipo(v as FiltroTipo)}>
-            <SelectTrigger size="sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos">Activos y lugares</SelectItem>
-              <SelectItem value="equipo">Solo activos</SelectItem>
-              <SelectItem value="espacio">Solo lugares</SelectItem>
-            </SelectContent>
-          </Select>
+          <FiltroMultiple
+            opciones={TIPOS}
+            seleccion={tipos}
+            onChange={cambiarTipos}
+            textoTodos="Activos y lugares"
+            resumen={tipos.length ? undefined : "Ningún tipo"}
+          />
 
-          <Select value={recursoId} onValueChange={setRecursoId}>
-            <SelectTrigger size="sm" className="max-w-52">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos">Todos los recursos</SelectItem>
-              {recursos.map((r) => (
-                <SelectItem key={r.id} value={String(r.id)}>
-                  {r.nombre}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <FiltroMultiple
+            opciones={recursos.map((r) => ({ valor: String(r.id), etiqueta: r.nombre }))}
+            seleccion={recursoIds}
+            onChange={setRecursoIds}
+            textoTodos="Todos los recursos"
+            className="max-w-52"
+          />
 
-          <Select value={usuarioCodigo} onValueChange={setUsuarioCodigo}>
-            <SelectTrigger size="sm" className="max-w-60">
-              <SelectValue placeholder="Todos los usuarios" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos">Todos los usuarios</SelectItem>
-              {usuarios.map(([codigo, nombre]) => (
-                <SelectItem key={codigo} value={codigo}>
-                  {codigo === USUARIO_SIN_CODIGO ? "Sin código Uninorte" : `${codigo} · ${nombre}`}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <FiltroMultiple
+            opciones={usuarios.map(([codigo, nombre]) => ({
+              valor: codigo,
+              etiqueta:
+                codigo === USUARIO_SIN_CODIGO
+                  ? "Sin código Uninorte"
+                  : codigo === nombre
+                    ? codigo
+                    : `${codigo} · ${nombre}`,
+            }))}
+            seleccion={usuarioCodigos}
+            onChange={setUsuarioCodigos}
+            textoTodos="Todos los usuarios"
+            className="max-w-60"
+          />
 
-          <Select value={filtroEstado} onValueChange={(v) => cambiarEstado(v as FiltroEstado)}>
-            <SelectTrigger size="sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ESTADOS.map((e) => (
-                <SelectItem key={e.valor} value={e.valor}>
-                  {e.etiqueta}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <FiltroMultiple
+            opciones={ESTADOS}
+            seleccion={estados}
+            onChange={cambiarEstados}
+            textoTodos="Todos los estados"
+            resumen={resumenEstados}
+          />
 
           <Button size="sm" onClick={() => setCreando(true)}>
             <Plus />

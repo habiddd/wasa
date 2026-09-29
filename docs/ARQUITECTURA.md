@@ -1241,6 +1241,26 @@ tener presentes antes de tocarlo:
   `grupo_id` evita mezclar dos reservas independientes del mismo usuario a
   la misma hora; el filtrado (tipo, recurso, usuario y estado) ocurre
   **antes** de agrupar. El filtro de usuario usa `usuarios.codigo_uninorte`.
+- **Los cuatro filtros son multiselección con búsqueda.** El componente
+  `FiltroMultiple.tsx` es un popover de Radix con un buscador (no distingue
+  tildes ni mayúsculas), casillas y los botones "Todos" y "Ninguno", que
+  actúan solo sobre lo que muestra la búsqueda. No se agregó `cmdk` ni
+  ninguna otra dependencia. Vacío no significa lo mismo en todos:
+  - En **recursos y usuarios**, vacío = sin filtro. La lista de usuarios
+    sale de las reservas del periodo cargado, así que un código marcado que
+    no aparece en ese periodo se agrega igual a las opciones, para poder
+    desmarcarlo.
+  - En **tipo y estado** la selección es explícita: vacío = no se muestra
+    nada. Tipo trae marcados Activos y Lugares. Estado trae todo menos
+    canceladas y denegadas, y el botón dice "Sin canceladas ni denegadas".
+  - "Retrasadas" es una casilla más: coincide con `reserva.retrasada`, no
+    con `reserva.estado`.
+  - Tipo y estado se guardan en `localStorage` como arrays JSON, con las
+    claves `tipos-marcados` y `estados`; recursos y usuarios no se guardan.
+    Las claves de la versión anterior, `tipo` y `estado`, se ignoran y no
+    hay migración.
+  - Al desmarcar un tipo se quitan los recursos marcados que no son de ese
+    tipo.
 - **El modal permite editar los activos reservados.** La lista principal
   muestra solo las líneas de ese grupo, agrupando visualmente los padres y
   sus hijos con indentación. El botón `+` abre un árbol con casillas para
@@ -1273,7 +1293,9 @@ tener presentes antes de tocarlo:
 - **Un solo vocabulario de estados.** Las etiquetas visibles salen de
   `calendario-utils.ETIQUETA_ESTADO` (`etiquetaEstado`), y los filtros que
   comparten Calendario y Reservas de `FILTROS_ESTADO_COMUNES`: cada panel
-  solo antepone los suyos ("Vigentes"/"Todas" y "Por confirmar"). Así un
+  solo antepone los suyos: Reservas, "Vigentes"/"Todas" y "Por confirmar";
+  el Calendario, solo "Por confirmar", porque ahí los atajos son la
+  selección por defecto y la casilla de cada estado. Así un
   estado no se llama distinto según la pestaña.
 - **Una sola barra de desplazamiento.** En semana y día la rejilla de horas
   mide lo que queda de ventana debajo de ella (`VistaTiempo`, recalculado en
