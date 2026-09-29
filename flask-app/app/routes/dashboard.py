@@ -21,7 +21,7 @@ from pathlib import Path
 import qrcode
 import requests
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
-from sqlalchemy import func, or_, text
+from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -276,50 +276,469 @@ def api_qr():
     )
 
 
+# Préstamo = la reserva llegó a entregarse (ver docs/PLAN_metricas_2026-09-29.md).
+_PRESTADAS = "('entregada','completada','devuelta_tarde','no_devuelta')"
+_PERIODOS_METRICAS = {"30": 30, "90": 90, "todo": None}
+
+
+def _filas(sql: str, **params) -> list[dict]:
+    return [dict(f) for f in db.session.execute(text(sql), params).mappings().all()]
+
+
+def _segundos(valor) -> int | None:
+    return round(valor) if valor is not None else None
+
+
+def _en_periodo(col: str) -> str:
+    """Fragmento SQL del periodo sobre `col` (siempre un literal del código); usa :desde y :hasta."""
+    return (f"(CAST(:desde AS timestamptz) IS NULL OR {col} >= :desde) "
+            f"AND (CAST(:hasta AS timestamptz) IS NULL OR {col} < :hasta)")
+
+
+def _periodo_metricas():
+    """(periodo, desde, hasta, fechas) del query string; ValueError con el mensaje si es inválido.
+    `hasta` es exclusivo (00:00 local del día siguiente); solo el rango lo fija. `fechas` = (desde, hasta) civiles o (None, None)."""
+    periodo = request.args.get("periodo", "30")
+    if periodo == "rango":
+        try:
+            d, h = _fecha_civil(request.args.get("desde")), _fecha_civil(request.args.get("hasta"))
+            sig = h + timedelta(days=1)
+        except (ValueError, OverflowError):
+            raise ValueError("desde y hasta son obligatorios con periodo=rango y deben tener formato YYYY-MM-DD") from None
+        if h < d:
+            raise ValueError("hasta no puede ser anterior a desde")
+        zona = recursos_service.ZONA_HORARIA_LACS
+        inicio = lambda f: datetime(f.year, f.month, f.day, tzinfo=zona)
+        return periodo, inicio(d), inicio(sig), (d, h)
+    if periodo not in _PERIODOS_METRICAS:
+        raise ValueError("periodo debe ser 30, 90, todo o rango")
+    dias = _PERIODOS_METRICAS[periodo]
+    return periodo, datetime.now(timezone.utc) - timedelta(days=dias) if dias else None, None, (None, None)
+
+
 @bp.route("/api/metricas")
 def api_metricas():
-    desde = datetime.utcnow() - timedelta(days=30)
+    try:
+        periodo, desde, hasta, fechas = _periodo_metricas()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    # Todo se agrupa en la zona de la LACS, no en UTC.
+    p = {"desde": desde, "hasta": hasta, "zona": recursos_service.ZONA_HORARIA_LACS.key}
+    # `r` = reservas del periodo (por inicio); el CAST evita el NULL sin tipo de psycopg2.
+    filtro = _en_periodo("r.inicio")
 
-    reservas_por_dia = (
-        db.session.query(
-            func.date(Reserva.inicio).label("dia"),
-            func.count(Reserva.id).label("total"),
+    resumen = _filas(
+        f"""
+        SELECT COUNT(*) AS reservas,
+               COUNT(*) FILTER (WHERE r.estado IN {_PRESTADAS}) AS prestamos,
+               COUNT(*) FILTER (WHERE r.estado = 'denegada') AS denegadas,
+               COUNT(*) FILTER (WHERE r.estado = 'cancelada') AS canceladas,
+               COUNT(*) FILTER (WHERE r.estado = 'no_show') AS no_show,
+               COUNT(*) FILTER (WHERE r.estado IN ('devuelta_tarde','no_devuelta')) AS devoluciones_problema,
+               COUNT(DISTINCT r.grupo_id) FILTER (WHERE g.n > 1) AS grupos_agrupados,
+               AVG(EXTRACT(EPOCH FROM r.fin - r.inicio)) AS duracion_seg,
+               AVG(EXTRACT(EPOCH FROM r.inicio - r.creado_en)) AS anticipacion_seg
+        FROM reservas r
+        JOIN (SELECT grupo_id, COUNT(*) AS n FROM reservas GROUP BY grupo_id) g ON g.grupo_id = r.grupo_id
+        WHERE {filtro}
+        """,
+        **p,
+    )[0]
+    no_devueltos_hoy = db.session.execute(
+        text("SELECT COUNT(*) FROM recursos WHERE estado = 'no_devuelto'")
+    ).scalar()
+
+    estados = _filas(
+        f"SELECT r.estado, COUNT(*) AS total FROM reservas r WHERE {filtro} GROUP BY r.estado ORDER BY total DESC",
+        **p,
+    )
+
+    activos = _filas(
+        f"""
+        SELECT rc.tipo, rc.nombre, COUNT(*) AS reservas,
+               COUNT(*) FILTER (WHERE r.estado IN {_PRESTADAS}) AS prestamos,
+               COUNT(*) FILTER (WHERE r.estado = 'denegada') AS denegadas,
+               COUNT(*) FILTER (WHERE r.estado = 'cancelada') AS canceladas,
+               COUNT(*) FILTER (WHERE r.estado = 'no_show') AS no_show
+        FROM reservas r JOIN recursos rc ON rc.id = r.recurso_id
+        WHERE {filtro}
+        GROUP BY rc.id, rc.tipo, rc.nombre
+        ORDER BY prestamos DESC, reservas DESC, rc.nombre
+        """,
+        **p,
+    )
+
+    usuarios = _filas(
+        f"""
+        SELECT u.nombre, u.telefono_wa, COUNT(*) AS reservas,
+               COUNT(*) FILTER (WHERE r.estado IN {_PRESTADAS}) AS prestamos,
+               COUNT(*) FILTER (WHERE r.estado = 'devuelta_tarde') AS devueltas_tarde,
+               COUNT(*) FILTER (WHERE r.estado = 'no_show') AS no_show,
+               COUNT(*) FILTER (WHERE r.estado = 'no_devuelta') AS no_devueltas,
+               (SELECT AVG(EXTRACT(EPOCH FROM pu.retraso)) FROM reserva_puntualidad pu
+                 WHERE pu.usuario_id = u.id AND pu.evento = 'devolucion' AND pu.retraso > interval '0'
+                   AND {_en_periodo("pu.inicio")}) AS retraso_devolucion_seg
+        FROM reservas r JOIN usuarios u ON u.id = r.usuario_id
+        WHERE {filtro}
+        GROUP BY u.id, u.nombre, u.telefono_wa
+        ORDER BY reservas DESC, prestamos DESC
+        LIMIT 10
+        """,
+        **p,
+    )
+    for u in usuarios:
+        u["retraso_devolucion_seg"] = _segundos(u["retraso_devolucion_seg"])
+
+    puntualidad = {
+        f["evento"]: {
+            "total": f["total"],
+            "a_tiempo": f["a_tiempo"],
+            "retraso_seg": _segundos(f["retraso_seg"]),
+        }
+        for f in _filas(
+            f"""
+            SELECT pu.evento, COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE pu.retraso <= interval '0') AS a_tiempo,
+                   AVG(EXTRACT(EPOCH FROM pu.retraso)) FILTER (WHERE pu.retraso > interval '0') AS retraso_seg
+            FROM reserva_puntualidad pu
+            WHERE {_en_periodo("pu.inicio")}
+            GROUP BY pu.evento
+            """,
+            **p,
         )
-        .filter(Reserva.inicio >= desde)
-        .group_by(func.date(Reserva.inicio))
-        .order_by(func.date(Reserva.inicio))
-        .all()
+    }
+
+    por_dia = _filas(
+        f"""
+        SELECT (r.inicio AT TIME ZONE :zona)::date AS dia, COUNT(*) AS total
+        FROM reservas r WHERE {filtro} GROUP BY 1 ORDER BY 1
+        """,
+        **p,
+    )
+    # dow: 0 = domingo ... 6 = sábado (el frontend lo reordena).
+    por_dow = {
+        f["k"]: f["total"]
+        for f in _filas(
+            f"SELECT EXTRACT(DOW FROM r.inicio AT TIME ZONE :zona)::int AS k, COUNT(*) AS total "
+            f"FROM reservas r WHERE {filtro} GROUP BY 1",
+            **p,
+        )
+    }
+    por_hora = {
+        f["k"]: f["total"]
+        for f in _filas(
+            f"SELECT EXTRACT(HOUR FROM r.inicio AT TIME ZONE :zona)::int AS k, COUNT(*) AS total "
+            f"FROM reservas r WHERE {filtro} GROUP BY 1",
+            **p,
+        )
+    }
+    canales = _filas(
+        f"SELECT r.canal_origen AS canal, COUNT(*) AS total FROM reservas r WHERE {filtro} GROUP BY 1 ORDER BY total DESC",
+        **p,
     )
 
-    total_bloqueadas_30d = (
-        db.session.query(func.count(AuditoriaBot.id))
-        .filter(AuditoriaBot.creado_en >= desde, AuditoriaBot.permitido.is_(False))
-        .scalar()
+    filtro_bot = _en_periodo("creado_en")
+    bot = _filas(
+        f"""
+        SELECT COUNT(*) AS recibidos, COUNT(*) FILTER (WHERE NOT permitido) AS bloqueados
+        FROM auditoria_bot WHERE {filtro_bot}
+        """,
+        **p,
+    )[0]
+    intents = _filas(
+        f"""
+        SELECT intent_detectado AS intent, COUNT(*) AS total FROM auditoria_bot
+        WHERE {filtro_bot} GROUP BY 1 ORDER BY total DESC LIMIT 10
+        """,
+        **p,
+    )
+    avisos = _filas(
+        f"""
+        SELECT tipo, COUNT(*) FILTER (WHERE enviado) AS enviados,
+               COUNT(*) FILTER (WHERE NOT enviado) AS fallidos
+        FROM reserva_avisos WHERE {filtro_bot} GROUP BY tipo ORDER BY tipo
+        """,
+        **p,
     )
 
-    ultimas_interacciones = (
-        db.session.query(AuditoriaBot)
-        .order_by(AuditoriaBot.creado_en.desc())
-        .limit(20)
-        .all()
-    )
+    # Inventario: altas por recursos.creado_en; bajas y mantenimiento por
+    # transiciones de recurso_estado_historial (no registra el alta). "Dado de
+    # baja" = no_disponible: la app no borra activos.
+    filtro_hist = _en_periodo("h.cambiado_en")
+    adicionados = {
+        f["tipo"]: f["total"]
+        for f in _filas(
+            "SELECT tipo, COUNT(*) AS total FROM recursos rc "
+            f"WHERE {_en_periodo('rc.creado_en')} GROUP BY tipo",
+            **p,
+        )
+    }
+    transiciones = {
+        f["estado_nuevo"]: f["total"]
+        for f in _filas(
+            f"SELECT h.estado_nuevo, COUNT(*) AS total FROM recurso_estado_historial h "
+            f"WHERE h.estado_nuevo IN ('no_disponible','en_mantenimiento') AND {filtro_hist} GROUP BY 1",
+            **p,
+        )
+    }
+    total_hoy = {f["estado"]: f["total"] for f in _filas("SELECT estado, COUNT(*) AS total FROM recursos GROUP BY estado")}
+    seguro = _filas(
+        f"""
+        SELECT COUNT(DISTINCT g.id) FILTER (WHERE g.sale_de_barranquilla) AS salen,
+               COUNT(DISTINCT g.id) FILTER (WHERE g.sale_de_barranquilla = FALSE) AS no_salen,
+               COUNT(DISTINCT g.id) FILTER (WHERE g.sale_de_barranquilla IS NULL) AS sin_dato,
+               COUNT(*) FILTER (WHERE g.sale_de_barranquilla) AS lineas_salen
+        FROM reservas r JOIN reserva_grupos g ON g.id = r.grupo_id
+        WHERE {filtro}
+        """,
+        **p,
+    )[0]
 
     return jsonify(
         {
-            "reservas_por_dia": [{"dia": str(f.dia), "total": f.total} for f in reservas_por_dia],
-            "total_reservas_30d": sum(f.total for f in reservas_por_dia),
-            "total_bloqueadas_30d": total_bloqueadas_30d or 0,
-            "ultimas_interacciones": [
-                {
-                    "telefono_wa": i.telefono_wa,
-                    "intent": i.intent_detectado,
-                    "permitido": i.permitido,
-                    "motivo_bloqueo": i.motivo_bloqueo,
-                    "estado_envio": i.estado_envio,
-                    "creado_en": i.creado_en.isoformat() if i.creado_en else None,
-                }
-                for i in ultimas_interacciones
-            ],
+            "periodo": periodo, "desde": fechas[0] and fechas[0].isoformat(), "hasta": fechas[1] and fechas[1].isoformat(),
+            "inventario": {
+                "adicionados": {t: adicionados.get(t, 0) for t in ("equipo", "espacio")},
+                "dados_de_baja": {
+                    "periodo": transiciones.get("no_disponible", 0),
+                    "hoy": total_hoy.get("no_disponible", 0),
+                },
+                "mantenimiento": {
+                    "periodo": transiciones.get("en_mantenimiento", 0),
+                    "hoy": total_hoy.get("en_mantenimiento", 0),
+                },
+                "total_hoy": total_hoy,
+            },
+            "seguro": seguro,
+            "resumen": {
+                **{k: resumen[k] for k in (
+                    "reservas", "prestamos", "denegadas", "canceladas", "no_show",
+                    "devoluciones_problema", "grupos_agrupados",
+                )},
+                "no_devueltos_hoy": no_devueltos_hoy or 0,
+            },
+            "estados": estados,
+            "activos": {
+                tipo: [{k: v for k, v in a.items() if k != "tipo"} for a in activos if a["tipo"] == tipo][:10]
+                for tipo in ("equipo", "espacio")
+            },
+            "usuarios": usuarios,
+            "puntualidad": puntualidad,
+            "reservas_por_dia": [{"dia": str(f["dia"]), "total": f["total"]} for f in por_dia],
+            "por_dia_semana": [por_dow.get(k, 0) for k in range(7)],
+            "por_hora": [por_hora.get(k, 0) for k in range(24)],
+            "habitos": {
+                "duracion_seg": _segundos(resumen["duracion_seg"]),
+                "anticipacion_seg": _segundos(resumen["anticipacion_seg"]),
+                "canales": canales,
+            },
+            "bot": {**bot, "intents": intents, "avisos": avisos},
+        }
+    )
+
+
+@bp.route("/api/metricas/activo/<int:recurso_id>")
+def api_metricas_activo(recurso_id):
+    try:
+        periodo, desde, hasta, fechas = _periodo_metricas()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    ficha = _filas(
+        """
+        SELECT rc.id, rc.nombre, rc.tipo, rc.subcategoria, rc.placa, rc.estado, rc.creado_en,
+               pa.nombre AS padre, es.nombre AS espacio
+        FROM recursos rc
+        LEFT JOIN recursos pa ON pa.id = rc.padre_id
+        LEFT JOIN recursos es ON es.id = rc.espacio_id
+        WHERE rc.id = :rid
+        """,
+        rid=recurso_id,
+    )
+    if not ficha:
+        return jsonify({"error": "El activo no existe."}), 404
+    ficha = ficha[0]
+    ficha["creado_en"] = ficha["creado_en"].isoformat() if ficha["creado_en"] else None
+
+    p = {"desde": desde, "hasta": hasta, "zona": recursos_service.ZONA_HORARIA_LACS.key, "rid": recurso_id}
+    # Mismas reglas que api_metricas, acotadas a este activo.
+    filtro = f"r.recurso_id = :rid AND {_en_periodo('r.inicio')}"
+
+    c = _filas(
+        f"""
+        SELECT COUNT(*) AS reservas,
+               COUNT(*) FILTER (WHERE r.estado IN {_PRESTADAS}) AS prestamos,
+               COUNT(*) FILTER (WHERE r.estado = 'denegada') AS denegadas,
+               COUNT(*) FILTER (WHERE r.estado = 'cancelada') AS canceladas,
+               COUNT(*) FILTER (WHERE r.estado = 'no_show') AS no_show,
+               COUNT(*) FILTER (WHERE r.estado = 'devuelta_tarde') AS devueltas_tarde,
+               COUNT(*) FILTER (WHERE r.estado = 'no_devuelta') AS no_devueltas,
+               SUM(EXTRACT(EPOCH FROM r.fin - r.inicio)) FILTER (WHERE r.estado IN {_PRESTADAS}) AS prestado_seg,
+               AVG(EXTRACT(EPOCH FROM r.fin - r.inicio)) AS duracion_seg,
+               AVG(EXTRACT(EPOCH FROM r.inicio - r.creado_en)) AS anticipacion_seg,
+               COUNT(DISTINCT r.usuario_id) AS usuarios,
+               COUNT(*) FILTER (WHERE g.sale_de_barranquilla) AS en_grupos_que_salen
+        FROM reservas r JOIN reserva_grupos g ON g.id = r.grupo_id
+        WHERE {filtro}
+        """,
+        **p,
+    )[0]
+    estados = _filas(
+        f"SELECT r.estado, COUNT(*) AS total FROM reservas r WHERE {filtro} GROUP BY r.estado ORDER BY total DESC",
+        **p,
+    )
+    usuarios = _filas(
+        f"""
+        SELECT u.nombre, u.telefono_wa, COUNT(*) AS reservas,
+               COUNT(*) FILTER (WHERE r.estado IN {_PRESTADAS}) AS prestamos,
+               COUNT(*) FILTER (WHERE r.estado = 'devuelta_tarde') AS devueltas_tarde
+        FROM reservas r JOIN usuarios u ON u.id = r.usuario_id
+        WHERE {filtro}
+        GROUP BY u.id, u.nombre, u.telefono_wa
+        ORDER BY reservas DESC, prestamos DESC
+        LIMIT 10
+        """,
+        **p,
+    )
+    puntualidad = {
+        f["evento"]: {"total": f["total"], "a_tiempo": f["a_tiempo"], "retraso_seg": _segundos(f["retraso_seg"])}
+        for f in _filas(
+            f"""
+            SELECT pu.evento, COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE pu.retraso <= interval '0') AS a_tiempo,
+                   AVG(EXTRACT(EPOCH FROM pu.retraso)) FILTER (WHERE pu.retraso > interval '0') AS retraso_seg
+            FROM reserva_puntualidad pu
+            WHERE pu.recurso_id = :rid AND {_en_periodo("pu.inicio")}
+            GROUP BY pu.evento
+            """,
+            **p,
+        )
+    }
+    por_dia = _filas(
+        f"SELECT (r.inicio AT TIME ZONE :zona)::date AS dia, COUNT(*) AS total FROM reservas r WHERE {filtro} GROUP BY 1 ORDER BY 1",
+        **p,
+    )
+    por_dow = {
+        f["k"]: f["total"]
+        for f in _filas(
+            f"SELECT EXTRACT(DOW FROM r.inicio AT TIME ZONE :zona)::int AS k, COUNT(*) AS total "
+            f"FROM reservas r WHERE {filtro} GROUP BY 1",
+            **p,
+        )
+    }
+    por_hora = {
+        f["k"]: f["total"]
+        for f in _filas(
+            f"SELECT EXTRACT(HOUR FROM r.inicio AT TIME ZONE :zona)::int AS k, COUNT(*) AS total "
+            f"FROM reservas r WHERE {filtro} GROUP BY 1",
+            **p,
+        )
+    }
+    historial = _filas(
+        """
+        SELECT cambiado_en, estado_anterior, estado_nuevo, motivo, nota, reserva_id
+        FROM recurso_estado_historial WHERE recurso_id = :rid ORDER BY cambiado_en DESC, id DESC
+        """,
+        rid=recurso_id,
+    )
+    for h in historial:
+        h["cambiado_en"] = h["cambiado_en"].isoformat()
+
+    def _reserva_cercana(comparador: str, orden: str):
+        f = _filas(
+            f"""
+            SELECT r.id, r.inicio, r.fin, r.estado, u.nombre, u.telefono_wa
+            FROM reservas r JOIN usuarios u ON u.id = r.usuario_id
+            WHERE r.recurso_id = :rid AND r.inicio {comparador} now()
+            ORDER BY r.inicio {orden} LIMIT 1
+            """,
+            rid=recurso_id,
+        )
+        if not f:
+            return None
+        f[0]["inicio"], f[0]["fin"] = f[0]["inicio"].isoformat(), f[0]["fin"].isoformat()
+        return f[0]
+
+    return jsonify(
+        {
+            "periodo": periodo, "desde": fechas[0] and fechas[0].isoformat(), "hasta": fechas[1] and fechas[1].isoformat(),
+            "ficha": ficha,
+            "conteos": {
+                k: c[k]
+                for k in ("reservas", "prestamos", "denegadas", "canceladas", "no_show", "devueltas_tarde", "no_devueltas")
+            },
+            "estados": estados,
+            "uso": {
+                "prestado_seg": _segundos(c["prestado_seg"]) or 0,
+                "duracion_seg": _segundos(c["duracion_seg"]),
+                "anticipacion_seg": _segundos(c["anticipacion_seg"]),
+                "usuarios": c["usuarios"],
+            },
+            "usuarios": usuarios,
+            "puntualidad": puntualidad,
+            "seguro": {"reservas_que_salen": c["en_grupos_que_salen"]},
+            "reservas_por_dia": [{"dia": str(f["dia"]), "total": f["total"]} for f in por_dia],
+            "por_dia_semana": [por_dow.get(k, 0) for k in range(7)],
+            "por_hora": [por_hora.get(k, 0) for k in range(24)],
+            "inventario": {
+                "historial": historial,
+                "veces_mantenimiento": sum(1 for h in historial if h["estado_nuevo"] == "en_mantenimiento"),
+                "veces_no_devuelto": sum(1 for h in historial if h["estado_nuevo"] == "no_devuelto"),
+            },
+            "ultima_reserva": _reserva_cercana("<=", "DESC"),
+            "proxima_reserva": _reserva_cercana(">", "ASC"),
+        }
+    )
+
+
+_LIMITE_TIMELINE = 500
+
+
+@bp.route("/api/metricas/activo/<int:recurso_id>/timeline")
+def api_timeline_activo(recurso_id):
+    try:
+        periodo, desde, hasta, fechas = _periodo_metricas()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not _filas("SELECT 1 FROM recursos WHERE id = :rid", rid=recurso_id):
+        return jsonify({"error": "El activo no existe."}), 404
+    p = {"desde": desde, "hasta": hasta, "rid": recurso_id, "limite": _LIMITE_TIMELINE + 1}
+    # Todas las ramas devuelven las mismas columnas; lo que no aplica va NULL.
+    ev = """
+        SELECT CASE WHEN h.estado_anterior IS NULL THEN 'reserva_creada'
+                    WHEN h.estado_nuevo IS NULL THEN 'reserva_eliminada'
+                    WHEN h.estado_anterior = h.estado_nuevo THEN 'reserva_horario'
+                    ELSE 'reserva_estado' END AS tipo,
+               h.cambiado_en AS fecha, h.reserva_id, h.grupo_id, u.nombre AS usuario, u.telefono_wa,
+               h.estado_anterior, h.estado_nuevo, h.inicio, h.fin, NULL AS detalle, NULL AS momento, NULL AS origen
+        FROM reserva_estado_historial h LEFT JOIN usuarios u ON u.id = h.usuario_id
+        WHERE h.recurso_id = :rid AND {h}
+        UNION ALL
+        SELECT 'activo_estado', h.cambiado_en, h.reserva_id, NULL, NULL, NULL, h.estado_anterior, h.estado_nuevo,
+               NULL, NULL, NULLIF(concat_ws(' · ', h.motivo, h.nota), ''), NULL, NULL
+        FROM recurso_estado_historial h WHERE h.recurso_id = :rid AND {h}
+        UNION ALL
+        SELECT 'alta', h.creado_en, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        FROM recursos h WHERE h.id = :rid AND {h_alta}
+        UNION ALL
+        SELECT 'acta', a.creado_en, NULL, a.grupo_id, NULL, NULL, NULL, NULL, NULL, NULL,
+               NULLIF(concat_ws(' · ', a.firmado_por, a.nota), ''), a.momento, a.origen
+        FROM reserva_actas a
+        WHERE a.grupo_id IN (SELECT grupo_id FROM reservas WHERE recurso_id = :rid
+                             UNION SELECT grupo_id FROM reserva_estado_historial WHERE recurso_id = :rid)
+          AND {a}
+        ORDER BY fecha DESC, tipo
+        LIMIT :limite
+    """.format(h=_en_periodo("h.cambiado_en"), h_alta=_en_periodo("h.creado_en"), a=_en_periodo("a.creado_en"))
+    eventos = _filas(ev, **p)
+    truncado = len(eventos) > _LIMITE_TIMELINE
+    eventos = eventos[:_LIMITE_TIMELINE]
+    for e in eventos:
+        for k in ("fecha", "inicio", "fin"):
+            e[k] = e[k].isoformat() if e[k] else None
+    return jsonify(
+        {
+            "periodo": periodo, "desde": fechas[0] and fechas[0].isoformat(), "hasta": fechas[1] and fechas[1].isoformat(),
+            "recurso_id": recurso_id, "eventos": eventos, "truncado": truncado,
         }
     )
 

@@ -71,24 +71,191 @@ export function fetchQr() {
 
 // --- Métricas --------------------------------------------------------------
 
-export type Interaccion = {
-  telefono_wa: string | null
-  intent: string | null
-  permitido: boolean
-  motivo_bloqueo: string | null
-  estado_envio: string
-  creado_en: string | null
+export type Periodo = "30" | "90" | "todo" | "rango"
+
+// desde y hasta (YYYY-MM-DD, ambos incluidos) solo cuentan con periodo "rango".
+export type FiltroMetricas = { periodo: Periodo; desde?: string; hasta?: string }
+
+function queryMetricas({ periodo, desde, hasta }: FiltroMetricas) {
+  const q = new URLSearchParams({ periodo })
+  if (periodo === "rango" && desde && hasta) {
+    q.set("desde", desde)
+    q.set("hasta", hasta)
+  }
+  return q.toString()
 }
+
+export type FilaActivo = {
+  nombre: string
+  reservas: number
+  prestamos: number
+  denegadas: number
+  canceladas: number
+  no_show: number
+}
+
+export type FilaUsuario = {
+  nombre: string | null
+  telefono_wa: string | null
+  reservas: number
+  prestamos: number
+  devueltas_tarde: number
+  no_show: number
+  no_devueltas: number
+  retraso_devolucion_seg: number | null
+}
+
+export type PuntualidadEvento = { total: number; a_tiempo: number; retraso_seg: number | null }
 
 export type Metricas = {
+  periodo: Periodo
+  desde: string | null
+  hasta: string | null
+  inventario: {
+    adicionados: { equipo: number; espacio: number }
+    dados_de_baja: { periodo: number; hoy: number }
+    mantenimiento: { periodo: number; hoy: number }
+    total_hoy: Partial<Record<EstadoRecurso, number>>
+  }
+  seguro: { salen: number; no_salen: number; sin_dato: number; lineas_salen: number }
+  resumen: {
+    reservas: number
+    prestamos: number
+    denegadas: number
+    canceladas: number
+    no_show: number
+    devoluciones_problema: number
+    no_devueltos_hoy: number
+    grupos_agrupados: number
+  }
+  estados: { estado: string; total: number }[]
+  activos: { equipo: FilaActivo[]; espacio: FilaActivo[] }
+  usuarios: FilaUsuario[]
+  puntualidad: { entrega?: PuntualidadEvento; devolucion?: PuntualidadEvento }
   reservas_por_dia: { dia: string; total: number }[]
-  total_reservas_30d: number
-  total_bloqueadas_30d: number
-  ultimas_interacciones: Interaccion[]
+  por_dia_semana: number[] // 0 = domingo
+  por_hora: number[]
+  habitos: {
+    duracion_seg: number | null
+    anticipacion_seg: number | null
+    canales: { canal: string; total: number }[]
+  }
+  bot: {
+    recibidos: number
+    bloqueados: number
+    intents: { intent: string | null; total: number }[]
+    avisos: { tipo: string; enviados: number; fallidos: number }[]
+  }
 }
 
-export function fetchMetricas() {
-  return request<Metricas>("/metricas")
+export function fetchMetricas(filtro: FiltroMetricas) {
+  return request<Metricas>(`/metricas?${queryMetricas(filtro)}`)
+}
+
+type ReservaCercana = {
+  id: number
+  inicio: string
+  fin: string
+  estado: string
+  nombre: string | null
+  telefono_wa: string | null
+}
+
+export type MetricasActivo = {
+  periodo: Periodo
+  desde: string | null
+  hasta: string | null
+  ficha: {
+    id: number
+    nombre: string
+    tipo: TipoRecurso
+    subcategoria: string | null
+    placa: string | null
+    estado: EstadoRecurso
+    creado_en: string | null
+    padre: string | null
+    espacio: string | null
+  }
+  conteos: {
+    reservas: number
+    prestamos: number
+    denegadas: number
+    canceladas: number
+    no_show: number
+    devueltas_tarde: number
+    no_devueltas: number
+  }
+  estados: { estado: string; total: number }[]
+  uso: {
+    prestado_seg: number
+    duracion_seg: number | null
+    anticipacion_seg: number | null
+    usuarios: number
+  }
+  usuarios: (Pick<FilaUsuario, "nombre" | "telefono_wa" | "reservas" | "prestamos" | "devueltas_tarde">)[]
+  puntualidad: Metricas["puntualidad"]
+  seguro: { reservas_que_salen: number }
+  reservas_por_dia: { dia: string; total: number }[]
+  por_dia_semana: number[] // 0 = domingo
+  por_hora: number[]
+  inventario: {
+    historial: {
+      cambiado_en: string
+      estado_anterior: EstadoRecurso | null
+      estado_nuevo: EstadoRecurso | null
+      motivo: string | null
+      nota: string | null
+      reserva_id: number | null
+    }[]
+    veces_mantenimiento: number
+    veces_no_devuelto: number
+  }
+  ultima_reserva: ReservaCercana | null
+  proxima_reserva: ReservaCercana | null
+}
+
+export function fetchMetricasActivo(id: number, filtro: FiltroMetricas) {
+  return request<MetricasActivo>(`/metricas/activo/${id}?${queryMetricas(filtro)}`)
+}
+
+export type TipoEventoTimeline =
+  | "alta"
+  | "reserva_creada"
+  | "reserva_estado"
+  | "reserva_horario"
+  | "reserva_eliminada"
+  | "acta"
+  | "activo_estado"
+
+export type EventoTimeline = {
+  tipo: TipoEventoTimeline
+  fecha: string
+  reserva_id: number | null
+  grupo_id: number | null
+  usuario: string | null
+  telefono_wa: string | null
+  // De reserva o de activo según el tipo (EstadoReserva o EstadoRecurso).
+  estado_anterior: string | null
+  estado_nuevo: string | null
+  inicio: string | null
+  fin: string | null
+  detalle: string | null
+  // Solo en las actas.
+  momento: "entrega" | "devolucion" | null
+  origen: "firmada" | "subida" | null
+}
+
+export type TimelineActivo = {
+  periodo: Periodo
+  desde: string | null
+  hasta: string | null
+  recurso_id: number
+  eventos: EventoTimeline[]
+  truncado: boolean
+}
+
+export function fetchTimelineActivo(id: number, filtro: FiltroMetricas) {
+  return request<TimelineActivo>(`/metricas/activo/${id}/timeline?${queryMetricas(filtro)}`)
 }
 
 // --- Usuarios --------------------------------------------------------------
