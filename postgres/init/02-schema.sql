@@ -655,6 +655,9 @@ CREATE INDEX IF NOT EXISTS idx_reservas_estado_inicio ON reservas (estado, inici
 -- app/avisos_reservas.py): 'previo' (30 min antes de `inicio`), 'hora' (a la
 -- hora exacta) y 'no_show' (a los NO_SHOW_MARGEN_MIN minutos de `inicio` sin
 -- acta de entrega -- ese aviso es el que además cambia `estado` a 'no_show').
+-- Un cuarto aviso, 'devolucion', va aparte: a una reserva 'entregada' le quedan
+-- AVISO_DEVOLUCION_MIN minutos para `fin` y se le pide devolver el equipo (no
+-- cambia estado).
 -- Una fila por (grupo, tipo), la ponga el ticker (hilo de fondo) o el barrido
 -- perezoso del listado de reservas, lo que llegue primero.
 --
@@ -683,13 +686,28 @@ CREATE INDEX IF NOT EXISTS idx_reservas_estado_inicio ON reservas (estado, inici
 CREATE TABLE IF NOT EXISTS reserva_avisos (
     id        SERIAL PRIMARY KEY,
     grupo_id  INTEGER NOT NULL REFERENCES reserva_grupos(id) ON DELETE CASCADE,
-    tipo      VARCHAR(20) NOT NULL,   -- previo | hora | no_show
+    tipo      VARCHAR(20) NOT NULL,   -- previo | hora | no_show | devolucion
     enviado   BOOLEAN NOT NULL DEFAULT false,
     motivo    VARCHAR(30),            -- NULL si salió bien; 'vencido' | 'error_envio'
     creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT reserva_avisos_tipo_valido CHECK (tipo IN ('previo','hora','no_show')),
+    CONSTRAINT reserva_avisos_tipo_valido CHECK (tipo IN ('previo','hora','no_show','devolucion')),
     CONSTRAINT reserva_avisos_unico UNIQUE (grupo_id, tipo)
 );
+
+-- Base viva creada antes del aviso 'devolucion': recrea el CHECK con los cuatro
+-- tipos (el CREATE TABLE IF NOT EXISTS de arriba no toca una tabla que ya existe).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'reserva_avisos_tipo_valido'
+          AND pg_get_constraintdef(oid) NOT LIKE '%devolucion%'
+    ) THEN
+        ALTER TABLE reserva_avisos DROP CONSTRAINT reserva_avisos_tipo_valido;
+        ALTER TABLE reserva_avisos ADD CONSTRAINT reserva_avisos_tipo_valido
+            CHECK (tipo IN ('previo','hora','no_show','devolucion'));
+    END IF;
+END $$;
 
 -- Historial de estados de cada línea de reserva, para métricas de largo plazo
 -- ("¿quién recoge tarde en el último año?"). Antes solo se guardaba el estado

@@ -3,8 +3,11 @@ Ciclo de avisos de WhatsApp y no-show automático de las reservas.
 
 Una reserva 'confirmada' que nadie recoge pasa sola a 'no_show'
 NO_SHOW_MARGEN_MIN minutos después de `inicio`, con tres avisos por el camino
-(ver AVISO_PREVIO / AVISO_HORA / AVISO_NO_SHOW). Dos cosas empujan el mismo
-`barrer()`:
+(ver AVISO_PREVIO / AVISO_HORA / AVISO_NO_SHOW). Un cuarto aviso,
+AVISO_DEVOLUCION, va aparte: a una reserva 'entregada' le quedan
+AVISO_DEVOLUCION_MIN minutos para `fin` y se le pide devolver el equipo; no
+cambia estado, y pasado `fin` ni se consulta (no usa 'vencido'). Dos cosas
+empujan el mismo `barrer()`:
 
   - El "ticker": un hilo de fondo dentro de este mismo contenedor flask-app
     (ver app/ticker.py) que despierta cada BARRIDO_INTERVALO_SEG segundos.
@@ -49,6 +52,7 @@ re-notifica -- el UNIQUE se lee como "este aviso ya se resolvió una vez para
 este grupo", no como "todavía falta mandarlo".
 """
 
+import math
 from datetime import datetime, timedelta, timezone
 
 from flask import current_app
@@ -62,8 +66,12 @@ from app.models import Reserva, ReservaAviso, Usuario
 AVISO_PREVIO = "previo"
 AVISO_HORA = "hora"
 AVISO_NO_SHOW = "no_show"
+# Cuarto aviso, aparte del ciclo de no-show (por eso no va en _TIPOS_AVISO): lo
+# barre _barrer_devoluciones sobre reservas 'entregada'.
+AVISO_DEVOLUCION = "devolucion"
 
-# Debe calzar con el CHECK reserva_avisos_tipo_valido (postgres/init/02-schema.sql).
+# Los del ciclo de no-show sobre 'confirmada'. El CHECK reserva_avisos_tipo_valido
+# (postgres/init/02-schema.sql) admite además AVISO_DEVOLUCION.
 _TIPOS_AVISO = (AVISO_PREVIO, AVISO_HORA, AVISO_NO_SHOW)
 
 # Clave fija: un solo barrido a la vez alcanza, no hace falta un lock por
@@ -159,9 +167,13 @@ def barrer(ahora: datetime | None = None) -> dict:
         .filter(Reserva.estado == "confirmada", Reserva.inicio <= limite_superior)
         .all()
     )
-    if not lineas:
-        return conteos
+    if lineas:
+        _barrer_ciclo_no_show(lineas, ahora, cfg, aviso_ventana, conteos)
+    _barrer_devoluciones(ahora, cfg, conteos)
+    return conteos
 
+
+def _barrer_ciclo_no_show(lineas, ahora, cfg, aviso_ventana, conteos) -> None:
     por_grupo: dict[int, list[Reserva]] = {}
     for linea in lineas:
         por_grupo.setdefault(linea.grupo_id, []).append(linea)
@@ -218,4 +230,60 @@ def barrer(ahora: datetime | None = None) -> dict:
                 # el resto del lote, no se propaga.
                 db.session.rollback()
 
-    return conteos
+
+def _barrer_devoluciones(ahora: datetime, cfg, conteos: dict) -> None:
+    """Aviso 'devolucion': a las reservas 'entregada' que ya entran en los
+    últimos AVISO_DEVOLUCION_MIN minutos antes de `fin` se les pide devolver.
+    Pasado `fin` ya no se consulta (sería "te quedan 30 min" falso; eso ya es
+    'retrasada'), así que este tipo nunca crea filas 'vencido'. No cambia
+    estado. El texto lleva los minutos que de verdad quedan: si recogió tarde o
+    el contenedor estuvo caído, pueden ser menos que AVISO_DEVOLUCION_MIN.
+
+    También respeta el corte de frescura AVISO_VENTANA_MIN (momento ideal
+    `fin - AVISO_DEVOLUCION_MIN` dentro de la ventana), para que
+    AVISO_VENTANA_MIN=0 siga apagando TODOS los avisos (docs/SEGURIDAD.md)."""
+    limite = ahora + timedelta(minutes=cfg.get("AVISO_DEVOLUCION_MIN", 30))
+    desde = limite - timedelta(minutes=cfg.get("AVISO_VENTANA_MIN", 120))
+    lineas = (
+        Reserva.query.options(joinedload(Reserva.usuario), joinedload(Reserva.recurso))
+        .filter(Reserva.estado == "entregada", Reserva.fin > ahora,
+                Reserva.fin >= desde, Reserva.fin <= limite)
+        .all()
+    )
+    if not lineas:
+        return
+
+    por_grupo: dict[int, list[Reserva]] = {}
+    for linea in lineas:
+        por_grupo.setdefault(linea.grupo_id, []).append(linea)
+
+    ya_avisados = {
+        a.grupo_id
+        for a in ReservaAviso.query.filter(
+            ReservaAviso.grupo_id.in_(por_grupo.keys()), ReservaAviso.tipo == AVISO_DEVOLUCION
+        ).all()
+    }
+
+    for grupo_id, reservas_grupo in por_grupo.items():
+        if grupo_id in ya_avisados:
+            continue
+        conteos["grupos"] += 1
+        fin_grupo = _con_tz(max(r.fin for r in reservas_grupo))
+        minutos = math.ceil((fin_grupo - ahora).total_seconds() / 60)
+        usuario = reservas_grupo[0].usuario
+        enviado = (
+            avisar_usuario(
+                usuario, recursos_service.mensaje_aviso_devolucion(reservas_grupo, minutos), f"aviso_{AVISO_DEVOLUCION}"
+            )
+            if usuario is not None else False
+        )
+        db.session.add(ReservaAviso(
+            grupo_id=grupo_id, tipo=AVISO_DEVOLUCION, enviado=enviado,
+            motivo=None if enviado else "error_envio",
+        ))
+        if enviado:
+            conteos["avisos_enviados"] += 1
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()  # el otro worker ganó la carrera (ver barrer)

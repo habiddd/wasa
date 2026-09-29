@@ -1128,6 +1128,20 @@ def mensaje_no_show(reservas: list[Reserva]) -> str:
     )
 
 
+def mensaje_aviso_devolucion(reservas: list[Reserva], minutos: int) -> str:
+    """WhatsApp que manda el barrido cuando a una reserva 'entregada' le quedan
+    unos AVISO_DEVOLUCION_MIN minutos (ver avisos_reservas.AVISO_DEVOLUCION).
+    `reservas` son solo las líneas 'entregada' del grupo; `minutos` son los que
+    de verdad quedan al enviar, no el valor configurado."""
+    primera = reservas[0]
+    fin_local = max(r.fin for r in reservas).astimezone(ZONA_HORARIA_LACS)
+    return (
+        f"⏳ Te quedan {minutos} minutos de tu reserva N.º {primera.grupo_id} "
+        f"({_nombres_con_cantidad(reservas)}): termina a las {_formatear_hora(fin_local)} "
+        "Acércate a la LACS a devolver los equipos a tiempo."
+    )
+
+
 PALABRAS_CANCELAR = {"no", "cancelar", "cancela", "cerrar"}
 
 _DIAS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")

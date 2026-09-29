@@ -49,6 +49,7 @@ const ETIQUETA_INTENT: Record<string, string> = {
   aviso_previo: "Aviso previo",
   aviso_hora: "Aviso de hora",
   aviso_no_show: "Aviso de no presentación",
+  aviso_devolucion: "Aviso de devolución",
   oferta_reserva: "Oferta de reserva",
 }
 

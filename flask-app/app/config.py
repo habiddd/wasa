@@ -72,6 +72,8 @@ class Config:
     NO_SHOW_MARGEN_MIN = int(os.environ.get("NO_SHOW_MARGEN_MIN", 30))
     # Minutos ANTES de `inicio` para el aviso "previo".
     AVISO_PREVIO_MIN = int(os.environ.get("AVISO_PREVIO_MIN", 30))
+    # Minutos ANTES de `fin` para el aviso "devolucion" (reservas entregadas).
+    AVISO_DEVOLUCION_MIN = int(os.environ.get("AVISO_DEVOLUCION_MIN", 30))
     # Corte de frescura: un aviso solo se manda si su momento ideal cayó
     # dentro de los últimos AVISO_VENTANA_MIN minutos -- si el contenedor
     # estuvo caído más que eso, el barrido igual deja la fila en

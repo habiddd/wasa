@@ -152,7 +152,8 @@ los submenús.
   **No-show automático**: una `confirmada` que nadie recoge pasa sola a
   `no_show` 30 minutos después de su hora de inicio (configurable,
   `NO_SHOW_MARGEN_MIN`), con avisos de WhatsApp al estudiante 30 min antes, a
-  la hora, y al marcar el no-show. Si el estudiante llega tarde pero su
+  la hora, y al marcar el no-show (además, 30 min antes de `fin` se le pide
+  devolver a quien ya recogió, `AVISO_DEVOLUCION_MIN`). Si el estudiante llega tarde pero su
   horario todavía no terminó, se le puede entregar igual — queda marcada
   como **"Entrega tardía"** (bandera `entrega_tardia`, no un estado nuevo:
   sobrevive a la devolución) y el horario no se extiende por la demora. Ver

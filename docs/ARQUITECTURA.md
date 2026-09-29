@@ -1620,7 +1620,7 @@ ya pasó. El bot podría prestarle ese equipo a otra persona mientras sigue
 físicamente fuera. El dashboard lo señala con el badge "Retrasada", pero nada
 lo impide a nivel de datos.
 
-### No-show automático y avisos de recogida (`app/avisos_reservas.py`, `app/ticker.py`)
+### No-show automático y avisos de recogida y devolución (`app/avisos_reservas.py`, `app/ticker.py`)
 
 Una reserva `confirmada` que nadie recoge no se queda así para siempre:
 `NO_SHOW_MARGEN_MIN` minutos después de `inicio` (default 30) pasa sola a
@@ -1632,6 +1632,12 @@ Una reserva `confirmada` que nadie recoge no se queda así para siempre:
   entrega -- este es el que además cambia el estado. Le dice al estudiante
   que la reserva se liberó y que, si todavía está dentro de su horario,
   puede pasar por la LACS igual (ver `entrega_tardia` arriba).
+- **`devolucion`** (aparte del ciclo, sobre reservas `entregada`):
+  `AVISO_DEVOLUCION_MIN` minutos ANTES de `fin` (default 30) se le pide al
+  estudiante que devuelva. No cambia estado; pasado `fin` ya no se manda, y el
+  texto lleva los minutos que de verdad quedan. Respeta el mismo corte de
+  frescura `AVISO_VENTANA_MIN`, pero sin crear filas `vencido`. Probado con
+  `flask-app/verificar_aviso_devolucion.py`.
 
 **Qué lo empuja: un ticker más un barrido perezoso, no un cron.** Se
 descartó sumar APScheduler, Celery o un contenedor nuevo -- el volumen de
@@ -1707,6 +1713,7 @@ mandarlo".
 | --- | --- | --- |
 | `NO_SHOW_MARGEN_MIN` | `30` | Minutos después de `inicio` para marcar `no_show`. El deadline real es `min(inicio + margen, fin)`: una reserva más corta que el margen no puede vencer después de haber terminado. |
 | `AVISO_PREVIO_MIN` | `30` | Minutos antes de `inicio` para el aviso `previo`. |
+| `AVISO_DEVOLUCION_MIN` | `30` | Minutos antes de `fin` para el aviso `devolucion` (reservas `entregada`). |
 | `AVISO_VENTANA_MIN` | `120` | Corte de frescura (arriba). |
 | `BARRIDO_INTERVALO_SEG` | `60` | Cada cuánto despierta el ticker. También es el TTL del lock de Redis. |
 | `BARRIDO_ACTIVO` | `1` | `0` apaga el hilo ticker. **No apaga el barrido perezoso**: el listado de reservas lo sigue llamando, así que esto NO es un interruptor para dejar de mandar WhatsApp. Para eso, ver `docs/SEGURIDAD.md`. |

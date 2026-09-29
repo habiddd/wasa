@@ -264,7 +264,8 @@ class ReservaActa(db.Model):
 
 class ReservaAviso(db.Model):
     """Una fila por cada aviso de WhatsApp del ciclo de no-show ('previo',
-    'hora', 'no_show') que ya se intentó para un grupo -- ver
+    'hora', 'no_show', más 'devolucion' para reservas entregadas) que ya se
+    intentó para un grupo -- ver
     app/avisos_reservas.py. El UNIQUE (grupo_id, tipo) del esquema es la
     garantía real contra avisos duplicados (gunicorn corre con dos workers,
     cada uno con su propio ticker); el lock de Redis es solo la optimización
@@ -281,7 +282,7 @@ class ReservaAviso(db.Model):
     grupo_id = db.Column(
         db.Integer, db.ForeignKey("reserva_grupos.id", ondelete="CASCADE"), nullable=False
     )
-    tipo = db.Column(db.String(20), nullable=False)  # 'previo' | 'hora' | 'no_show'
+    tipo = db.Column(db.String(20), nullable=False)  # 'previo' | 'hora' | 'no_show' | 'devolucion'
     enviado = db.Column(db.Boolean, nullable=False, default=False)
     # NULL si salió bien; 'vencido' (el momento ideal ya pasó hace más de
     # AVISO_VENTANA_MIN cuando el barrido lo encontró, ej. contenedor caído

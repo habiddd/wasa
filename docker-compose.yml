@@ -158,6 +158,7 @@ services:
       # 'no_show' NO_SHOW_MARGEN_MIN minutos después de `inicio`.
       NO_SHOW_MARGEN_MIN: ${NO_SHOW_MARGEN_MIN:-30}
       AVISO_PREVIO_MIN: ${AVISO_PREVIO_MIN:-30}
+      AVISO_DEVOLUCION_MIN: ${AVISO_DEVOLUCION_MIN:-30}
       # Corte de frescura: pasados estos minutos del momento ideal de un
       # aviso, ya no se manda (se registra como 'vencido') -- así el
       # contenedor puede estar caído un rato sin que al volver se disparen

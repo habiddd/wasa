@@ -187,13 +187,13 @@ despierta cada 60 s y puede mandar WhatsApp por su cuenta. Es un cambio en el
 perfil de riesgo del sistema, no solo una funcionalidad más, y por eso queda
 escrito acá.
 
-**Radio de alcance.** Cada grupo de reserva puede generar como máximo tres
-mensajes (`previo`, `hora`, `no_show`), garantizado por el
-`UNIQUE (grupo_id, tipo)` de `reserva_avisos`. No hay reintentos: un envío
-fallido queda `motivo='error_envio'` y no se vuelve a intentar nunca. El techo
-por barrido es, entonces, tres mensajes por cada reserva `confirmada` cuya
-ventana de avisos esté abierta — no existe un camino por el que un bug de
-bucle mande miles.
+**Radio de alcance.** Cada grupo de reserva puede generar como máximo cuatro
+mensajes (`previo`, `hora`, `no_show` y, si se entregó, `devolucion`),
+garantizado por el `UNIQUE (grupo_id, tipo)` de `reserva_avisos`. No hay
+reintentos: un envío fallido queda `motivo='error_envio'` y no se vuelve a
+intentar nunca. El techo por barrido es, entonces, tres mensajes por cada
+reserva `confirmada` más uno por cada `entregada` cuya ventana de avisos esté
+abierta — no existe un camino por el que un bug de bucle mande miles.
 
 **Lo que contiene el radio.** El corte de frescura (`AVISO_VENTANA_MIN`) es lo
 que impide el escenario feo: levantar el stack después de días apagado y
@@ -203,7 +203,8 @@ había 27 reservas `confirmada` con `inicio` pasado y ninguna generó mensajes.
 
 **Cómo apagarlo hoy.** No hay una perilla dedicada (ver el pendiente arriba).
 El rodeo que funciona es `AVISO_VENTANA_MIN=0`: todo aviso cuyo momento ya
-pasó cuenta como vencido, así que no sale ningún mensaje, y los cambios de
+pasó cuenta como vencido, así que no sale ningún mensaje (el de `devolucion`
+también respeta este corte), y los cambios de
 estado a `no_show` se siguen aplicando. `BARRIDO_ACTIVO=0` **no** sirve para
 esto: solo apaga el ticker, y el listado de reservas del dashboard sigue
 llamando al mismo barrido cada 30 s.
