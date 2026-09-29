@@ -2054,6 +2054,7 @@ tablas de agregados ni jobs que precalculen nada. Los endpoints viven en
 | `GET /api/metricas` | la subpestaña General |
 | `GET /api/metricas/activo/<id>` | las métricas de un solo activo (404 si no existe) |
 | `GET /api/metricas/activo/<id>/timeline` | los eventos del activo, del más nuevo al más viejo |
+| `GET /api/metricas/uso` | equipos pedidos por asignatura (por NRC) y en reservas particulares (por estudiante) |
 | `GET /api/metricas/excel` | lo mismo que `/api/metricas`, pero en `.xlsx` |
 | `GET /api/datos/excel` | todas las tablas de `public`, una por hoja, sin filtro |
 
@@ -2081,16 +2082,75 @@ de la LACS, no en UTC.
 `reserva_estado_historial` (alta, cambio de estado, cambio de horario y
 borrado de la reserva), `recurso_estado_historial`, el alta del activo y las
 `reserva_actas` de los grupos donde estuvo el activo. Devuelve como máximo 500
-eventos (`_LIMITE_TIMELINE`); si hay más, marca `truncado`.
+eventos (`_LIMITE_TIMELINE`); si hay más, marca `truncado`. El endpoint
+acepta `periodo` como los demás, pero el frontend lo pide siempre con
+`periodo=todo` (`TimelineActivo.tsx`): el timeline es la historia completa
+del activo, y en esa vista el selector de periodo se oculta. Las métricas del
+activo sí usan el mismo periodo que General (un solo estado en `MetricasPanel`).
 
-**Excel** (`openpyxl`, en modo `write_only`).
+**Por uso.** `/api/metricas/uso` trae una fila por línea de equipo del
+periodo (los espacios no cuentan), en cualquier estado, con el `tipo_uso` y el
+`nrc` de su `reserva_grupos`. `_resumen_uso` las agrega en Python por clave:
+el NRC en `asignatura` y el usuario del grupo en `particular`. Por cada clave
+devuelve reservas (grupos distintos), equipos pedidos, préstamos (`_PRESTADAS`),
+estudiantes distintos y sus 5 equipos más pedidos. Por sección, devuelve el top
+10 de claves y los 10 equipos más pedidos. Las reservas se agregan en Python y
+no en SQL porque un grupo con varios equipos cuenta una vez por clave, pero
+una vez por equipo en el conteo de cada equipo. El Excel de métricas no lo
+incluye.
 
-- El de métricas llama a `api_metricas()` con el mismo query string. Así
-  los números son los mismos que se ven en pantalla. `_aplanar` convierte el
-  JSON en hojas: una por cada lista y una hoja "Resumen" con los valores
-  sueltos.
-- El raw hace `SELECT *` de cada tabla. Los nombres de las tablas salen de
-  `information_schema`, no del usuario.
+**Frontend.** Detalles que no salen del SQL:
+
+- `reservas_por_dia` solo trae los días con reservas. `conDiasVacios`
+  rellena con 0 los días intermedios, para que el eje sea continuo y una
+  racha sin reservas se vea como tal.
+- Los intents `*_cpa` y `*_lacs` comparten etiqueta; `sumarPorEtiqueta`
+  los junta en una barra en vez de mostrar "Confirmación de la LACS" dos
+  veces.
+- Las cifras van en `Cifras`/`Cifra` (una superficie dividida en celdas,
+  no una tarjeta por número), con columnas fijadas según cuántas cifras
+  lleva cada grupo para que ninguna fila quede con una sola.
+
+**Excel** (`openpyxl`).
+
+- **Periodo:** el botón del panel arma la URL con el filtro activo
+  (`urlExcelMetricas(filtro)`: `periodo` y, en personalizado, `desde` y
+  `hasta`), así que el archivo trae el mismo periodo que la página. El
+  subtítulo de cada hoja lo repite ("Periodo: últimos 90 días · generado
+  el…").
+- **Métricas** (`app/metricas_excel.py`): `api_metricas_excel` llama a
+  `api_metricas()` y `api_metricas_uso()` con el mismo query string, así que
+  los números son los de pantalla, y `libro_metricas` arma siete hojas:
+  Resumen, Estados, Cuándo se reserva, Top activos y usuarios, Por uso (NRC
+  y particulares), Inventario y seguro, y Bot y hábitos.
+  - **Tablas:** encabezado grafito, filas cebra y barras de datos
+    (formato condicional) en las columnas de conteo.
+  - **Estados:** cada fila lleva el tinte de su color (verde, ámbar o rojo,
+    como los chips del panel); los fallidos y los no devueltos mayores que
+    cero van en rojo.
+  - **Gráficos:** barras nativas de Excel con el valor rotulado (los ceros
+    no se rotulan) y la barra más alta en grafito pleno. El de Estados usa el
+    color de cada estado. Por día rellena los días sin reservas, igual que el
+    panel.
+  - **Ejes en openpyxl 3.1:** hay que poner `delete = False` o los ejes no
+    salen. En las barras horizontales, `x_axis.scaling.orientation =
+    "maxMin"` pone el primero de la tabla arriba y `y_axis.crosses = "max"`
+    deja el eje de valores abajo. Si ese cruce va en `x_axis`, las barras
+    crecen desde la derecha y salen en blanco.
+  - Por uso trae, por cada NRC o estudiante, los equipos que más pide como
+    texto ("Trípode ×10 · iMac ×7"), además del gráfico de equipos pedidos.
+- **Raw** (modo `write_only`): hace `SELECT *` de cada tabla **y vista**
+  de `public`; hoy la única vista es `reserva_puntualidad`, que es
+  calculada. Los nombres salen de `information_schema`, no del usuario. La
+  primera hoja, "Índice", dice qué es cada hoja (tabla o vista) y cuántas
+  filas y columnas trae. Cada hoja tiene el encabezado fijo, filtro y anchos
+  según el contenido. Las listas (`calendario_reglas.dias_semana_bloqueados`)
+  y el `jsonb` (`reserva_actas.anclas`) van como texto JSON. Los PDF de las
+  actas no están en la base, sino en disco (`reserva_actas.archivo` es la
+  ruta), así que el Excel trae la ruta y no el archivo. Se verificó hoja por
+  hoja contra `count(*)` y coinciden todas. Límite conocido: Excel admite
+  1.048.576 filas por hoja; si `auditoria_bot` se acerca a eso, habrá que
+  partirla.
 - `_celda` escribe todo texto como texto (`data_type = "s"`). Sin eso, un
   mensaje de WhatsApp en `auditoria_bot` que empiece por `=` se ejecutaría
   como fórmula al abrir el archivo. También quita los caracteres de control

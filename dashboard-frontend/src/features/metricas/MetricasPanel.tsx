@@ -33,9 +33,11 @@ import {
   type Metricas,
   type Periodo,
 } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { claveDe, hoy, sumarDias } from "@/features/calendario/calendario-utils"
 import { ESTADOS_ACTIVO } from "@/features/activos/tree-utils"
 import { MetricasActivo, type VistaActivo } from "./MetricasActivo"
+import { MetricasUso } from "./MetricasUso"
 
 // Claves que el bot guarda en auditoria_bot.intent_detectado. Las *_cpa son
 // históricas (el laboratorio se llamaba CPA): se muestran igual que las *_lacs.
@@ -156,10 +158,15 @@ export function Vacio({ children = "Sin datos en este periodo." }: { children?: 
   return <p className="text-xs text-muted-foreground">{children}</p>
 }
 
+/** Rótulo de un bloque dentro de una sección ("Por día", "Canal de origen"). */
+export function Subtitulo({ children }: { children: ReactNode }) {
+  return <h3 className="pt-2 text-xs text-muted-foreground first:pt-0">{children}</h3>
+}
+
 export function Seccion({ titulo, children, className }: { titulo: string; children: ReactNode; className?: string }) {
   return (
     <Card className={className}>
-      <CardContent className="space-y-2 py-2">
+      <CardContent className="space-y-3">
         <h2 className="text-sm font-semibold">{titulo}</h2>
         {children}
       </CardContent>
@@ -167,60 +174,142 @@ export function Seccion({ titulo, children, className }: { titulo: string; child
   )
 }
 
+const DIA_MS = 86_400_000
+
 /**
- * Barras finas ancladas a la línea base, con tooltip al pasar el mouse. La
- * tabla oculta (sr-only) le da a lectores de pantalla el mismo detalle que
- * el tooltip da a la vista.
+ * El backend solo manda los días con reservas: se rellenan los huecos con 0
+ * para que el eje sea continuo y una racha vacía se vea como tal.
  */
-export function ReservasPorDiaChart({
+function conDiasVacios(datos: { dia: string; total: number }[]) {
+  if (datos.length === 0) return datos
+  const total = new Map(datos.map((d) => [d.dia, d.total]))
+  const fin = Date.parse(`${datos[datos.length - 1].dia}T00:00:00Z`)
+  const dias = []
+  for (let t = Date.parse(`${datos[0].dia}T00:00:00Z`); t <= fin; t += DIA_MS) {
+    const dia = new Date(t).toISOString().slice(0, 10)
+    dias.push({ dia, total: total.get(dia) ?? 0 })
+  }
+  return dias
+}
+
+/** Paso "redondo" del eje Y (1, 2, 5, 10, 20…) para unas 4 divisiones; los conteos son enteros. */
+function pasoEje(max: number) {
+  const bruto = Math.max(1, max / 4)
+  const base = 10 ** Math.floor(Math.log10(bruto))
+  return Math.max(1, [1, 2, 5, 10].map((m) => m * base).find((p) => p >= bruto)!)
+}
+
+const numero = (n: number) => n.toLocaleString("es-CO", { maximumFractionDigits: 1 })
+const reservas = (n: number) => `${n} reserva${n === 1 ? "" : "s"}`
+
+type Punto = { clave: string; eje: string; tooltip: string; total: number }
+
+/**
+ * Columnas con eje Y (marcas redondas y líneas guía), el valor encima de cada
+ * barra y tooltip al pasar el mouse. La barra más alta va en grafito pleno.
+ * Con muchas barras el valor solo se rotula en contenedores anchos, y el eje X
+ * se rotula cada `ejeCada` barras (cada `ejeAngosto` en contenedores angostos).
+ * La tabla sr-only da a lectores de pantalla el detalle completo.
+ */
+function Columnas({
   datos,
-  filtro,
+  titulo,
+  ejeCada = 1,
+  ejeAngosto = 1,
 }: {
-  datos: { dia: string; total: number }[]
-  filtro: FiltroMetricas
+  datos: Punto[]
+  titulo: string
+  ejeCada?: number
+  ejeAngosto?: number
 }) {
   const [hover, setHover] = useState<number | null>(null)
   const max = Math.max(1, ...datos.map((d) => d.total))
-
-  if (datos.length === 0) {
-    return <Vacio>Sin reservas en {etiquetaFiltro(filtro)}.</Vacio>
-  }
+  const paso = pasoEje(max)
+  const tope = Math.ceil(max / paso) * paso
+  const marcas = Array.from({ length: tope / paso + 1 }, (_, i) => i * paso)
+  const valores = datos.length <= 12 ? "" : datos.length <= 45 ? "hidden @3xl:block" : "hidden"
+  const alto = (v: number) => `${(v / tope) * 100}%`
+  // Con el eje salteado, la primera y la última fecha rotuladas se alinean hacia adentro para no salirse.
+  const ultima = Math.floor((datos.length - 1) / ejeCada) * ejeCada
+  const alinear = (idx: number) => (ejeCada === 1 ? "justify-center" : idx === 0 ? "justify-start" : idx === ultima ? "justify-end" : "justify-center")
 
   return (
-    <div className="relative">
-      <div className="flex h-16 items-end gap-[2px] @6xl:h-24">
-        {datos.map((d, idx) => (
-          <div
-            key={d.dia}
-            className="group relative flex h-full flex-1 items-end"
-            onMouseEnter={() => setHover(idx)}
-            onMouseLeave={() => setHover((h) => (h === idx ? null : h))}
-          >
-            <div
-              className="w-full rounded-t-sm bg-primary/60 transition-colors group-hover:bg-primary"
-              style={{ height: `${Math.max((d.total / max) * 100, d.total > 0 ? 6 : 2)}%` }}
-            />
-            {hover === idx && (
-              <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-xs text-background">
-                {etiquetaDia(d.dia)} · {d.total} reserva{d.total === 1 ? "" : "s"}
-              </div>
-            )}
-          </div>
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 pt-4">
+      <div className="relative h-36 text-[11px] leading-none text-muted-foreground tabular-nums @6xl:h-44" aria-hidden>
+        {/* Reserva el ancho del número más largo; los visibles van posicionados. */}
+        <span className="invisible">{tope}</span>
+        {marcas.map((v) => (
+          <span key={v} className="absolute right-0 translate-y-1/2" style={{ bottom: alto(v) }}>
+            {v}
+          </span>
         ))}
       </div>
-      {/* Eje mínimo: primer día, máximo y último día. Sin esto las barras no
-          dicen de cuándo son ni cuánto miden sin pasar el mouse. */}
-      <div className="mt-1 flex justify-between text-xs text-muted-foreground tabular-nums" aria-hidden>
-        <span>{etiquetaDia(datos[0].dia)}</span>
-        <span>máx. {max} por día</span>
-        <span>{etiquetaDia(datos[datos.length - 1].dia)}</span>
+      <div className="relative h-36 @6xl:h-44" aria-hidden>
+        {marcas.map((v) => (
+          <div
+            key={v}
+            className={cn("absolute inset-x-0 border-t", v === 0 ? "border-border" : "border-dashed border-border/70")}
+            style={{ bottom: alto(v) }}
+          />
+        ))}
+        <div className={cn("absolute inset-0 flex items-end", datos.length <= 60 && "gap-[2px]")}>
+          {datos.map((d, idx) => (
+            <div
+              key={d.clave}
+              className="group relative flex h-full min-w-0 flex-1 items-end"
+              onMouseEnter={() => setHover(idx)}
+              onMouseLeave={() => setHover((h) => (h === idx ? null : h))}
+            >
+              {d.total > 0 && (
+                <>
+                  <span
+                    className={cn("absolute inset-x-0 mb-0.5 text-center text-[11px] leading-none font-medium tabular-nums", valores)}
+                    style={{ bottom: alto(d.total) }}
+                  >
+                    {d.total}
+                  </span>
+                  <div
+                    className={cn(
+                      "w-full rounded-t-sm transition-colors group-hover:bg-primary",
+                      d.total === max ? "bg-primary" : "bg-primary/55",
+                    )}
+                    style={{ height: alto(d.total) }}
+                  />
+                </>
+              )}
+              {hover === idx && (
+                <div
+                  className="pointer-events-none absolute left-1/2 z-10 mb-5 -translate-x-1/2 rounded-md bg-foreground px-2 py-1 text-xs whitespace-nowrap text-background shadow-md"
+                  style={{ bottom: alto(d.total) }}
+                >
+                  {d.tooltip} · {reservas(d.total)}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div />
+      <div className={cn("mt-1.5 flex text-[11px] text-muted-foreground tabular-nums", datos.length <= 60 && "gap-[2px]")} aria-hidden>
+        {datos.map((d, idx) => (
+          <span
+            key={d.clave}
+            className={cn(
+              "flex min-w-0 flex-1 whitespace-nowrap",
+              alinear(idx),
+              idx % ejeCada ? "invisible" : idx % ejeAngosto ? "@max-4xl:invisible" : "",
+            )}
+          >
+            {d.eje}
+          </span>
+        ))}
       </div>
       <table className="sr-only">
-        <caption>Reservas por día en {etiquetaFiltro(filtro)}</caption>
+        <caption>{titulo}</caption>
         <tbody>
           {datos.map((d) => (
-            <tr key={d.dia}>
-              <td>{etiquetaDia(d.dia)}</td>
+            <tr key={d.clave}>
+              <td>{d.tooltip}</td>
               <td>{d.total}</td>
             </tr>
           ))}
@@ -232,6 +321,13 @@ export function ReservasPorDiaChart({
 
 export type Barra = { etiqueta: string; total: number }
 
+/** Dos claves con la misma etiqueta (p. ej. confirmacion_cpa y confirmacion_lacs) se suman en una barra. */
+function sumarPorEtiqueta(barras: Barra[]) {
+  const totales = new Map<string, number>()
+  for (const b of barras) totales.set(b.etiqueta, (totales.get(b.etiqueta) ?? 0) + b.total)
+  return [...totales].map(([etiqueta, total]) => ({ etiqueta, total })).sort((a, b) => b.total - a.total)
+}
+
 /** Barras horizontales con el conteo al lado; tabla sr-only para lectores de pantalla. */
 export function BarrasH({ datos, titulo }: { datos: Barra[]; titulo: string }) {
   const max = Math.max(1, ...datos.map((d) => d.total))
@@ -240,8 +336,10 @@ export function BarrasH({ datos, titulo }: { datos: Barra[]; titulo: string }) {
     <>
       <ul className="space-y-1.5" aria-hidden>
         {datos.map((d) => (
-          <li key={d.etiqueta} className="grid grid-cols-[minmax(6rem,9rem)_1fr_2.5rem] items-center gap-2 text-xs">
-            <span className="truncate">{d.etiqueta}</span>
+          <li key={d.etiqueta} className="grid grid-cols-[minmax(6rem,11rem)_1fr_2.5rem] items-center gap-3 text-xs">
+            <span className="truncate" title={d.etiqueta}>
+              {d.etiqueta}
+            </span>
             <span className="h-2 rounded-sm bg-muted">
               <span
                 className="block h-full rounded-sm bg-primary/60"
@@ -267,52 +365,125 @@ export function BarrasH({ datos, titulo }: { datos: Barra[]; titulo: string }) {
   )
 }
 
-/** Barras verticales (día de la semana, hora): misma idea que ReservasPorDiaChart, con etiqueta bajo cada barra. */
-export function BarrasV({ datos, titulo }: { datos: Barra[]; titulo: string }) {
-  const max = Math.max(1, ...datos.map((d) => d.total))
-  if (datos.every((d) => d.total === 0)) return <Vacio />
+const DIAS_LARGOS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
+
+/** Rótulo del gráfico con su dato clave al lado ("Martes concentra el 30 %…"). */
+function Encabezado({ titulo, dato }: { titulo: string; dato: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+      <Subtitulo>{titulo}</Subtitulo>
+      <p className="text-xs text-muted-foreground tabular-nums">{dato}</p>
+    </div>
+  )
+}
+
+/** Por día, por día de la semana y por hora de inicio; los dos últimos lado a lado desde @3xl. */
+export function CuandoSeReserva({ m, filtro }: { m: Pick<Metricas, "reservas_por_dia" | "por_dia_semana" | "por_hora">; filtro: FiltroMetricas }) {
+  const dias = conDiasVacios(m.reservas_por_dia)
+  const total = dias.reduce((s, d) => s + d.total, 0)
+  if (total === 0) return <Vacio>Sin reservas en {etiquetaFiltro(filtro)}.</Vacio>
+
+  const pico = <T extends { total: number }>(xs: T[]) => xs.reduce((a, b) => (b.total > a.total ? b : a))
+  const pct = (n: number) => `${Math.round((n / total) * 100)} %`
+  const diaPico = pico(dias)
+  const semana = ORDEN_SEMANA.map((k) => ({ k, total: m.por_dia_semana[k] }))
+  const semanaPico = pico(semana)
+  const horas = m.por_hora.map((t, h) => ({ h, total: t }))
+  const horaPico = pico(horas)
+  const hora = (h: number) => `${h}:00`
+  const fuerte = "font-medium text-foreground"
+
   return (
     <>
-      <div className="flex h-24 items-end gap-[2px]" aria-hidden>
-        {datos.map((d) => (
-          <div key={d.etiqueta} className="flex h-full min-w-0 flex-1 flex-col justify-end" title={`${d.etiqueta}: ${d.total}`}>
-            <div
-              className="w-full rounded-t-sm bg-primary/60"
-              style={{ height: `${Math.max((d.total / max) * 100, d.total > 0 ? 6 : 2)}%` }}
-            />
-          </div>
-        ))}
+      <div className="space-y-1">
+        <Encabezado
+          titulo="Por día"
+          dato={
+            <>
+              <strong className={fuerte}>{reservas(total)}</strong> · {numero(total / dias.length)} por día en promedio · pico
+              de <strong className={fuerte}>{diaPico.total}</strong> el {etiquetaDia(diaPico.dia)}
+            </>
+          }
+        />
+        <Columnas
+          titulo={`Reservas por día en ${etiquetaFiltro(filtro)}`}
+          ejeCada={Math.max(1, Math.ceil(dias.length / 8))}
+          ejeAngosto={Math.max(1, Math.ceil(dias.length / 8)) * 3}
+          datos={dias.map((d) => ({ clave: d.dia, eje: etiquetaDia(d.dia), tooltip: etiquetaDia(d.dia), total: d.total }))}
+        />
       </div>
-      <div className="flex gap-[2px] text-[11px] text-muted-foreground tabular-nums" aria-hidden>
-        {datos.map((d) => (
-          <span key={d.etiqueta} className="min-w-0 flex-1 truncate text-center">
-            {d.etiqueta}
-          </span>
-        ))}
+      <div className="grid gap-6 pt-2 @3xl:grid-cols-2">
+        <div className="space-y-1">
+          <Encabezado
+            titulo="Por día de la semana"
+            dato={
+              <>
+                <strong className={fuerte}>{DIAS_LARGOS[semanaPico.k]}</strong> concentra el {pct(semanaPico.total)} (
+                {reservas(semanaPico.total)})
+              </>
+            }
+          />
+          <Columnas
+            titulo="Reservas por día de la semana"
+            datos={semana.map(({ k, total }) => ({ clave: String(k), eje: DIAS_SEMANA[k], tooltip: DIAS_LARGOS[k], total }))}
+          />
+        </div>
+        <div className="space-y-1">
+          <Encabezado
+            titulo="Por hora de inicio"
+            dato={
+              <>
+                Hora pico <strong className={fuerte}>{hora(horaPico.h)}</strong> · {pct(horaPico.total)} ({reservas(horaPico.total)})
+              </>
+            }
+          />
+          <Columnas
+            titulo="Reservas por hora de inicio"
+            ejeAngosto={3}
+            datos={horas.map(({ h, total }) => ({ clave: String(h), eje: String(h), tooltip: `${hora(h)} a ${h}:59`, total }))}
+          />
+        </div>
       </div>
-      <table className="sr-only">
-        <caption>{titulo}</caption>
-        <tbody>
-          {datos.map((d) => (
-            <tr key={d.etiqueta}>
-              <td>{d.etiqueta}</td>
-              <td>{d.total}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </>
   )
 }
 
-export function Cifra({ valor, etiqueta }: { valor: ReactNode; etiqueta: string }) {
+/**
+ * Grupo de cifras en una sola superficie dividida por líneas finas, en vez de
+ * una tarjeta por número. Las columnas las fija quien lo usa según cuántas
+ * cifras lleva, para que ninguna fila quede con una sola.
+ */
+export function Cifras({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <Card className="min-w-[130px] flex-1">
-      <CardContent className="py-2">
-        <div className="text-2xl font-bold tabular-nums">{valor}</div>
-        <div className="text-xs text-muted-foreground">{etiqueta}</div>
-      </CardContent>
-    </Card>
+    <dl className={cn("grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-foreground/10 ring-1 ring-foreground/10", className)}>
+      {children}
+    </dl>
+  )
+}
+
+export function Cifra({ valor, etiqueta, detalle }: { valor: ReactNode; etiqueta: string; detalle?: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5 bg-card px-4 py-3">
+      <dt className="text-xs text-muted-foreground">{etiqueta}</dt>
+      <dd className="order-first text-2xl font-bold tabular-nums">{valor}</dd>
+      {detalle && <dd className="text-xs text-muted-foreground tabular-nums">{detalle}</dd>}
+    </div>
+  )
+}
+
+/** Los ceros van en gris para que las cifras que importan resalten en la tabla. */
+function Numero({ valor }: { valor: ReactNode }) {
+  return <span className={valor === 0 ? "text-muted-foreground" : undefined}>{valor}</span>
+}
+
+/** Nombre del estudiante con su teléfono debajo, en gris. */
+export function Persona({ nombre, telefonoWa }: { nombre: string | null; telefonoWa: string | null }) {
+  if (!nombre) return <>{telefono(telefonoWa)}</>
+  return (
+    <>
+      <span className="block">{nombre}</span>
+      <span className="block text-xs font-normal text-muted-foreground tabular-nums">{telefono(telefonoWa)}</span>
+    </>
   )
 }
 
@@ -328,7 +499,7 @@ export function TopTabla<T>({
   columnas,
 }: {
   filas: T[]
-  nombre: (fila: T) => string
+  nombre: (fila: T) => ReactNode
   columnas: Columna<T>[]
 }) {
   if (filas.length === 0) return <Vacio />
@@ -336,11 +507,11 @@ export function TopTabla<T>({
     <>
       <ul className="divide-y rounded-md border @2xl:hidden">
         {filas.map((f, idx) => (
-          <li key={idx} className="space-y-0.5 px-3 py-2 text-sm">
-            <span className="block font-medium">{nombre(f)}</span>
-            <span className="block text-xs text-muted-foreground">
+          <li key={idx} className="space-y-1 px-3 py-2 text-sm">
+            <div className="font-medium">{nombre(f)}</div>
+            <div className="text-xs text-muted-foreground tabular-nums">
               {columnas.map((c) => `${c.titulo}: ${c.valor(f)}`).join(" · ")}
-            </span>
+            </div>
           </li>
         ))}
       </ul>
@@ -359,10 +530,10 @@ export function TopTabla<T>({
           <TableBody>
             {filas.map((f, idx) => (
               <TableRow key={idx}>
-                <TableCell className="whitespace-normal @6xl:py-3">{nombre(f)}</TableCell>
+                <TableCell className="min-w-48 whitespace-normal @6xl:py-3">{nombre(f)}</TableCell>
                 {columnas.map((c) => (
                   <TableCell key={c.titulo} className="text-right tabular-nums @6xl:py-3">
-                    {c.valor(f)}
+                    <Numero valor={c.valor(f)} />
                   </TableCell>
                 ))}
               </TableRow>
@@ -398,15 +569,22 @@ export function Puntualidad({ datos }: { datos: Metricas["puntualidad"] }) {
   ]
   if (!datos.entrega && !datos.devolucion) return <Vacio />
   return (
-    <div className="grid gap-3 @lg:grid-cols-2">
+    <div className="grid gap-4 @lg:grid-cols-2">
       {filas.map(({ nombre, d }) => (
-        <div key={nombre}>
+        <div key={nombre} className="space-y-1">
           <div className="text-xs text-muted-foreground">{nombre} a tiempo</div>
           <div className="text-2xl font-bold tabular-nums">{d ? porcentaje(d.a_tiempo, d.total) : "—"}</div>
-          <div className="text-xs text-muted-foreground">
-            {d
-              ? `${d.a_tiempo} de ${d.total} · retraso prom. de las tardías: ${duracion(d.retraso_seg)}`
-              : "Sin registros"}
+          {d && (
+            <div className="h-1.5 rounded-sm bg-muted" aria-hidden>
+              <div className="h-full rounded-sm bg-primary/60" style={{ width: `${d.total ? (d.a_tiempo / d.total) * 100 : 0}%` }} />
+            </div>
+          )}
+          <div className="text-xs text-muted-foreground tabular-nums">
+            {!d
+              ? "Sin registros"
+              : d.retraso_seg == null
+                ? `${d.a_tiempo} de ${d.total} · ninguna tardía`
+                : `${d.a_tiempo} de ${d.total} · las tardías se atrasan ${duracion(d.retraso_seg)} en promedio`}
           </div>
         </div>
       ))}
@@ -414,18 +592,64 @@ export function Puntualidad({ datos }: { datos: Metricas["puntualidad"] }) {
   )
 }
 
+/** Pares etiqueta / valor alineados a los dos extremos. */
+export function Datos({ filas }: { filas: [string, ReactNode][] }) {
+  return (
+    <dl className="space-y-1.5 text-sm">
+      {filas.map(([k, v]) => (
+        <div key={k} className="flex justify-between gap-4">
+          <dt className="text-muted-foreground">{k}</dt>
+          <dd className="text-right tabular-nums">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
 function PanelActivos({ activos }: { activos: Metricas["activos"] }) {
   const [tipo, setTipo] = useState<"equipo" | "espacio">("equipo")
   return (
-    <Seccion titulo="Top 10 activos">
-      <Tabs value={tipo} onValueChange={(v) => setTipo(v as "equipo" | "espacio")}>
-        <TabsList>
-          <TabsTrigger value="equipo">Equipos</TabsTrigger>
-          <TabsTrigger value="espacio">Espacios</TabsTrigger>
-        </TabsList>
-      </Tabs>
-      <TopTabla filas={activos[tipo]} nombre={(a) => a.nombre} columnas={COLUMNAS_ACTIVO} />
-    </Seccion>
+    <Card>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">Top 10 activos</h2>
+          <Tabs value={tipo} onValueChange={(v) => setTipo(v as "equipo" | "espacio")}>
+            <TabsList>
+              <TabsTrigger value="equipo">Equipos</TabsTrigger>
+              <TabsTrigger value="espacio">Espacios</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+        <TopTabla filas={activos[tipo]} nombre={(a) => a.nombre} columnas={COLUMNAS_ACTIVO} />
+      </CardContent>
+    </Card>
+  )
+}
+
+function Avisos({ avisos }: { avisos: Metricas["bot"]["avisos"] }) {
+  if (avisos.length === 0) return <Vacio />
+  return (
+    <table className="w-full text-sm">
+      <thead className="text-xs text-muted-foreground">
+        <tr>
+          <th className="pb-1 text-left font-normal">Tipo</th>
+          <th className="pb-1 text-right font-normal">Enviados</th>
+          <th className="pb-1 text-right font-normal">Fallidos</th>
+        </tr>
+      </thead>
+      <tbody className="tabular-nums">
+        {avisos.map((a) => (
+          <tr key={a.tipo}>
+            <td className="py-0.5">{legible(a.tipo, ETIQUETA_AVISO)}</td>
+            <td className="py-0.5 text-right">
+              <Numero valor={a.enviados} />
+            </td>
+            {/* Un aviso que no salió es un estudiante que no se enteró: va en rojo. */}
+            <td className={cn("py-0.5 text-right", a.fallidos ? "text-destructive-text" : "text-muted-foreground")}>{a.fallidos}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }
 
@@ -451,7 +675,7 @@ function DescargarExcel({ filtro, valido }: { filtro: FiltroMetricas; valido: bo
                 <span>
                   <span className="block font-medium">Métricas</span>
                   <span className="block text-xs text-muted-foreground">
-                    Lo que ves en General, con el periodo elegido. Una hoja por tabla o gráfico.
+                    General y Por uso de {etiquetaFiltro(filtro)}, el periodo que tienes elegido. Tablas con colores y gráficos.
                   </span>
                 </span>
               </a>
@@ -464,7 +688,7 @@ function DescargarExcel({ filtro, valido }: { filtro: FiltroMetricas; valido: bo
               <span>
                 <span className="block font-medium">Base de datos (raw)</span>
                 <span className="block text-xs text-muted-foreground">
-                  Todas las tablas completas, sin filtrar por periodo. Una hoja por tabla.
+                  Todas las tablas completas, sin filtrar por periodo: una hoja por tabla y un índice con cuántas filas trae cada una.
                 </span>
               </span>
             </a>
@@ -479,12 +703,126 @@ export function filtroValido(f: FiltroMetricas) {
   return f.periodo !== "rango" || Boolean(f.desde && f.hasta && f.hasta >= f.desde)
 }
 
+function General({ m, filtro }: { m: Metricas | null; filtro: FiltroMetricas }) {
+  const r = m?.resumen
+  const deReservas = (n: number | undefined) =>
+    r && r.reservas && n != null ? `${porcentaje(n, r.reservas)} de las reservas` : undefined
+
+  return (
+    <>
+      <Cifras className="@2xl:grid-cols-4">
+        <Cifra valor={r?.reservas ?? "—"} etiqueta="Reservas" />
+        <Cifra valor={r?.prestamos ?? "—"} etiqueta="Préstamos" detalle={deReservas(r?.prestamos)} />
+        <Cifra valor={r?.denegadas ?? "—"} etiqueta="Denegadas" detalle={deReservas(r?.denegadas)} />
+        <Cifra valor={r?.canceladas ?? "—"} etiqueta="Canceladas" detalle={deReservas(r?.canceladas)} />
+        <Cifra valor={r?.no_show ?? "—"} etiqueta="No show" detalle={deReservas(r?.no_show)} />
+        <Cifra valor={r?.devoluciones_problema ?? "—"} etiqueta="Devueltas tarde o no devueltas" />
+        <Cifra valor={r?.no_devueltos_hoy ?? "—"} etiqueta="Activos sin devolver hoy" />
+        <Cifra valor={r?.grupos_agrupados ?? "—"} etiqueta="Reservas con varios activos" />
+      </Cifras>
+
+      {m && (
+        <>
+          <div className="grid gap-4 @4xl:grid-cols-2">
+            <Seccion titulo="Reservas por estado">
+              <BarrasH
+                titulo="Reservas por estado"
+                datos={m.estados.map((e) => ({ etiqueta: legible(e.estado, ETIQUETA_ESTADO), total: e.total }))}
+              />
+            </Seccion>
+            <Seccion titulo="Puntualidad">
+              <Puntualidad datos={m.puntualidad} />
+            </Seccion>
+          </div>
+
+          <Seccion titulo="Cuándo se reserva">
+            <CuandoSeReserva m={m} filtro={filtro} />
+          </Seccion>
+
+          <PanelActivos activos={m.activos} />
+
+          <Seccion titulo="Top 10 usuarios">
+            <TopTabla
+              filas={m.usuarios}
+              nombre={(u) => <Persona nombre={u.nombre} telefonoWa={u.telefono_wa} />}
+              columnas={COLUMNAS_USUARIO}
+            />
+          </Seccion>
+
+          <div className="grid gap-4 @4xl:grid-cols-2">
+            <Seccion titulo="Inventario">
+              <Cifras className="rounded-md @lg:grid-cols-3">
+                <Cifra valor={m.inventario.adicionados.equipo} etiqueta="Equipos adicionados" />
+                <Cifra valor={m.inventario.adicionados.espacio} etiqueta="Espacios adicionados" />
+                <Cifra valor={m.inventario.dados_de_baja.periodo} etiqueta="Bajas en el periodo" />
+                <Cifra valor={m.inventario.dados_de_baja.hoy} etiqueta="No disponibles hoy" />
+                <Cifra valor={m.inventario.mantenimiento.periodo} etiqueta="Entradas a mantenimiento" />
+                <Cifra valor={m.inventario.mantenimiento.hoy} etiqueta="En mantenimiento hoy" />
+              </Cifras>
+              <Subtitulo>Activos hoy por estado</Subtitulo>
+              <BarrasH
+                titulo="Activos por estado"
+                datos={Object.entries(m.inventario.total_hoy).map(([estado, total]) => ({
+                  etiqueta: ESTADOS_ACTIVO[estado as EstadoRecurso]?.texto ?? legible(estado, {}),
+                  total: total ?? 0,
+                }))}
+              />
+            </Seccion>
+
+            <Seccion titulo="Seguro">
+              <Cifras className="rounded-md">
+                <Cifra valor={m.seguro.salen} etiqueta="Grupos que salen de Barranquilla" />
+                <Cifra valor={m.seguro.lineas_salen} etiqueta="Activos en esos grupos" />
+                <Cifra valor={m.seguro.no_salen} etiqueta="Grupos que no salen" />
+                <Cifra valor={m.seguro.sin_dato} etiqueta="Sin dato (reservas viejas)" />
+              </Cifras>
+              <p className="text-xs text-muted-foreground">Cuenta reservas por grupo: un grupo con varios activos cuenta una vez.</p>
+            </Seccion>
+          </div>
+
+          <div className="grid gap-4 @4xl:grid-cols-2">
+            <Seccion titulo="Hábitos">
+              <Datos
+                filas={[
+                  ["Duración promedio", duracion(m.habitos.duracion_seg)],
+                  ["Anticipación promedio", duracion(m.habitos.anticipacion_seg)],
+                ]}
+              />
+              <Subtitulo>Canal de origen</Subtitulo>
+              <BarrasH
+                titulo="Reservas por canal"
+                datos={m.habitos.canales.map((c) => ({ etiqueta: legible(c.canal, ETIQUETA_CANAL), total: c.total }))}
+              />
+            </Seccion>
+
+            <Seccion titulo="Bot">
+              <Datos
+                filas={[
+                  ["Mensajes registrados", m.bot.recibidos],
+                  ["Bloqueados por guardrails", m.bot.bloqueados],
+                ]}
+              />
+              <Subtitulo>Tipos de mensaje más frecuentes</Subtitulo>
+              <BarrasH
+                titulo="Mensajes por tipo"
+                datos={sumarPorEtiqueta(m.bot.intents.map((i) => ({ etiqueta: legible(i.intent, ETIQUETA_INTENT), total: i.total })))}
+              />
+              <Subtitulo>Avisos automáticos</Subtitulo>
+              <Avisos avisos={m.bot.avisos} />
+            </Seccion>
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
 export function MetricasPanel() {
   const [periodo, setPeriodo] = useState<Periodo>("30")
   // Al elegir "Personalizado" arrancan con los últimos 30 días (fechas civiles de la LACS).
   const [desde, setDesde] = useState(() => claveDe(sumarDias(hoy(), -30)))
   const [hasta, setHasta] = useState(() => claveDe(hoy()))
-  const [vista, setVista] = useState<"general" | "activo">("general")
+  const [vista, setVista] = useState<"general" | "activo" | "uso">("general")
   // Vive aquí para no perderse al cambiar de pestaña o de periodo.
   const [activoId, setActivoId] = useState<number | null>(null)
   const [vistaActivo, setVistaActivo] = useState<VistaActivo>("metricas")
@@ -497,211 +835,87 @@ export function MetricasPanel() {
     reload()
   }, [periodo, desde, hasta, reload])
 
-  if (error && !data) {
-    return <p className="text-sm text-destructive-text">No se pudieron cargar las métricas.</p>
-  }
-
   // Una respuesta que aún es de otro pedido no se pinta como si fuera del nuevo.
   const m = data && valido && respuestaDe(data, filtro) ? data : null
-  const r = m?.resumen
+  // El timeline siempre es de todo el tiempo: ahí el periodo no aplica y no se muestra.
+  const conPeriodo = !(vista === "activo" && activoId != null && vistaActivo === "timeline")
 
   return (
     <div className="@container space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold tracking-tight">Métricas</h1>
-        <div className="flex flex-wrap gap-2">
-          <Tabs value={vista} onValueChange={(v) => setVista(v as "general" | "activo")}>
-            <TabsList>
-              <TabsTrigger value="general">General</TabsTrigger>
-              <TabsTrigger value="activo">Por activo</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <Tabs value={periodo} onValueChange={(v) => setPeriodo(v as Periodo)}>
-            <TabsList>
-              <TabsTrigger value="30">30 días</TabsTrigger>
-              <TabsTrigger value="90">90 días</TabsTrigger>
-              <TabsTrigger value="todo">Todo</TabsTrigger>
-              <TabsTrigger value="rango">Personalizado</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <DescargarExcel filtro={filtro} valido={valido} />
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-xl font-semibold tracking-tight">Métricas</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            {conPeriodo && (
+              <Tabs value={periodo} onValueChange={(v) => setPeriodo(v as Periodo)}>
+                <TabsList aria-label="Periodo">
+                  <TabsTrigger value="30">30 días</TabsTrigger>
+                  <TabsTrigger value="90">90 días</TabsTrigger>
+                  <TabsTrigger value="todo">Todo</TabsTrigger>
+                  <TabsTrigger value="rango">Personalizado</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            )}
+            <DescargarExcel filtro={filtro} valido={valido} />
+          </div>
         </div>
+
+        {conPeriodo && periodo === "rango" && (
+          <div className="flex flex-col gap-2 @sm:flex-row @sm:flex-wrap @sm:items-end @sm:justify-end">
+            <div className="space-y-1">
+              <Label htmlFor="metricas-desde">Desde</Label>
+              <Input
+                id="metricas-desde"
+                type="date"
+                value={desde}
+                max={hasta || undefined}
+                onChange={(e) => setDesde(e.target.value)}
+                aria-invalid={!valido}
+                className="@sm:w-44"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="metricas-hasta">Hasta</Label>
+              <Input
+                id="metricas-hasta"
+                type="date"
+                value={hasta}
+                min={desde || undefined}
+                onChange={(e) => setHasta(e.target.value)}
+                aria-invalid={!valido}
+                className="@sm:w-44"
+              />
+            </div>
+            {!valido && (
+              <p role="alert" className="text-xs text-destructive-text @sm:basis-full @sm:text-right">
+                {desde && hasta ? "«Hasta» no puede ser anterior a «Desde»." : "Elige las dos fechas."}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Pestañas de vista (qué se mira) separadas del periodo (cuándo): la
+            línea las distingue de los filtros segmentados de arriba. */}
+        <Tabs value={vista} onValueChange={(v) => setVista(v as "general" | "activo" | "uso")} className="border-b">
+          <TabsList variant="line" className="h-9">
+            <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="activo">Por activo</TabsTrigger>
+            <TabsTrigger value="uso">Por uso</TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
-      {periodo === "rango" && (
-        <div className="flex flex-col gap-2 @sm:flex-row @sm:flex-wrap @sm:items-end">
-          <div className="space-y-1">
-            <Label htmlFor="metricas-desde">Desde</Label>
-            <Input
-              id="metricas-desde"
-              type="date"
-              value={desde}
-              max={hasta || undefined}
-              onChange={(e) => setDesde(e.target.value)}
-              className="@sm:w-44"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="metricas-hasta">Hasta</Label>
-            <Input
-              id="metricas-hasta"
-              type="date"
-              value={hasta}
-              min={desde || undefined}
-              onChange={(e) => setHasta(e.target.value)}
-              className="@sm:w-44"
-            />
-          </div>
-          {!valido && (
-            <p role="alert" className="text-xs text-destructive-text">
-              {desde && hasta ? "«Hasta» no puede ser anterior a «Desde»." : "Elige las dos fechas."}
-            </p>
-          )}
-        </div>
-      )}
+      {vista === "general" &&
+        (error && !data ? (
+          <p className="text-sm text-destructive-text">No se pudieron cargar las métricas.</p>
+        ) : (
+          <General m={m} filtro={filtro} />
+        ))}
 
-      {vista === "activo" && <MetricasActivo activoId={activoId} onActivo={setActivoId} vista={vistaActivo} onVista={setVistaActivo} filtro={filtro} />}
+      {vista === "uso" && <MetricasUso filtro={filtro} />}
 
-      {vista === "general" && (
-        <>
-
-      <div className="flex flex-wrap gap-3">
-        <Cifra valor={r?.reservas ?? "—"} etiqueta="Reservas" />
-        <Cifra valor={r?.prestamos ?? "—"} etiqueta="Préstamos" />
-        <Cifra valor={r?.denegadas ?? "—"} etiqueta="Denegadas" />
-        <Cifra valor={r?.canceladas ?? "—"} etiqueta="Canceladas" />
-        <Cifra valor={r?.no_show ?? "—"} etiqueta="No show" />
-        <Cifra valor={r?.devoluciones_problema ?? "—"} etiqueta="Devueltas tarde o no devueltas" />
-        <Cifra valor={r?.no_devueltos_hoy ?? "—"} etiqueta="Activos sin devolver hoy" />
-        <Cifra valor={r?.grupos_agrupados ?? "—"} etiqueta="Reservas con varios activos" />
-      </div>
-
-      {m && (
-        <>
-          <Seccion titulo="Inventario y seguro">
-            <div className="flex flex-wrap gap-3">
-              <Cifra valor={m.inventario.adicionados.equipo} etiqueta="Equipos adicionados" />
-              <Cifra valor={m.inventario.adicionados.espacio} etiqueta="Espacios adicionados" />
-              <Cifra valor={m.inventario.dados_de_baja.periodo} etiqueta="Bajas en el periodo" />
-              <Cifra valor={m.inventario.dados_de_baja.hoy} etiqueta="No disponibles hoy" />
-              <Cifra valor={m.inventario.mantenimiento.periodo} etiqueta="Entradas a mantenimiento" />
-              <Cifra valor={m.inventario.mantenimiento.hoy} etiqueta="En mantenimiento hoy" />
-            </div>
-            <div className="pt-1 text-xs text-muted-foreground">Activos hoy por estado</div>
-            <BarrasH
-              titulo="Activos por estado"
-              datos={Object.entries(m.inventario.total_hoy).map(([estado, total]) => ({
-                etiqueta: ESTADOS_ACTIVO[estado as EstadoRecurso]?.texto ?? legible(estado, {}),
-                total: total ?? 0,
-              }))}
-            />
-            <div className="pt-1 text-xs text-muted-foreground">Seguro: reservas por grupo</div>
-            <div className="flex flex-wrap gap-3">
-              <Cifra valor={m.seguro.salen} etiqueta="Grupos que salen de Barranquilla" />
-              <Cifra valor={m.seguro.lineas_salen} etiqueta="Activos en esos grupos" />
-              <Cifra valor={m.seguro.no_salen} etiqueta="Grupos que no salen" />
-              <Cifra valor={m.seguro.sin_dato} etiqueta="Sin dato (reservas viejas)" />
-            </div>
-          </Seccion>
-
-          <Seccion titulo="Reservas por estado">
-            <BarrasH
-              titulo="Reservas por estado"
-              datos={m.estados.map((e) => ({ etiqueta: legible(e.estado, ETIQUETA_ESTADO), total: e.total }))}
-            />
-          </Seccion>
-
-          <div className="grid gap-4 @4xl:grid-cols-2">
-            <PanelActivos activos={m.activos} />
-            <Seccion titulo="Top 10 usuarios">
-              <TopTabla
-                filas={m.usuarios}
-                nombre={(u) => (u.nombre ? `${u.nombre} · ${telefono(u.telefono_wa)}` : telefono(u.telefono_wa))}
-                columnas={COLUMNAS_USUARIO}
-              />
-            </Seccion>
-          </div>
-
-          <Seccion titulo="Puntualidad">
-            <Puntualidad datos={m.puntualidad} />
-          </Seccion>
-
-          <Seccion titulo="Cuándo se reserva">
-            <div className="text-xs text-muted-foreground">Por día</div>
-            <ReservasPorDiaChart datos={m.reservas_por_dia} filtro={filtro} />
-            <div className="grid gap-4 @3xl:grid-cols-2">
-              <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">Por día de la semana</div>
-                <BarrasV
-                  titulo="Reservas por día de la semana"
-                  datos={ORDEN_SEMANA.map((k) => ({ etiqueta: DIAS_SEMANA[k], total: m.por_dia_semana[k] }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">Por hora de inicio</div>
-                <BarrasV
-                  titulo="Reservas por hora de inicio"
-                  datos={m.por_hora.map((total, h) => ({ etiqueta: String(h), total }))}
-                />
-              </div>
-            </div>
-          </Seccion>
-
-          <div className="grid gap-4 @3xl:grid-cols-2">
-            <Seccion titulo="Hábitos">
-              <dl className="space-y-1 text-sm">
-                <div className="flex justify-between gap-2">
-                  <dt className="text-muted-foreground">Duración promedio</dt>
-                  <dd className="tabular-nums">{duracion(m.habitos.duracion_seg)}</dd>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <dt className="text-muted-foreground">Anticipación promedio</dt>
-                  <dd className="tabular-nums">{duracion(m.habitos.anticipacion_seg)}</dd>
-                </div>
-              </dl>
-              <div className="pt-1 text-xs text-muted-foreground">Canal de origen</div>
-              <BarrasH
-                titulo="Reservas por canal"
-                datos={m.habitos.canales.map((c) => ({ etiqueta: legible(c.canal, ETIQUETA_CANAL), total: c.total }))}
-              />
-            </Seccion>
-
-            <Seccion titulo="Bot">
-              <dl className="space-y-1 text-sm">
-                <div className="flex justify-between gap-2">
-                  <dt className="text-muted-foreground">Mensajes registrados</dt>
-                  <dd className="tabular-nums">{m.bot.recibidos}</dd>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <dt className="text-muted-foreground">Bloqueados por guardrails</dt>
-                  <dd className="tabular-nums">{m.bot.bloqueados}</dd>
-                </div>
-              </dl>
-              <div className="pt-1 text-xs text-muted-foreground">Tipos de mensaje más frecuentes</div>
-              <BarrasH
-                titulo="Mensajes por tipo"
-                datos={m.bot.intents.map((i) => ({ etiqueta: legible(i.intent, ETIQUETA_INTENT), total: i.total }))}
-              />
-              <div className="pt-1 text-xs text-muted-foreground">Avisos automáticos (enviados / fallidos)</div>
-              {m.bot.avisos.length === 0 ? (
-                <Vacio />
-              ) : (
-                <ul className="space-y-0.5 text-sm">
-                  {m.bot.avisos.map((a) => (
-                    <li key={a.tipo} className="flex justify-between gap-2">
-                      <span>{legible(a.tipo, ETIQUETA_AVISO)}</span>
-                      <span className="tabular-nums">
-                        {a.enviados} / {a.fallidos}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Seccion>
-          </div>
-        </>
-      )}
-        </>
+      {vista === "activo" && (
+        <MetricasActivo activoId={activoId} onActivo={setActivoId} vista={vistaActivo} onVista={setVistaActivo} filtro={filtro} />
       )}
     </div>
   )

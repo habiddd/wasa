@@ -158,6 +158,30 @@ export function fetchMetricas(filtro: FiltroMetricas) {
   return request<Metricas>(`/metricas?${queryMetricas(filtro)}`)
 }
 
+type EquipoContado = { nombre: string; total: number }
+
+/** Una sección de /metricas/uso; `claves` = NRC distintos (asignatura) o estudiantes distintos (particular). */
+type UsoEquipos<Fila> = {
+  reservas: number
+  equipos: number
+  prestamos: number
+  claves: number
+  equipos_top: EquipoContado[]
+  top: (Fila & { reservas: number; equipos: number; prestamos: number; usuarios: number; equipos_top: EquipoContado[] })[]
+}
+
+export type MetricasUso = {
+  periodo: Periodo
+  desde: string | null
+  hasta: string | null
+  asignatura: UsoEquipos<{ nrc: string }>
+  particular: UsoEquipos<{ nombre: string | null; telefono_wa: string | null }>
+}
+
+export function fetchMetricasUso(filtro: FiltroMetricas) {
+  return request<MetricasUso>(`/metricas/uso?${queryMetricas(filtro)}`)
+}
+
 type ReservaCercana = {
   id: number
   inicio: string

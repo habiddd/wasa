@@ -91,7 +91,9 @@ los submenús.
   número vinculado una vez lo esté (se refresca solo cada 5s).
 - **Métricas**: números sacados de los datos que ya guarda la base, para
   un periodo de 30 días, 90 días, todo, o un rango de fechas a elección
-  ("Personalizado"). Tiene dos subpestañas:
+  ("Personalizado"). El periodo es uno solo para General y para las
+  métricas de un activo, y se conserva al cambiar de pestaña. Tiene tres
+  subpestañas:
   - **General**: cuántas reservas, préstamos, denegadas, canceladas y
     no-shows hubo; el top 10 de equipos y de espacios más prestados; el top 10
     de usuarios; la puntualidad al recoger y al devolver; las reservas por
@@ -101,12 +103,24 @@ los submenús.
     seguro.
   - **Por activo**: primero se escoge un equipo o un espacio. Después se
     elige entre **Métricas**, que son los mismos números pero solo de ese
-    activo, y **Timeline**, que es su historia día por día: reservas,
-    cambios de estado, actas y cambios de estado del propio activo.
+    activo y en el mismo periodo, y **Timeline**, que es su historia día
+    por día: reservas, cambios de estado, actas y cambios de estado del
+    propio activo. El timeline es siempre de **todo el tiempo**, no sigue
+    el periodo, así que en esa vista el selector de periodo se oculta.
+  - **Por uso**: los equipos pedidos, en dos bloques separados. **Para
+    asignaturas (con NRC)**: qué NRC piden más equipos y qué equipos pide
+    cada uno. **Particulares (sin NRC)**: qué estudiantes piden más equipos y
+    qué equipos pide cada uno. Cada bloque trae además sus equipos más
+    pedidos.
 
-  El botón **Descargar Excel** abre un popup con dos opciones: el Excel de
-  **métricas**, con los números de General en el periodo elegido, o la
-  **base de datos en raw**, con todas las tablas completas, una por hoja.
+  El botón **Descargar Excel** abre un popup con dos opciones. El Excel de
+  **métricas** trae General y Por uso con el mismo periodo que esté elegido en
+  la página (30 días, 90 días, todo o personalizado); el popup dice cuál es.
+  Tiene siete hojas con tablas en color y gráficos: Resumen, Estados, Cuándo
+  se reserva, Top activos y usuarios, Por uso (NRC y particulares),
+  Inventario y seguro, y Bot y hábitos. La **base de datos en raw** trae
+  todas las tablas completas, una por hoja, la vista `reserva_puntualidad` y
+  una hoja "Índice" con cuántas filas trae cada una.
   Ver `docs/ARQUITECTURA.md`, sección "Métricas".
 - **Calendario**: las reservas de activos y lugares en vistas de **mes,
   semana y día**, vía `GET /dashboard/api/reservas?desde&hasta`. Las

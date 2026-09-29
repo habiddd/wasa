@@ -187,7 +187,7 @@ Paleta acromática de papel y grafito, con tres acentos semánticos que se usan 
 **Character:** Una sola sans geométrica y neutra, sin pareja tipográfica. La jerarquía se construye con peso, tamaño y el color lápiz, nunca con una segunda familia.
 
 ### Hierarchy
-- **Display** (700, 1.5rem, 1.333): cifras KPI de Métricas ("reservas 30d", "bloqueadas 30d"). Es lo único grande de la app.
+- **Display** (700, 1.5rem, 1.333): las cifras de Métricas (Reservas, Préstamos, porcentajes de puntualidad). Es lo único grande de la app.
 - **Page title** (600, 1.25rem, tracking -0.025em, tinta): el `h1` de cada panel ("Hoy", "Calendario de reservas"). Uno por panel, siempre arriba a la izquierda.
 - **Nav** (400, 0.875rem): ítems de la barra lateral. Van por debajo del título de página: la navegación acompaña, no compite.
 - **Title** (500, 1rem, 1.375): títulos de tarjeta y de diálogo.
@@ -265,6 +265,13 @@ Es la pieza que define el sistema. Cada reserva en la vista de mes es un botón 
 - **Apagado:** completada (niebla y lápiz); devuelta_tarde es apagado con borde ámbar.
 
 En la vista de tiempo, el mismo estado se traduce a una **barra**: sólida para los estados firmes y solo con borde para pendiente y denegada. Al pasar el cursor aparece un tooltip con el detalle, y el clic abre un diálogo centrado (nunca un panel lateral).
+
+### Cifras de Métricas
+Un grupo de cifras es **una sola superficie** (`Cifras`): una rejilla con celdas en papel separadas por líneas de 1px de tinta al 10%, con el mismo anillo que una tarjeta. Nunca una tarjeta por número ni tarjetas dentro de tarjetas. Cada celda lleva la cifra en display, la etiqueta en caption lápiz y, si aporta, un detalle debajo ("15 % de las reservas"). Las columnas se fijan según cuántas cifras tiene el grupo (8 → 2/4, 6 → 2/3, 4 → 2) para que ninguna fila quede con una sola. Dentro de una sección, el grupo baja a esquinas de 8px, como las tablas.
+- **Tablas de Top:** los ceros van en lápiz para que resalten las cifras que importan; el teléfono va en caption bajo el nombre.
+- **Gráficos** (`Columnas`): barras grafito al 55% con la más alta en grafito pleno, eje Y con marcas redondas (0, 20, 40…) y líneas guía punteadas en `trazo`, el valor encima de cada barra y, arriba a la derecha, una línea con el dato clave ("Martes concentra el 41 %"). Los días u horas sin datos no llevan barra. Con muchas barras, el valor y parte del eje X solo se rotulan en contenedores anchos. El Excel de métricas usa la misma lógica: grafito, pico en pleno y color de estado solo en el gráfico de Estados.
+- **Timeline del activo:** el tipo de evento se distingue por un icono Lucide en un círculo niebla (alta, reserva creada, cambio de estado, cambio de horario, borrado, acta, estado del activo), no por color: el color queda para los badges de estado de la reserva (La Regla del Semáforo).
+- **Pestañas:** General / Por activo son pestañas de línea bajo el título (qué se mira); el periodo es un control segmentado a la derecha (cuándo). Son dos niveles distintos y no se ven iguales.
 
 ### Leyenda de estados
 Es un `<details>` nativo bajo la barra del calendario ("Qué significa cada color"). Muestra los nueve chips reales en el orden de vida del préstamo (Pendiente → Confirmada → Entregada → Completada → Devuelta tarde → No devuelta → No se presentó → Cancelada → Denegada), sin su hover, y después el icono de activo y el de lugar. Una segunda fila explica, con los badges reales, las marcas que no son estados propios: Parcial, Estados mixtos, Retrasada y Entrega tardía. Un estado nuevo entra en esta lista al mismo tiempo que en `ESTILO_ESTADO`.

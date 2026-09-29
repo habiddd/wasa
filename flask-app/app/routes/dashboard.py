@@ -31,6 +31,7 @@ from app import (
     avisos_reservas,
     estado_bot,
     fechas_bloqueadas_service,
+    metricas_excel,
     recursos_service,
     registro_service,
     usuarios_service,
@@ -690,6 +691,79 @@ def api_metricas_activo(recurso_id):
     )
 
 
+def _resumen_uso(lineas: list[dict], clave, datos_clave) -> dict:
+    """Agrega líneas de equipo (una por activo reservado) por `clave(linea)`: reservas (grupos
+    distintos), equipos pedidos, préstamos, estudiantes y los equipos que más pide cada clave."""
+    por_clave: dict = {}
+    equipos: dict[str, int] = {}
+    for l in lineas:
+        d = por_clave.setdefault(
+            clave(l), {**datos_clave(l), "grupos": set(), "usuarios": set(), "equipos": 0, "prestamos": 0, "por_equipo": {}}
+        )
+        d["grupos"].add(l["grupo_id"])
+        d["usuarios"].add(l["usuario_id"])
+        d["equipos"] += 1
+        d["prestamos"] += l["prestado"]
+        d["por_equipo"][l["equipo"]] = d["por_equipo"].get(l["equipo"], 0) + 1
+        equipos[l["equipo"]] = equipos.get(l["equipo"], 0) + 1
+
+    def top(conteo: dict[str, int], n: int) -> list[dict]:
+        return [{"nombre": k, "total": v} for k, v in sorted(conteo.items(), key=lambda kv: (-kv[1], kv[0]))[:n]]
+
+    filas = sorted(por_clave.values(), key=lambda d: (-d["equipos"], -len(d["grupos"])))
+    return {
+        "reservas": len({l["grupo_id"] for l in lineas}),
+        "equipos": len(lineas),
+        "prestamos": sum(l["prestado"] for l in lineas),
+        "claves": len(por_clave),
+        "equipos_top": top(equipos, 10),
+        "top": [
+            {
+                **{k: v for k, v in d.items() if k not in ("grupos", "usuarios", "por_equipo")},
+                "reservas": len(d["grupos"]),
+                "usuarios": len(d["usuarios"]),
+                "equipos_top": top(d["por_equipo"], 5),
+            }
+            for d in filas[:10]
+        ],
+    }
+
+
+@bp.route("/api/metricas/uso")
+def api_metricas_uso():
+    """Qué equipos se piden para asignaturas (por NRC) y en reservas particulares (por estudiante).
+    Cuenta líneas de equipo (los espacios no), por `inicio` dentro del periodo, en cualquier estado."""
+    try:
+        periodo, desde, hasta, fechas = _periodo_metricas()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    lineas = _filas(
+        f"""
+        SELECT g.tipo_uso, g.nrc, r.grupo_id, u.id AS usuario_id, u.nombre, u.telefono_wa,
+               rc.nombre AS equipo, (r.estado IN {_PRESTADAS})::int AS prestado
+        FROM reservas r
+        JOIN reserva_grupos g ON g.id = r.grupo_id
+        JOIN usuarios u ON u.id = g.usuario_id
+        JOIN recursos rc ON rc.id = r.recurso_id
+        WHERE rc.tipo = 'equipo' AND {_en_periodo("r.inicio")}
+        """,
+        desde=desde, hasta=hasta,
+    )
+    return jsonify(
+        {
+            "periodo": periodo, "desde": fechas[0] and fechas[0].isoformat(), "hasta": fechas[1] and fechas[1].isoformat(),
+            "asignatura": _resumen_uso(
+                [l for l in lineas if l["tipo_uso"] == "asignatura"], lambda l: l["nrc"], lambda l: {"nrc": l["nrc"]}
+            ),
+            "particular": _resumen_uso(
+                [l for l in lineas if l["tipo_uso"] == "particular"],
+                lambda l: l["usuario_id"],
+                lambda l: {"nombre": l["nombre"], "telefono_wa": l["telefono_wa"]},
+            ),
+        }
+    )
+
+
 _LIMITE_TIMELINE = 500
 
 
@@ -743,12 +817,10 @@ def api_timeline_activo(recurso_id):
     )
 
 
-_DIAS_SEMANA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]
-
-
-def _celda(ws, v):
+def _celda(ws, v, estilo=None):
     """Valor listo para openpyxl. El texto va siempre como texto: un mensaje de WhatsApp que empiece
-    por '=' no puede convertirse en fórmula, y los caracteres de control que Excel no acepta se quitan."""
+    por '=' no puede convertirse en fórmula, y los caracteres de control que Excel no acepta se quitan.
+    Las listas y el jsonb van como JSON; las fechas con zona, en hora de la LACS (Excel no guarda zonas)."""
     from openpyxl.cell import WriteOnlyCell
     from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
@@ -758,21 +830,35 @@ def _celda(ws, v):
         v = json.dumps(v, ensure_ascii=False, default=str)
     elif v is not None and not isinstance(v, (int, float, date, timedelta)):
         v = str(v)
-    if isinstance(v, str):
-        c = WriteOnlyCell(ws, ILLEGAL_CHARACTERS_RE.sub("", v))
-        c.data_type = "s"
+    if isinstance(v, str) or estilo:
+        c = WriteOnlyCell(ws, ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v)
+        if isinstance(v, str):
+            c.data_type = "s"
+        if estilo:
+            c.font, c.fill = estilo
         return c
     return v
 
 
 def _excel(hojas: dict[str, list[list]], nombre: str):
+    """Una hoja por entrada; la primera fila es el encabezado (fijo, con filtro y en grafito)."""
     from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
 
+    encabezado = (Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="171717"))
     wb = Workbook(write_only=True)
     for titulo, filas in hojas.items():
         ws = wb.create_sheet(titulo[:31])
-        for fila in filas:
-            ws.append([_celda(ws, v) for v in fila])
+        if filas:
+            # En modo write_only el ancho y el panel fijo se declaran antes de escribir filas.
+            for c in range(len(filas[0])):
+                largo = max(len(str(f[c])) if c < len(f) and f[c] is not None else 0 for f in filas[:500])
+                ws.column_dimensions[get_column_letter(c + 1)].width = min(max(largo + 2, 8), 60)
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = f"A1:{get_column_letter(len(filas[0]))}{max(len(filas), 2)}"
+        for i, fila in enumerate(filas):
+            ws.append([_celda(ws, v, encabezado if i == 0 else None) for v in fila])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -786,44 +872,40 @@ def _hoy_lacs() -> str:
     return datetime.now(recursos_service.ZONA_HORARIA_LACS).date().isoformat()
 
 
-def _aplanar(nombre: str, v, hojas: dict, resumen: list):
-    """Una hoja por cada lista del JSON de métricas; los valores sueltos van a la hoja Resumen."""
-    if isinstance(v, dict):
-        for k, x in v.items():
-            _aplanar(f"{nombre}.{k}" if nombre else k, x, hojas, resumen)
-    elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
-        cols = list(dict.fromkeys(k for x in v for k in x))
-        hojas[nombre] = [cols] + [[x.get(c) for c in cols] for x in v]
-    elif isinstance(v, list):
-        etiquetas = _DIAS_SEMANA if nombre.endswith("por_dia_semana") else range(len(v))
-        hojas[nombre] = [["", "total"]] + [[e, x] for e, x in zip(etiquetas, v)] if v else [["sin datos"]]
-    else:
-        resumen.append([nombre, v])
-
-
 @bp.route("/api/metricas/excel")
 def api_metricas_excel():
-    # Mismo periodo y mismos números que la pestaña General.
-    resp = api_metricas()
-    if isinstance(resp, tuple):
-        return resp
-    hojas, resumen = {}, []
-    _aplanar("", resp.get_json(), hojas, resumen)
-    return _excel({"Resumen": [["métrica", "valor"], *resumen], **hojas}, f"metricas-{_hoy_lacs()}.xlsx")
+    # Mismo periodo y mismos números que las pestañas General y Por uso.
+    general, uso = api_metricas(), api_metricas_uso()
+    for resp in (general, uso):
+        if isinstance(resp, tuple):
+            return resp
+    contenido = metricas_excel.libro_metricas(
+        general.get_json(), uso.get_json(), datetime.now(recursos_service.ZONA_HORARIA_LACS)
+    )
+    return send_file(
+        io.BytesIO(contenido), as_attachment=True, download_name=f"metricas-{_hoy_lacs()}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
+# ponytail: todo en memoria y sin partir hojas; Excel admite 1.048.576 filas por hoja, así que
+# auditoria_bot habrá que partirla (o exportarla a CSV) si algún día se acerca a ese tamaño.
 @bp.route("/api/datos/excel")
 def api_datos_excel():
-    # Cada tabla de la base tal cual, una por hoja. Los nombres vienen del catálogo, no del usuario.
-    tablas = db.session.execute(text(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name"
-    )).scalars().all()
-    hojas = {}
-    for t in tablas:
+    # Cada tabla y vista de la base tal cual, una por hoja, con una hoja "Índice" que dice cuántas
+    # filas trae cada una. Los nombres vienen del catálogo, no del usuario.
+    objetos = db.session.execute(text(
+        "SELECT table_name, table_type FROM information_schema.tables "
+        "WHERE table_schema = 'public' ORDER BY table_type, table_name"
+    )).all()
+    hojas, indice = {}, [["Hoja", "Tipo", "Filas", "Columnas"]]
+    for t, tipo in objetos:
         res = db.session.execute(text(f'SELECT * FROM "{t}" ORDER BY 1'))
-        hojas[t] = [list(res.keys()), *(list(f) for f in res)]
-    return _excel(hojas, f"base-de-datos-{_hoy_lacs()}.xlsx")
+        cols = list(res.keys())
+        filas = [list(f) for f in res]
+        hojas[t] = [cols, *filas]
+        indice.append([t, "tabla" if tipo == "BASE TABLE" else "vista (calculada)", len(filas), len(cols)])
+    return _excel({"Índice": indice, **hojas}, f"base-de-datos-{_hoy_lacs()}.xlsx")
 
 
 # Campos que el panel de Usuarios puede modificar. No incluye `id`,
