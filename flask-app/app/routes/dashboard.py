@@ -840,30 +840,31 @@ def _celda(ws, v, estilo=None):
     return v
 
 
-def _excel(hojas: dict[str, list[list]], nombre: str):
-    """Una hoja por entrada; la primera fila es el encabezado (fijo, con filtro y en grafito)."""
-    from openpyxl import Workbook
+def _hoja_datos(wb, titulo: str, cols: list[str], muestra: list):
+    """Hoja write_only con el encabezado grafito fijo y anchos según `muestra` (las primeras filas).
+    En modo write_only el ancho y el panel fijo se declaran antes de escribir filas."""
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
+    ws = wb.create_sheet(titulo)
+    for c, nombre in enumerate(cols):
+        largo = max([len(str(nombre))] + [len(str(f[c])) for f in muestra[:500] if f[c] is not None])
+        ws.column_dimensions[get_column_letter(c + 1)].width = min(max(largo + 2, 8), 60)
+    ws.freeze_panes = "A2"
     encabezado = (Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="171717"))
-    wb = Workbook(write_only=True)
-    for titulo, filas in hojas.items():
-        ws = wb.create_sheet(titulo[:31])
-        if filas:
-            # En modo write_only el ancho y el panel fijo se declaran antes de escribir filas.
-            for c in range(len(filas[0])):
-                largo = max(len(str(f[c])) if c < len(f) and f[c] is not None else 0 for f in filas[:500])
-                ws.column_dimensions[get_column_letter(c + 1)].width = min(max(largo + 2, 8), 60)
-            ws.freeze_panes = "A2"
-            ws.auto_filter.ref = f"A1:{get_column_letter(len(filas[0]))}{max(len(filas), 2)}"
-        for i, fila in enumerate(filas):
-            ws.append([_celda(ws, v, encabezado if i == 0 else None) for v in fila])
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+    ws.append([_celda(ws, v, encabezado) for v in cols])
+    return ws
+
+
+def _enviar_xlsx(wb, nombre: str):
+    """Guarda en un archivo temporal (no en memoria: el raw puede pesar decenas de MB) y lo envía."""
+    import tempfile
+
+    archivo = tempfile.TemporaryFile()
+    wb.save(archivo)
+    archivo.seek(0)
     return send_file(
-        buf, as_attachment=True, download_name=nombre,
+        archivo, as_attachment=True, download_name=nombre,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
@@ -888,24 +889,72 @@ def api_metricas_excel():
     )
 
 
-# ponytail: todo en memoria y sin partir hojas; Excel admite 1.048.576 filas por hoja, así que
-# auditoria_bot habrá que partirla (o exportarla a CSV) si algún día se acerca a ese tamaño.
+# Excel admite 1.048.576 filas por hoja; con el encabezado quedan 1.048.575 de datos. Una tabla más
+# grande sigue en "tabla (2)", "tabla (3)"... Es variable de módulo para que verificar_excel_raw.py
+# pueda bajarla y probar el corte con los datos de hoy.
+_MAX_FILAS_HOJA = 1_048_575
+_LOTE_RAW = 5_000
+
+
+def _nombre_parte(tabla: str, parte: int) -> str:
+    """"auditoria_bot", "auditoria_bot (2)"... sin pasar los 31 caracteres que admite Excel."""
+    if parte == 1:
+        return tabla[:31]
+    sufijo = f" ({parte})"
+    return tabla[: 31 - len(sufijo)] + sufijo
+
+
 @bp.route("/api/datos/excel")
 def api_datos_excel():
-    # Cada tabla y vista de la base tal cual, una por hoja, con una hoja "Índice" que dice cuántas
-    # filas trae cada una. Los nombres vienen del catálogo, no del usuario.
+    """Cada tabla y vista de `public` tal cual, con una hoja "Índice" al principio que dice cuántas
+    filas trae cada una y en qué hojas quedó. Los nombres vienen del catálogo, no del usuario.
+    Las filas se leen por lotes con un cursor del lado del servidor y se escriben en modo write_only,
+    así que la memoria no crece con el tamaño de la tabla."""
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+
     objetos = db.session.execute(text(
         "SELECT table_name, table_type FROM information_schema.tables "
         "WHERE table_schema = 'public' ORDER BY table_type, table_name"
     )).all()
-    hojas, indice = {}, [["Hoja", "Tipo", "Filas", "Columnas"]]
+    wb = Workbook(write_only=True)
+    # El índice va primero; sus filas se escriben al final, con lo que de verdad se exportó
+    # (en write_only cada hoja escribe a su propio temporal, así que el orden de escritura da igual).
+    hoja_indice = _hoja_datos(wb, "Índice", ["Tabla", "Tipo", "Filas", "Columnas", "Hojas"], [])
+    for col, ancho in zip("ABCDE", (28, 18, 10, 10, 60)):
+        hoja_indice.column_dimensions[col].width = ancho
+    indice = []
     for t, tipo in objetos:
-        res = db.session.execute(text(f'SELECT * FROM "{t}" ORDER BY 1'))
+        res = db.session.execute(text(f'SELECT * FROM "{t}" ORDER BY 1'), execution_options={"stream_results": True})
         cols = list(res.keys())
-        filas = [list(f) for f in res]
-        hojas[t] = [cols, *filas]
-        indice.append([t, "tabla" if tipo == "BASE TABLE" else "vista (calculada)", len(filas), len(cols)])
-    return _excel({"Índice": indice, **hojas}, f"base-de-datos-{_hoy_lacs()}.xlsx")
+        lote = [list(f) for f in res.fetchmany(_LOTE_RAW)]
+        hojas, total, ws, en_hoja = [], 0, None, 0
+        while True:
+            for fila in lote:
+                if ws is None or en_hoja == _MAX_FILAS_HOJA:
+                    ws = _hoja_datos(wb, _nombre_parte(t, len(hojas) + 1), cols, lote)
+                    hojas.append([ws, 0])
+                    en_hoja = 0
+                ws.append([_celda(ws, v) for v in fila])
+                en_hoja += 1
+                hojas[-1][1] += 1
+                total += 1
+            lote = [list(f) for f in res.fetchmany(_LOTE_RAW)]
+            if not lote:
+                break
+        if ws is None:  # tabla vacía: la hoja existe igual, solo con el encabezado
+            ws = _hoja_datos(wb, _nombre_parte(t, 1), cols, [])
+            hojas.append([ws, 0])
+        for hoja, n in hojas:
+            hoja.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{n + 1}"
+        indice.append([
+            t, "tabla" if tipo == "BASE TABLE" else "vista (calculada)", total, len(cols),
+            ", ".join(h.title for h, _ in hojas),
+        ])
+    for fila in indice:
+        hoja_indice.append([_celda(hoja_indice, v) for v in fila])
+    hoja_indice.auto_filter.ref = f"A1:E{len(indice) + 1}"
+    return _enviar_xlsx(wb, f"base-de-datos-{_hoy_lacs()}.xlsx")
 
 
 # Campos que el panel de Usuarios puede modificar. No incluye `id`,

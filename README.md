@@ -120,7 +120,9 @@ los submenús.
   se reserva, Top activos y usuarios, Por uso (NRC y particulares),
   Inventario y seguro, y Bot y hábitos. La **base de datos en raw** trae
   todas las tablas completas, una por hoja, la vista `reserva_puntualidad` y
-  una hoja "Índice" con cuántas filas trae cada una.
+  una hoja "Índice" con cuántas filas trae cada una. Si una tabla pasa del
+  límite de Excel (1.048.576 filas por hoja), sigue en otra hoja
+  ("auditoria_bot (2)"…), y el Índice lo dice.
   Ver `docs/ARQUITECTURA.md`, sección "Métricas".
 - **Calendario**: las reservas de activos y lugares en vistas de **mes,
   semana y día**, vía `GET /dashboard/api/reservas?desde&hasta`. Las

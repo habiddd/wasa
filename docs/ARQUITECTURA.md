@@ -2147,10 +2147,26 @@ incluye.
   según el contenido. Las listas (`calendario_reglas.dias_semana_bloqueados`)
   y el `jsonb` (`reserva_actas.anclas`) van como texto JSON. Los PDF de las
   actas no están en la base, sino en disco (`reserva_actas.archivo` es la
-  ruta), así que el Excel trae la ruta y no el archivo. Se verificó hoja por
-  hoja contra `count(*)` y coinciden todas. Límite conocido: Excel admite
-  1.048.576 filas por hoja; si `auditoria_bot` se acerca a eso, habrá que
-  partirla.
+  ruta), así que el Excel trae la ruta y no el archivo.
+- **Tablas grandes:** Excel admite 1.048.576 filas por hoja
+  (`_MAX_FILAS_HOJA` = 1.048.575 de datos más el encabezado). Una tabla más
+  grande sigue en `auditoria_bot (2)`, `auditoria_bot (3)`…, cada una con su
+  encabezado, y la columna "Hojas" del Índice dice en cuáles quedó. El nombre
+  se recorta para no pasar los 31 caracteres de Excel
+  (`_nombre_parte`).
+- **Memoria:** las filas se leen por lotes de 5.000 con un cursor del lado del
+  servidor (`stream_results`), se escriben en modo `write_only` y el archivo
+  se arma en un temporal en disco, no en memoria. Así, una tabla de un millón
+  de filas no tumba el contenedor. El Índice se crea primero y sus filas se
+  escriben al final, con lo que de verdad se exportó. En `write_only`,
+  openpyxl no deja buscar hojas por nombre (`wb[...]`, `move_sheet`), así
+  que se guardan las hojas mismas.
+- **Verificación:** `flask-app/verificar_excel_raw.py` comprueba que cada
+  tabla y vista coincida con `count(*)`. Luego baja el límite a 100 filas
+  para forzar el corte de `auditoria_bot` con los datos de hoy y revisa que
+  entre todas las hojas estén todos los `id`, sin repetir ni perder ninguno.
+  No escribe en la base:
+  `docker exec -i lacs_flask_app python - < flask-app/verificar_excel_raw.py`.
 - `_celda` escribe todo texto como texto (`data_type = "s"`). Sin eso, un
   mensaje de WhatsApp en `auditoria_bot` que empiece por `=` se ejecutaría
   como fórmula al abrir el archivo. También quita los caracteres de control
