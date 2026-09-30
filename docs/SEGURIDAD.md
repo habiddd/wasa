@@ -1,5 +1,19 @@
 # Seguridad y guardrails — checklist
 
+Capas que atraviesa un mensaje de WhatsApp antes de tocar una reserva:
+
+```mermaid
+flowchart TD
+    W[Mensaje de WhatsApp] --> RL["Rate limit por número<br/>guardrails.excede_limite_mensajes"]
+    RL --> PI["Filtro de inyección sobre el texto compactado<br/>mensaje_es_sospechoso"]
+    PI --> REG["Registro obligatorio + aviso de tratamiento de datos<br/>registro_service"]
+    REG --> WL["Whitelist de intents<br/>intent_permitido"]
+    WL --> BL["Lógica explícita en recursos_service<br/>el LLM nunca escribe en la base"]
+    BL --> CF["Confirmación explícita del usuario<br/>resumen tipo factura, fecha y hora confirmadas"]
+    CF --> EX["EXCLUDE USING gist en Postgres<br/>sin solapamientos aunque falle la app"]
+    RL & PI & WL -.-> AU[("auditoria_bot")]
+```
+
 ## Ya incluido en este scaffold
 - [x] Rate limiting por número de WhatsApp (`guardrails.py`)
 - [x] Filtrado contra inyección de prompt (`guardrails.mensaje_es_sospechoso`).

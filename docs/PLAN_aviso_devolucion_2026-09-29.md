@@ -26,6 +26,19 @@ vaya a devolver. Ejemplo: reserva de 5 h → el aviso sale a las 4 h 30 min.
   `IntegrityError` → rollback y seguir. Sin hilo ni cron nuevo: lo corren el
   ticker y el barrido perezoso que ya existen.
 
+```mermaid
+flowchart TD
+    B["barrer()"] --> Q["Reservas entregada con fin entre<br/>ahora y ahora + AVISO_DEVOLUCION_MIN"]
+    Q --> G[Agrupar por grupo_id]
+    G --> E{"¿Ya existe la fila<br/>(grupo_id, devolucion)?"}
+    E -- sí --> N[Saltar]
+    E -- no --> W{"¿fin − AVISO_DEVOLUCION_MIN<br/>dentro de AVISO_VENTANA_MIN?"}
+    W -- no --> N
+    W -- sí --> M["minutos = ceil((fin − ahora) / 60)<br/>avisar_usuario"]
+    M --> I["INSERT ReservaAviso<br/>enviado o motivo error_envio"]
+    I -- IntegrityError --> R["rollback y seguir"]
+```
+
 ## Cambios
 
 1. **`postgres/init/02-schema.sql`**

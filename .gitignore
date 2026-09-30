@@ -17,3 +17,6 @@ dashboard-frontend/node_modules/
 dashboard-frontend/dist/
 flask-app/app/dashboard_dist/
 
+
+# graphify (grafo de conocimiento generado)
+graphify-out/

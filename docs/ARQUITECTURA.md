@@ -2,6 +2,35 @@
 
 ## Flujo de un mensaje entrante
 
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Usuario (WhatsApp)
+    participant B as baileys-bot
+    participant F as Flask /webhook/whatsapp
+    participant R as Redis (sesión)
+    participant L as LLM (lfm2.5)
+    participant DB as Postgres
+    U->>B: mensaje
+    B->>F: POST /webhook/whatsapp (remoteJid completo)
+    F->>F: rate limit + filtro de inyección (guardrails)
+    F->>DB: obtener_o_crear_usuario (telefono_wa, jid_wa)
+    alt registro incompleto
+        F->>F: registro_service, siguiente pregunta del alta
+    else wizard, cancelación o menú en curso
+        F->>R: leer sesión
+        F->>F: responde al paso exacto (recursos_service / menu_service)
+    else mensaje nuevo
+        F->>L: clasificar_intent (solo si la ruta rápida no decide)
+        F->>F: intent_permitido (whitelist)
+        F->>DB: recursos_service consulta o escribe reservas
+    end
+    F->>B: POST /send (jid, texto)
+    B->>U: respuesta
+    F->>DB: registrar_interaccion (auditoria_bot)
+    B-->>F: POST /webhook/ack (entregado, leído)
+```
+
 1. Usuario escribe por WhatsApp al número de la LACS.
 2. `baileys-bot` (servicio Node.js sobre `@whiskeysockets/baileys`, WhatsApp
    Web no oficial) recibe el mensaje vía `messages.upsert` y lo reenvía a
@@ -159,6 +188,19 @@ y **no se le puede apagar el razonamiento por API** -- probados
 `/nothink` en el system prompt, los tres siguen gastando ~190 tokens. Una
 clasificación cuesta entre 13 y 25 segundos. Eso condiciona todo el
 diseño: la meta no es solo acertar, es llamar al modelo lo menos posible.
+
+```mermaid
+flowchart TD
+    M[Mensaje] --> A{"¿Señal inequívoca?<br/>_clasificar_sin_llm"}
+    A -- "sí, sin MARCADORES_DESISTIR" --> I([Intent])
+    A -- no --> L["LLM clasifica<br/>tope 45 s"]
+    L -- "timeout, sin respuesta o length" --> H["Heurístico<br/>_clasificar_intent_heuristico"]
+    L -- "reservar, cancelar o consultar" --> V{"¿Señal de dominio?<br/>_validar_intent_de_accion"}
+    L -- "ayuda, saludo u otro" --> I
+    V -- sí --> I
+    V -- no --> S["saludo u otro"] --> I
+    H --> I
+```
 
 1. **Ruta rápida, sin red (`_clasificar_sin_llm`).** Si el mensaje trae
    una señal inequívoca -- un marcador de reserva, de cancelación, de
@@ -387,6 +429,27 @@ elegir_activo → elegir_marca → elegir_modelo → [confirmar_accesorios]
   → hora_inicio → hora_fin → nota_preguntar → [nota_texto] → confirmar → listo
 
 hora_fin/confirmar → [resolver_disponibilidad → resumen | elegir_alternativa]
+```
+
+Lo mismo en diagrama (los pasos con `?` son condicionales):
+
+```mermaid
+flowchart TD
+    subgraph R["Preguntas de la reserva completa"]
+        tu[tipo_uso] --> nrc["nrc?<br/>solo de asignatura"] --> mod[modalidad]
+        mod -- grupo --> tg[tamano_grupo] --> ii["integrante_id ×(N-1)"] --> cg[confirmar_grupo]
+    end
+    subgraph I["Por cada ítem del carrito"]
+        ea[elegir_activo] --> em[elegir_marca] --> emo[elegir_modelo]
+        emo --> ca["confirmar_accesorios?"] --> cc["confirmar_contenidos_espacio?"]
+        cc --> sb[sale_de_barranquilla] --> f[fecha] --> hi[hora_inicio] --> hf[hora_fin]
+        hf --> np[nota_preguntar] --> nt["nota_texto?"] --> co[confirmar]
+    end
+    mod -- individual --> ea
+    cg --> ea
+    co --> rd{resolver_disponibilidad}
+    rd -- disponible --> res["resumen tipo factura"] --> listo([listo])
+    rd -- "no disponible" --> alt["elegir_alternativa"]
 ```
 
 `confirmar_accesorios` es condicional: solo aparece si el activo recién
@@ -1567,6 +1630,31 @@ confirmada/no_show ──(acta de ENTREGA, equipo NO marcado)──> cancelada
 entregada ──(acta de DEVOLUCIÓN, equipo NO marcado)──> no_devuelta  [+ recurso.estado = no_devuelto]
 ```
 
+```mermaid
+stateDiagram-v2
+    [*] --> pendiente
+    pendiente --> confirmada : la LACS aprueba
+    confirmada --> entregada : acta de ENTREGA
+    confirmada --> no_show : NO_SHOW_MARGEN_MIN sin acta (automático) o manual
+    no_show --> entregada : acta de ENTREGA dentro de la ventana, + entrega_tardia
+    entregada --> completada : acta de DEVOLUCIÓN a tiempo
+    entregada --> devuelta_tarde : acta de DEVOLUCIÓN tarde
+    confirmada --> cancelada : ENTREGA, línea no marcada
+    no_show --> cancelada : ENTREGA, línea no marcada
+    entregada --> no_devuelta : DEVOLUCIÓN, línea no marcada
+    completada --> [*]
+    devuelta_tarde --> [*]
+    no_devuelta --> [*]
+    cancelada --> [*]
+    note right of entregada
+        Si fin ya pasó, el dashboard muestra Retrasada.
+        Es un cálculo, no se guarda.
+    end note
+    note right of no_devuelta
+        El activo pasa a recurso.estado no_devuelto.
+    end note
+```
+
 - **El acta mueve solo los equipos marcados.** En el primer paso del
   diálogo de firma el administrador marca qué equipos se entregan o se
   devuelven, y el navegador manda sus ids (`Reserva.id`) en el campo
@@ -1661,6 +1749,16 @@ Una reserva `confirmada` que nadie recoge no se queda así para siempre:
   frescura `AVISO_VENTANA_MIN`, pero sin crear filas `vencido`. Probado con
   `flask-app/verificar_aviso_devolucion.py`.
 
+```mermaid
+flowchart LR
+    subgraph C["Reserva confirmada sin acta de entrega"]
+        p["inicio − AVISO_PREVIO_MIN<br/>aviso previo"] --> h["inicio<br/>aviso hora"] --> n["min(inicio + NO_SHOW_MARGEN_MIN, fin)<br/>aviso no_show + estado no_show"]
+    end
+    subgraph E["Reserva entregada"]
+        d["fin − AVISO_DEVOLUCION_MIN<br/>aviso devolucion, no cambia estado"]
+    end
+```
+
 **Qué lo empuja: un ticker más un barrido perezoso, no un cron.** Se
 descartó sumar APScheduler, Celery o un contenedor nuevo -- el volumen de
 esta app no lo justifica. En cambio:
@@ -1676,6 +1774,18 @@ esta app no lo justifica. En cambio:
   y antes de que el ticker complete su primer sueño.
 
 Ambos llaman exactamente a la misma función `barrer()`.
+
+```mermaid
+flowchart TD
+    T["Ticker: hilo daemon cada BARRIDO_INTERVALO_SEG<br/>uno por worker de gunicorn"] --> B["avisos_reservas.barrer()"]
+    P["Barrido perezoso<br/>GET /dashboard/api/reservas"] --> B
+    B --> K{"Lock de Redis<br/>SET NX EX"}
+    K -- "lo tiene otro worker" --> X[No hace nada]
+    K -- "adquirido, o Redis caído" --> F{"¿Momento dentro de<br/>AVISO_VENTANA_MIN?"}
+    F -- no --> V["Fila con motivo vencido, sin enviar<br/>el no_show igual cambia el estado"]
+    F -- sí --> S["Enviar WhatsApp"] --> I["INSERT reserva_avisos<br/>UNIQUE (grupo_id, tipo)"]
+    I -- IntegrityError --> R["rollback y sigue con el lote"]
+```
 
 **Dos capas contra avisos duplicados.** `gunicorn` corre con `--workers 2`
 (ver `flask-app/Dockerfile`), así que hay DOS procesos, cada uno con su
@@ -1753,6 +1863,25 @@ mandarlo".
 3. **Datos y firma del administrador.**
 4. **Confirmar.** Muestra el PDF ya compuesto, el estado al que pasará la
    reserva y la fecha y hora exactas que van a quedar impresas.
+
+```mermaid
+sequenceDiagram
+    actor A as Administrador
+    participant D as FirmarActaDialog (navegador)
+    participant F as Flask
+    A->>D: abre el diálogo, la fecha se congela
+    D->>F: GET /reservas/grupo/ID/acta/estado
+    F-->>D: anclas, líneas que se pueden mover, momento pendiente
+    A->>D: 1. marca equipos y nota
+    A->>D: 2. firma del usuario
+    A->>D: 3. datos y firma del administrador
+    D->>D: pdf-lib estampa firmas, fecha, C.C. y marcas en las anclas
+    A->>D: 4. confirma
+    D->>F: POST .../actas (PDF firmado + ids de equipos marcados)
+    F->>F: valida cabecera PDF, tamaño y momento
+    F->>F: actas_service.aplicar_transicion, solo las líneas marcadas
+    F-->>D: nuevo estado de la reserva
+```
 
 La lista de equipos del paso 1 sale de `lineas` en `/acta/estado` (todas las
 líneas del grupo, desde el servidor), **no** de la prop `reservas` que llega
