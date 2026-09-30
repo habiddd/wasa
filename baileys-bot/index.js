@@ -3,6 +3,7 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  jidNormalizedUser,
 } = require("@whiskeysockets/baileys");
 const { Boom } = require("@hapi/boom");
 const QRCode = require("qrcode");
@@ -269,6 +270,81 @@ function claveValida(recibida) {
   return crypto.timingSafeEqual(recibidaBuf, esperadaBuf);
 }
 
+// Catálogo de WhatsApp Business del número del bot (ver
+// docs/PLAN_catalogo_whatsapp_2026-09-30.md). Mismo x-api-key y mismo 503 que
+// /send.
+async function listarCatalogo() {
+  const jid = jidNormalizedUser(sock.user.id);
+  const productos = [];
+  let cursor;
+  do {
+    const r = await sock.getCatalog({ jid, limit: 100, cursor });
+    productos.push(...r.products);
+    cursor = r.nextPageCursor;
+  } while (cursor);
+  return productos.map((p) => ({
+    id: p.id,
+    name: p.name,
+    retailerId: p.retailerId,
+    isHidden: p.isHidden,
+    reviewStatus: p.reviewStatus,
+  }));
+}
+
+function responderJson(res, codigo, obj) {
+  res.writeHead(codigo, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(obj));
+}
+
+function atenderCatalogo(req, res) {
+  if (!claveValida(req.headers["x-api-key"])) {
+    console.warn(`${req.method} ${req.url} rechazado: x-api-key ausente o invalida`);
+    return responderJson(res, 401, { error: "No autorizado" });
+  }
+  if (connectionState !== "open" || !sock) {
+    return responderJson(res, 503, { error: "WhatsApp no está vinculado/conectado" });
+  }
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", async () => {
+    try {
+      if (req.method === "GET" && req.url === "/catalog") {
+        return responderJson(res, 200, await listarCatalogo());
+      }
+      if (req.method === "POST" && req.url === "/catalog/product") {
+        let p;
+        try {
+          p = JSON.parse(body);
+        } catch (err) {
+          return responderJson(res, 400, { error: "Bad request" });
+        }
+        const existente = (await listarCatalogo()).find((x) => x.retailerId === p.retailerId);
+        if (existente) return responderJson(res, 200, { status: "ya_existia", id: existente.id });
+        const creado = await sock.productCreate({
+          name: p.name,
+          description: p.description,
+          retailerId: p.retailerId,
+          url: p.url,
+          price: p.price,
+          currency: p.currency,
+          originCountryCode: undefined,
+          isHidden: false,
+          images: [],
+        });
+        return responderJson(res, 200, { status: "creado", id: creado.id });
+      }
+      if (req.method === "DELETE" && req.url.startsWith("/catalog/product/")) {
+        const id = decodeURIComponent(req.url.slice("/catalog/product/".length));
+        return responderJson(res, 200, { status: "ok", borrados: await sock.productDelete([id]) });
+      }
+      responderJson(res, 404, { error: "Not found" });
+    } catch (err) {
+      console.error("Error en catálogo de WhatsApp:", err.message);
+      responderJson(res, 502, { error: err.message });
+    }
+  });
+}
+
 const http = require("http");
 const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/send") {
@@ -316,6 +392,8 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: "No se pudo enviar el mensaje" }));
       }
     });
+  } else if (req.url === "/catalog" || req.url.startsWith("/catalog/")) {
+    atenderCatalogo(req, res);
   } else if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok" }));
