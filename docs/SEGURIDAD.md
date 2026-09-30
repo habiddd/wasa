@@ -11,7 +11,10 @@ flowchart TD
     WL --> BL["Lógica explícita en recursos_service<br/>el LLM nunca escribe en la base"]
     BL --> CF["Confirmación explícita del usuario<br/>resumen tipo factura, fecha y hora confirmadas"]
     CF --> EX["EXCLUDE USING gist en Postgres<br/>sin solapamientos aunque falle la app"]
-    RL & PI & WL -.-> AU[("auditoria_bot")]
+    AU["auditoria_bot<br/>registra cada interacción"]
+    RL -.-> AU
+    PI -.-> AU
+    WL -.-> AU
 ```
 
 ## Ya incluido en este scaffold
@@ -116,6 +119,45 @@ flowchart TD
       publicado. Antes, cualquiera con acceso de red a ese puerto podía
       hacer que el número de la LACS enviara mensajes arbitrarios.
 
+### Exposición de red
+
+Todos los puertos publicados escuchan solo en `127.0.0.1`. Los servicios se
+hablan por la red interna `backend` de Docker, que no pasa por esos puertos.
+
+```mermaid
+flowchart LR
+    EXT(["Otra máquina de la red o internet"]) -. "no llega: puertos solo en 127.0.0.1" .- LO
+    ADM(["Administrador"]) -- "Basic auth" --> DF
+    subgraph HOST["Servidor"]
+        LO["127.0.0.1<br/>:3000 baileys · :5000 flask<br/>:5432 postgres · :8080 dashboard"]
+        subgraph NET["Red interna de Docker: backend"]
+            DF["dashboard-frontend<br/>Nginx exige login"] -- "proxy /dashboard/api/<br/>Flask vuelve a validar" --> F["flask-app"]
+            F -- "POST /send + x-api-key<br/>tiempo constante, falla cerrado" --> B["baileys-bot"]
+            B -- "webhooks + x-api-key<br/>hoy Flask NO la valida" --> F
+            F --> P["postgres<br/>usuario de app, no superusuario"]
+            F --> R["redis<br/>sin puerto publicado"]
+        end
+    end
+```
+
+### Subida y descarga de actas
+
+```mermaid
+flowchart TD
+    S["POST de un acta<br/>firmada en pantalla o subida"] --> A{"¿Credenciales del dashboard?"}
+    A -- no --> X1[Rechazada]
+    A -- sí --> H{"¿Cabecera %PDF- y tamaño<br/>dentro de ACTAS_MAX_BYTES?"}
+    H -- no --> X2[Rechazada]
+    H -- sí --> M{"¿El momento es el que toca?<br/>entrega o devolución"}
+    M -- no --> X3[409]
+    M -- sí --> W["Archivo nuevo en el volumen actas_pdf<br/>+ SHA-256 en reserva_actas, nunca se sobrescribe"]
+    W --> T["aplicar_transicion en el mismo commit"]
+    T -- "falla" --> B["Se borra el archivo recién escrito"]
+    D["GET de un acta histórica"] --> G{"¿Pertenece al grupo_id pedido y<br/>la ruta resuelta queda dentro de ACTAS_DIR?"}
+    G -- sí --> E["Se sirve como attachment + nosniff"]
+    G -- no --> X4[Rechazada]
+```
+
 ## Pendiente antes de producción con datos reales de la LACS
 
 ### Infraestructura
@@ -187,6 +229,20 @@ pasa a ser auténtico por construcción. Cuesta ~200 ms de CPU por firma, unas
 solo el de subida sigue siendo confiado — que es una posición bastante mejor
 que tener los dos confiados.
 
+```mermaid
+flowchart LR
+    subgraph HOY["Hoy: riesgo aceptado"]
+        N1["Navegador compone el PDF<br/>con pdf-lib"] --> S1["Servidor valida solo<br/>cabecera y tamaño"]
+        U1["Subida desde otro dispositivo"] --> S1
+        S1 --> G1["Se guarda como comprobante<br/>sin saber si el contenido es legítimo"]
+    end
+    subgraph ALT["Alternativa si cambia el criterio"]
+        N2["Navegador manda solo<br/>los PNG de firma"] --> S2["Flask reconstruye el acta desde la base<br/>reportlab + pypdf, unos 200 ms"]
+        S2 --> G2["Contenido auténtico por construcción"]
+        U2["Subida desde otro dispositivo"] --> G3["Sigue siendo confiada"]
+    end
+```
+
 **Qué NO mitiga esto.** Ni el SHA-256 ni el historial: sirven para detectar que
 un archivo cambió después de guardarse, no para saber si el contenido era
 legítimo cuando entró.
@@ -222,6 +278,17 @@ también respeta este corte), y los cambios de
 estado a `no_show` se siguen aplicando. `BARRIDO_ACTIVO=0` **no** sirve para
 esto: solo apaga el ticker, y el listado de reservas del dashboard sigue
 llamando al mismo barrido cada 30 s.
+
+```mermaid
+flowchart TD
+    T["Ticker cada 60 s<br/>+ barrido perezoso del listado de reservas"] --> G["Por cada grupo de reserva"]
+    G --> L["Como máximo 4 mensajes: previo, hora, no_show, devolucion<br/>UNIQUE (grupo_id, tipo)"]
+    L --> F{"¿El momento cayó dentro<br/>de AVISO_VENTANA_MIN?"}
+    F -- no --> V["Se registra como vencido<br/>no se envía"]
+    F -- sí --> E["Se envía una sola vez<br/>un error queda error_envio, sin reintentos"]
+    E --> D["Destinatario: usuarios.telefono_wa<br/>auto-registrado, nadie lo valida"]
+    K["Apagado hoy: AVISO_VENTANA_MIN=0<br/>BARRIDO_ACTIVO=0 no basta"] -.-> F
+```
 
 **Qué NO mitiga.** Nada de esto valida el destinatario. El número sale de
 `usuarios.telefono_wa`, que hoy es auto-servicio (ver el pendiente de

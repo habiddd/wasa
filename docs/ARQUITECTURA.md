@@ -1,5 +1,94 @@
 # Arquitectura
 
+## Vista general
+
+Los cinco servicios de `docker-compose.yml`. Todos los puertos publicados
+escuchan solo en `127.0.0.1`; entre ellos se hablan por la red interna
+`backend`.
+
+```mermaid
+flowchart LR
+    EST(["Estudiante en WhatsApp"]) <--> B
+    ADM(["Administrador de la LACS"]) --> DF
+    subgraph DC["Docker Compose · red backend"]
+        B["baileys-bot<br/>Node + Baileys · :3000<br/>volumen baileys_sessions"]
+        F["flask-app<br/>gunicorn, 2 workers · :5000<br/>volumen actas_pdf"]
+        DF["dashboard-frontend<br/>Nginx + React · :8080"]
+        P["postgres 16 · :5432<br/>volumen postgres_data"]
+        R["redis 7<br/>volumen redis_data"]
+    end
+    L["LLM local<br/>LM Studio, fuera de Docker"]
+    B -- "webhooks: mensaje, QR, ack" --> F
+    F -- "POST /send" --> B
+    DF -- "proxy /dashboard/api/" --> F
+    F --> P
+    F -- "sesiones y lock del barrido" --> R
+    F -- "clasificar intent y charla" --> L
+```
+
+Modelo de datos (`postgres/init/02-schema.sql`). Las líneas punteadas no son
+llaves foráneas: los historiales los llena un trigger sin FK, y
+`auditoria_bot` se cruza con `usuarios` por el número de teléfono.
+
+```mermaid
+erDiagram
+    usuarios ||--o{ reserva_grupos : "hace"
+    usuarios ||--o{ reservas : "titular"
+    reserva_grupos ||--|{ reservas : "líneas (una por activo)"
+    reserva_grupos ||--o{ reserva_grupo_integrantes : "integrantes"
+    reserva_grupos ||--o{ reserva_actas : "actas firmadas o subidas"
+    reserva_grupos ||--o{ reserva_avisos : "avisos de WhatsApp"
+    recursos ||--o{ reservas : "se reserva"
+    recursos |o--o{ recursos : "padre_id o espacio_id"
+    reservas ||..o{ reserva_estado_historial : "trigger, sin FK"
+    recursos ||..o{ recurso_estado_historial : "trigger, sin FK"
+    usuarios ||..o{ auditoria_bot : "telefono_wa, sin FK"
+    usuarios {
+        int id PK
+        varchar telefono_wa UK
+        varchar jid_wa
+        bool registro_completo
+        timestamptz aviso_privacidad_en
+    }
+    recursos {
+        int id PK
+        varchar tipo "equipo o espacio"
+        varchar placa
+        int padre_id FK
+        int espacio_id FK
+        bool requiere_confirmacion
+        varchar estado
+    }
+    reserva_grupos {
+        int id PK "número de reserva"
+        int usuario_id FK
+        varchar tipo_uso
+        varchar nrc
+        varchar modalidad
+    }
+    reservas {
+        int id PK
+        int grupo_id FK
+        int recurso_id FK
+        timestamptz inicio
+        timestamptz fin
+        varchar estado
+        bool entrega_tardia
+    }
+    reserva_actas {
+        int id PK
+        varchar momento "entrega o devolucion"
+        varchar origen "firmada o subida"
+        char sha256
+    }
+    reserva_avisos {
+        int id PK
+        varchar tipo "UNIQUE con grupo_id"
+        bool enviado
+        varchar motivo
+    }
+```
+
 ## Flujo de un mensaje entrante
 
 ```mermaid
@@ -129,6 +218,17 @@ JID completo se guarda en `usuarios.jid_wa` con cada mensaje entrante
 escrito desde que existe la columna) se rearma con el número, que no llega
 a las cuentas `@lid`. Toda reserva nueva la crea un mensaje del estudiante,
 así que las pendientes siempre tienen su JID.
+
+```mermaid
+flowchart TD
+    M["Mensaje entrante<br/>remoteJid = id@lid o numero@s.whatsapp.net"] --> W["webhook.py"]
+    W --> N["numero: solo dígitos<br/>rate limit y auditoría"]
+    W --> J["remote_jid completo<br/>el único válido para responder"]
+    W --> U["usuarios.jid_wa<br/>para escribir sin mensaje previo"]
+    J --> S["POST /send con el jid tal cual"]
+    U --> S
+    N -. "el bug: rearmar numero@s.whatsapp.net" .-> X["JID equivocado en cuentas @lid<br/>sendMessage da éxito y WhatsApp no entrega nada"]
+```
 
 ## Por qué separar el LLM de la lógica de reservas
 
@@ -340,6 +440,17 @@ los hijos que alguien ya había puesto a mano en otro lugar no se tocan, y
 esa excepción manual queda pegajosa ante cambios futuros del padre.
 `recursos_service.py` (el bot) SÍ usa esta jerarquía al reservar un
 espacio -- ver "Contenidos de un espacio (`espacio_id`)" más abajo.
+
+Las dos jerarquías con un ejemplo (nombres ilustrativos):
+
+```mermaid
+flowchart BT
+    L1["Lente 1<br/>hijo, incluido por defecto"] -- padre_id --> CAM["Cámara<br/>equipo padre, placa 12345670"]
+    L2["Lente 2<br/>hijo"] -- padre_id --> CAM
+    I1["iMac"] -- espacio_id --> SALA["Sala 4<br/>tipo espacio: sin padre ni lugar"]
+    I2["MacBook"] -- espacio_id --> SALA
+    CAM -. "espacio_id opcional, independiente de padre_id" .-> SALA
+```
 
 Cuando hay varias unidades del mismo modelo (mismo `nombre`, distinta
 `placa`), se tratan como intercambiables:
@@ -975,6 +1086,25 @@ reserva con id X". Por eso toda consulta filtra siempre por
   evitaría por sí solo que alguien cancelara algo que no es suyo si se
   saltara el menú.
 
+```mermaid
+sequenceDiagram
+    actor U as Usuario
+    participant W as webhook.py
+    participant C as gestionar_cancelacion
+    participant DB as Postgres
+    U->>W: quiero cancelar
+    W->>W: usuario resuelto por el número que escribe
+    W->>C: intent cancelar + usuario
+    C->>DB: _reservas_cancelables_de(usuario.id)
+    Note over C,DB: filtra por dueño, ESTADOS_QUE_OCUPAN y fin futuro
+    C-->>U: lista numerada, agrupada por grupo_id
+    U->>C: 1,3 o todos
+    C-->>U: factura + 1. Sí, cancelar / 2. No
+    U->>C: 1
+    C->>DB: UPDATE estado = cancelada WHERE id IN (elegidos) AND usuario_id = usuario.id
+    C-->>U: reservas canceladas
+```
+
 **Selección múltiple.** El paso "elegir reserva" reutiliza
 `_interpretar_seleccion_multiple` (la misma función del paso
 `confirmar_accesorios`): un número, varios separados por coma ("1,3") o
@@ -1009,6 +1139,19 @@ sus líneas:
 | todas `confirmada` | confirmada | *RESERVA CONFIRMADA* |
 | `confirmada` + `pendiente` | **parcial** | *RESERVA PARCIAL* + qué quedó confirmado y qué no |
 | todas `pendiente` | pendiente | *RESERVA PENDIENTE DE CONFIRMACIÓN* |
+
+```mermaid
+flowchart TD
+    C["crear_reservas_grupo<br/>una línea por activo"] --> Q{"¿recurso.requiere_confirmacion?"}
+    Q -- no --> K["Línea confirmada"]
+    Q -- sí --> P["Línea pendiente<br/>aparta el activo igual"]
+    P --> D{"La LACS decide en el dashboard<br/>por activo o Confirmar todo"}
+    D -- confirmar --> K2["Línea confirmada"]
+    D -- denegar --> N["Línea denegada<br/>libera el activo, la fila se conserva"]
+    K2 --> WA["WhatsApp al estudiante<br/>después del commit"]
+    N --> WA
+    WA -- "si falla" --> NF["notificado: false<br/>el dashboard avisa que hay que contactarlo"]
+```
 
 - **Una pendiente aparta el activo.** Si no, otro estudiante podría
   reservarlo mientras la LACS decide. Por eso el EXCLUDE
@@ -1078,6 +1221,28 @@ que `reserva_wizard`/`cancelacion_wizard`, mientras esté activo la
 respuesta del usuario se interpreta contra el paso del menú, no contra
 clasificación de intent.
 
+```mermaid
+stateDiagram-v2
+    [*] --> elegir_opcion : intent otro
+    elegir_opcion --> gestionar_reserva : 1 o palabras de reservar
+    elegir_opcion --> esperando_consulta : 2 o palabras de preguntas
+    elegir_opcion --> gestionar_cancelacion : 3 o cancelar
+    elegir_opcion --> elegir_opcion : opción no reconocida
+    elegir_opcion --> rendicion : MAX_REINTENTOS agotados
+    elegir_opcion --> [*] : palabra de salida
+    esperando_consulta --> evaluar_consulta_disponibilidad : cualquier texto
+    esperando_consulta --> gestionar_cancelacion : cancelar
+    esperando_consulta --> [*] : palabra de salida
+    evaluar_consulta_disponibilidad --> [*] : responde y ofrece reservar
+    gestionar_reserva --> [*]
+    gestionar_cancelacion --> [*]
+    rendicion --> [*]
+    note right of rendicion
+        Mensaje estático, auditado como
+        intent_no_permitido y permitido=False.
+    end note
+```
+
 - **`elegir_opcion`**: `"1"`/palabras de reservar arrancan
   `recursos_service.gestionar_reserva` con el texto tal cual lo escribió
   el usuario (si ya menciona el activo, p. ej. "quiero reservar la sala de
@@ -1143,6 +1308,14 @@ Es de un solo turno, sin reintentos: el próximo mensaje se interpreta con
 `menu_service.procesar_respuesta_oferta`, misma forma de retorno
 `(accion, payload, nueva_sesion, auditoria)` que `procesar_respuesta`.
 
+```mermaid
+flowchart LR
+    R["Respuesta de disponibilidad<br/>+ ¿Quieres reservar algo?"] --> O{"Próximo mensaje"}
+    O -- "acepta: sí, 1, dale..." --> W["gestionar_reserva<br/>abre en el primer menú"]
+    O -- "rechaza: no, gracias..." --> F["Respuesta cordial<br/>sesión limpia"]
+    O -- "otra cosa" --> I["Limpia la oferta<br/>y sigue a clasificación de intent"]
+```
+
 - **Acepta** ("sí", "1", "dale", "listo", "claro", "ok", "bueno",
   "quiero"): arranca `recursos_service.gestionar_reserva` con el propio
   texto del usuario (p. ej. "si"). Como ese texto no nombra ningún activo,
@@ -1180,6 +1353,17 @@ misma razón que la confirmación de reserva: "Juan Pérez" como respuesta a
 
 El número de celular no se pregunta -- ya se conoce, es `telefono_wa`, el
 canal por el que está escribiendo.
+
+```mermaid
+flowchart TD
+    M["Mensaje"] --> U{"¿Existe el Usuario<br/>con ese telefono_wa?"}
+    U -- no --> C["Crear Usuario vacío<br/>+ aviso de privacidad, marca aviso_privacidad_en"]
+    U -- sí --> R{"¿registro_completo?"}
+    C --> P["Siguiente campo faltante<br/>leído de Postgres, no de la sesión<br/>nombre, código, cédula"]
+    R -- no --> P
+    P --> G["Validar y guardar en Postgres al instante"]
+    R -- sí --> S["Sigue el flujo normal:<br/>wizard en curso o clasificación de intent"]
+```
 
 Cada respuesta válida se guarda en Postgres al instante (no solo en la
 sesión), así que el flujo es resistente a que la sesión de Redis expire o
