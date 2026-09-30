@@ -11,6 +11,20 @@ class Config:
     WHATSAPP_API_URL = os.environ.get("WHATSAPP_API_URL", "http://baileys-bot:3000")
     WHATSAPP_API_KEY = os.environ.get("WHATSAPP_API_KEY")
 
+    # Canal oficial de Meta (WhatsApp Cloud API). El canal activo se elige en
+    # el dashboard (Servicios); aquí solo las credenciales y el canal por
+    # defecto. Vacías = no se puede cambiar a Meta (ver
+    # whatsapp_client.cambiar_proveedor). .strip() por lo mismo que LLM_BASE_URL.
+    WHATSAPP_PROVEEDOR_DEFAULT = os.environ.get("WHATSAPP_PROVEEDOR_DEFAULT", "baileys").strip() or "baileys"
+    META_WA_TOKEN = os.environ.get("META_WA_TOKEN", "").strip()
+    META_WA_PHONE_NUMBER_ID = os.environ.get("META_WA_PHONE_NUMBER_ID", "").strip()
+    META_WA_WABA_ID = os.environ.get("META_WA_WABA_ID", "").strip()
+    META_APP_SECRET = os.environ.get("META_APP_SECRET", "").strip()
+    META_WEBHOOK_VERIFY_TOKEN = os.environ.get("META_WEBHOOK_VERIFY_TOKEN", "").strip()
+    META_GRAPH_VERSION = os.environ.get("META_GRAPH_VERSION", "v25.0").strip() or "v25.0"
+    META_PLANTILLA_AVISO = os.environ.get("META_PLANTILLA_AVISO", "").strip()
+    META_PLANTILLA_IDIOMA = os.environ.get("META_PLANTILLA_IDIOMA", "es").strip() or "es"
+
     # LLM local, vía API compatible con OpenAI (Ollama / LM Studio).
     # .strip() porque un espacio de más al final en .env (fácil de dejar sin
     # querer) rompe la URL silenciosamente.

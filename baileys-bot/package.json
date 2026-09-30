@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "description": "Servicio de WhatsApp con Baileys para el bot de reservas de la LACS",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.18",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
     "@hapi/boom": "^9.0.0",
     "axios": "^1.7.2",
     "qrcode": "^1.5.3"

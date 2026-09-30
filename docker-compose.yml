@@ -128,6 +128,18 @@ services:
       WHATSAPP_API_URL: http://baileys-bot:3000
       WHATSAPP_API_KEY: ${FLASK_API_KEY}
 
+      # Canal oficial de Meta (WhatsApp Cloud API); vacías = solo Baileys.
+      # El canal activo se cambia desde el dashboard (Servicios).
+      WHATSAPP_PROVEEDOR_DEFAULT: ${WHATSAPP_PROVEEDOR_DEFAULT:-baileys}
+      META_WA_TOKEN: ${META_WA_TOKEN:-}
+      META_WA_PHONE_NUMBER_ID: ${META_WA_PHONE_NUMBER_ID:-}
+      META_WA_WABA_ID: ${META_WA_WABA_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v25.0}
+      META_PLANTILLA_AVISO: ${META_PLANTILLA_AVISO:-}
+      META_PLANTILLA_IDIOMA: ${META_PLANTILLA_IDIOMA:-es}
+
       # LLM local vía API compatible con OpenAI (Ollama / LM Studio).
       # Si LM Studio corre en el mismo Windows/Mac donde está Docker Desktop
       # (no dentro de otro contenedor), usa host.docker.internal en vez de

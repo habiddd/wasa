@@ -35,6 +35,7 @@ from app import (
     recursos_service,
     registro_service,
     usuarios_service,
+    whatsapp_client,
 )
 from app.extensions import db, redis_client
 from app.models import (
@@ -275,6 +276,57 @@ def api_qr():
             "qr_imagen": qr_imagen,
         }
     )
+
+
+def _estado_meta() -> dict:
+    """Número, nombre verificado y calidad del número de Meta, o el error."""
+    cfg = current_app.config
+    try:
+        resp = requests.get(
+            f"https://graph.facebook.com/{cfg['META_GRAPH_VERSION']}/{cfg['META_WA_PHONE_NUMBER_ID']}",
+            params={"fields": "display_phone_number,verified_name,quality_rating"},
+            headers={"Authorization": f"Bearer {cfg['META_WA_TOKEN']}"},
+            timeout=5,
+        )
+        datos = resp.json()
+        if not resp.ok:
+            return {"ok": False, "detalle": datos.get("error", {}).get("message", f"error {resp.status_code}")}
+        return {
+            "ok": True,
+            "numero": datos.get("display_phone_number"),
+            "nombre_verificado": datos.get("verified_name"),
+            "calidad": datos.get("quality_rating"),
+        }
+    except (requests.RequestException, ValueError) as exc:
+        return {"ok": False, "detalle": str(exc)}
+
+
+@bp.route("/api/whatsapp/proveedor")
+def api_proveedor_whatsapp():
+    faltan = whatsapp_client.meta_faltantes()
+    estado_baileys = _check_baileys(_consultar_baileys())
+    return jsonify({
+        "activo": whatsapp_client.proveedor_activo(),
+        "disponibles": {
+            "baileys": {"estado": estado_baileys},
+            "meta": {
+                "configurado": not faltan,
+                "faltan": faltan,
+                "estado": None if faltan else _estado_meta(),
+            },
+        },
+    })
+
+
+@bp.route("/api/whatsapp/proveedor", methods=["PUT"])
+def api_cambiar_proveedor_whatsapp():
+    proveedor = (request.get_json(silent=True) or {}).get("proveedor")
+    if proveedor not in whatsapp_client.PROVEEDORES:
+        return jsonify({"error": "'proveedor' debe ser 'baileys' o 'meta'."}), 400
+    faltan = whatsapp_client.cambiar_proveedor(proveedor)
+    if faltan:
+        return jsonify({"error": "Faltan variables en .env: " + ", ".join(faltan), "faltan": faltan}), 400
+    return jsonify({"activo": proveedor})
 
 
 # Préstamo = la reserva llegó a entregarse (ver docs/PLAN_metricas_2026-09-29.md).

@@ -1,4 +1,7 @@
-from flask import Blueprint, current_app, jsonify, request
+import hashlib
+import hmac
+
+from flask import Blueprint, Response, current_app, jsonify, request
 
 from app import (
     whatsapp_client,
@@ -11,6 +14,8 @@ from app import (
     sesiones,
     menu_service,
 )
+
+from app.extensions import db, redis_client
 
 bp = Blueprint("webhook", __name__)
 
@@ -96,6 +101,16 @@ def recibir_webhook():
         # Eventos que no son mensajes de texto entrantes (status, conexión, etc.)
         return jsonify({"status": "ignorado"}), 200
 
+    # Con Meta activo, Baileys sigue conectado pero no debe contestar.
+    if whatsapp_client.proveedor_activo() != "baileys":
+        return jsonify({"status": "ignorado_proveedor"}), 200
+
+    return _procesar_mensaje(numero, texto, remote_jid)
+
+
+def _procesar_mensaje(numero: str, texto: str, remote_jid: str):
+    """Cuerpo común a los dos canales (Baileys y Meta): guardrails,
+    identidad, wizards, intent y respuesta. Devuelve la respuesta de Flask."""
     # --- Guardrail 1: rate limiting por número ---
     if guardrails.excede_limite_mensajes(numero):
         guardrails.registrar_interaccion(
@@ -333,3 +348,83 @@ def recibir_webhook():
     )
 
     return jsonify({"status": "ok" if enviado else "error_envio"}), 200
+
+
+# --- Canal oficial de Meta (WhatsApp Cloud API) -------------------------------
+
+# Estado de Meta -> el que ya usa auditoria_bot con Baileys (ver
+# guardrails.actualizar_estado_envio).
+_ESTADO_META = {"sent": "server_ack", "delivered": "delivery_ack", "read": "leido", "failed": "fallido"}
+
+_AVISO_SIN_NUMERO = (
+    "Hola, para atenderte necesito tu número de celular. Escríbenos desde una "
+    "cuenta que lo muestre o compártelo con el equipo de la LACS."
+)
+
+
+@bp.route("/webhook/meta", methods=["GET"])
+def verificar_meta():
+    """Verificación del webhook: Meta manda hub.verify_token y espera el
+    hub.challenge de vuelta en texto plano."""
+    esperado = current_app.config["META_WEBHOOK_VERIFY_TOKEN"]
+    recibido = request.args.get("hub.verify_token", "")
+    if (esperado and request.args.get("hub.mode") == "subscribe"
+            and hmac.compare_digest(recibido, esperado)):
+        return Response(request.args.get("hub.challenge", ""), 200, mimetype="text/plain")
+    return Response("Forbidden", 403)
+
+
+def _firma_meta_valida() -> bool:
+    secreto = current_app.config["META_APP_SECRET"]
+    if not secreto:
+        return False
+    esperada = "sha256=" + hmac.new(secreto.encode(), request.get_data(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(request.headers.get("X-Hub-Signature-256", ""), esperada)
+
+
+def _procesar_mensaje_meta(msg: dict) -> None:
+    if msg.get("type") != "text":
+        return
+    # Meta reintenta hasta 36 h: el mismo wamid se procesa una sola vez.
+    if not redis_client.set(f"meta:wamid:{msg.get('id')}", 1, nx=True, ex=172800):
+        return
+    if whatsapp_client.proveedor_activo() != "meta":
+        return
+    numero = msg.get("from")
+    if not numero:
+        # Solo BSUID (la persona usa nombre de usuario). ponytail: soporte
+        # completo requiere una columna nueva en `usuarios`; por ahora se le
+        # pide el número.
+        current_app.logger.warning("Mensaje de Meta sin número (BSUID %s).", msg.get("from_user_id"))
+        if msg.get("from_user_id"):
+            whatsapp_client.enviar_meta_a_bsuid(msg["from_user_id"], _AVISO_SIN_NUMERO)
+        return
+    redis_client.set(f"meta:ventana:{numero}", 1, ex=86400)  # abre la ventana de 24 h
+    _procesar_mensaje(numero, msg["text"]["body"], f"{numero}@s.whatsapp.net")
+
+
+@bp.route("/webhook/meta", methods=["POST"])
+def recibir_webhook_meta():
+    if not _firma_meta_valida():
+        return Response("Forbidden", 403)
+
+    payload = request.get_json(silent=True) or {}
+    for entrada in payload.get("entry", []):
+        for cambio in entrada.get("changes", []):
+            valor = cambio.get("value", {})
+            # Nunca un 500: Meta reintentaría todo el lote. Se loguea y se sigue.
+            for msg in valor.get("messages", []):
+                try:
+                    _procesar_mensaje_meta(msg)
+                except Exception:  # noqa: BLE001
+                    current_app.logger.exception("Error procesando mensaje de Meta %s", msg.get("id"))
+                    db.session.rollback()
+            for st in valor.get("statuses", []):
+                estado = _ESTADO_META.get(st.get("status"))
+                try:
+                    if estado and st.get("id"):
+                        guardrails.actualizar_estado_envio(st["id"], estado)
+                except Exception:  # noqa: BLE001
+                    current_app.logger.exception("Error actualizando estado de Meta %s", st.get("id"))
+                    db.session.rollback()
+    return jsonify({"status": "ok"}), 200

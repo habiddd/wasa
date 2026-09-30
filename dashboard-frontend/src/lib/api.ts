@@ -69,6 +69,39 @@ export function fetchQr() {
   return request<EstadoQr>("/qr")
 }
 
+// --- Canal de WhatsApp (Baileys / Meta) --------------------------------
+
+export type ProveedorWhatsapp = "baileys" | "meta"
+
+export type EstadoProveedores = {
+  activo: ProveedorWhatsapp
+  disponibles: {
+    baileys: { estado: EstadoServicio }
+    meta: {
+      configurado: boolean
+      faltan: string[]
+      estado: {
+        ok: boolean
+        detalle?: string
+        numero?: string | null
+        nombre_verificado?: string | null
+        calidad?: string | null
+      } | null
+    }
+  }
+}
+
+export function fetchProveedorWhatsapp() {
+  return request<EstadoProveedores>("/whatsapp/proveedor")
+}
+
+export function cambiarProveedorWhatsapp(proveedor: ProveedorWhatsapp) {
+  return request<{ activo: ProveedorWhatsapp }>("/whatsapp/proveedor", {
+    method: "PUT",
+    body: JSON.stringify({ proveedor }),
+  })
+}
+
 // --- Métricas --------------------------------------------------------------
 
 export type Periodo = "30" | "90" | "todo" | "rango"

@@ -1,16 +1,16 @@
-const {
-  default: makeWASocket,
+import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   jidNormalizedUser,
-} = require("@whiskeysockets/baileys");
-const { Boom } = require("@hapi/boom");
-const QRCode = require("qrcode");
-const axios = require("axios");
-const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
+} from "@whiskeysockets/baileys";
+import { Boom } from "@hapi/boom";
+import QRCode from "qrcode";
+import axios from "axios";
+import crypto from "crypto";
+import fs from "fs";
+import path from "path";
+import http from "http";
 
 // Configuración desde variables de entorno
 const FLASK_WEBHOOK_URL = process.env.FLASK_WEBHOOK_URL || "http://flask-app:5000/webhook/whatsapp";
@@ -185,7 +185,9 @@ async function connectToWhatsApp() {
     // Cuando el chat llega con JID "@lid" (identificador anónimo de
     // WhatsApp), `numero` NO es el teléfono: el número real viene aparte en
     // `key.senderPn` ("57300...@s.whatsapp.net"), si WhatsApp lo comparte.
-    const senderPn = messageInfo.key.senderPn || null;
+    // Baileys 7: el número viene en remoteJidAlt (senderPn queda de respaldo).
+    const pnCandidato = messageInfo.key.remoteJidAlt || messageInfo.key.senderPn || null;
+    const senderPn = pnCandidato?.endsWith("@s.whatsapp.net") ? pnCandidato : null;
 
     console.log(`📨 Mensaje de ${numero}${senderPn ? ` (pn ${senderPn.split("@")[0]})` : ""}: ${texto}`);
 
@@ -345,7 +347,6 @@ function atenderCatalogo(req, res) {
   });
 }
 
-const http = require("http");
 const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/send") {
     if (!claveValida(req.headers["x-api-key"])) {
