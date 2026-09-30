@@ -272,6 +272,9 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS registro_completo BOOLEAN NOT NULL
 ALTER TABLE usuarios ALTER COLUMN nombre DROP NOT NULL;
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS jid_wa VARCHAR(64);
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS aviso_privacidad_en TIMESTAMPTZ;
+-- TRUE = telefono_wa lo escribió la persona en el registro (no vino de WhatsApp),
+-- así que es el único celular que puede corregir (ver registro_service).
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS celular_escrito BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS placa VARCHAR(10);
 ALTER TABLE recursos ALTER COLUMN placa TYPE VARCHAR(10);

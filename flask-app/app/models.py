@@ -21,6 +21,9 @@ class Usuario(db.Model):
     codigo_uninorte = db.Column(db.String(30))
     cedula = db.Column(db.String(20))
     registro_completo = db.Column(db.Boolean, nullable=False, default=False)
+    # True = `telefono_wa` lo escribió la persona en el registro (no vino de
+    # WhatsApp): solo ese celular se puede corregir, ver registro_service.
+    celular_escrito = db.Column(db.Boolean, nullable=False, default=False)
     rol = db.Column(db.String(30), nullable=False, default="estudiante")
     activo = db.Column(db.Boolean, nullable=False, default=True)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)

@@ -141,6 +141,10 @@ def recibir_webhook():
 
     if not registro_service.usuario_esta_completo(usuario):
         respuesta, sesion = registro_service.procesar_registro(usuario, texto, sesion)
+        # Si dio su celular, `telefono_wa` cambió (o se fusionó la fila): la
+        # sesión y la auditoría van con el número nuevo, que es el que se
+        # resolverá en el próximo mensaje.
+        numero = usuarios_service.obtener_o_crear_usuario(numero, remote_jid).telefono_wa
         sesiones.guardar_sesion(numero, sesion)
 
         enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)

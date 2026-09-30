@@ -10,7 +10,7 @@ import re
 
 from app import registro_service
 from app.extensions import db
-from app.models import Usuario
+from app.models import Reserva, ReservaGrupo, Usuario
 
 
 def obtener_o_crear_usuario(telefono_wa: str, jid_wa: str | None = None) -> Usuario:
@@ -28,6 +28,7 @@ def obtener_o_crear_usuario(telefono_wa: str, jid_wa: str | None = None) -> Usua
         # como telefono_wa: se le corrige en vez de crearle una cuenta nueva.
         if usuario and telefono_wa != jid_wa.split("@")[0]:
             usuario.telefono_wa = telefono_wa
+            usuario.celular_escrito = False  # ahora sí vino de WhatsApp
             db.session.commit()
     if usuario:
         if jid_wa and usuario.jid_wa != jid_wa:
@@ -50,6 +51,48 @@ def normalizar_telefono(valor: str) -> str | None:
     if len(digitos) == 10 and digitos.startswith("3"):
         digitos = "57" + digitos
     return digitos if 8 <= len(digitos) <= 15 else None
+
+
+def telefono_es_lid(usuario: Usuario) -> bool:
+    """True si la persona escribe por JID "@lid" y aún no tenemos su número
+    real: `telefono_wa` es el propio LID (ver obtener_o_crear_usuario)."""
+    jid = usuario.jid_wa or ""
+    return jid.endswith("@lid") and usuario.telefono_wa == jid.split("@")[0]
+
+
+def asignar_celular(usuario: Usuario, telefono_normalizado: str) -> Usuario | None:
+    """Guarda el celular escrito por la persona en `telefono_wa`. Si ya es de
+    otra fila creada desde el dashboard (sin `jid_wa`) se fusiona la fila de
+    `usuario` en esa: conserva sus datos, solo se le rellenan los campos
+    vacíos (misma regla de "no pisar" que preparar_usuario_dashboard), se le
+    pasan las reservas y se borra la fila vieja. Devuelve la fila que queda,
+    o None si el número es de una cuenta que ya escribió por WhatsApp (no se
+    toca nada)."""
+    existente = Usuario.query.filter_by(telefono_wa=telefono_normalizado).first()
+    if existente is None or existente.id == usuario.id:
+        usuario.telefono_wa = telefono_normalizado
+        usuario.celular_escrito = True
+        db.session.commit()
+        return usuario
+    if existente.jid_wa:
+        return None
+
+    # ponytail: sin OTP no se prueba que el número sea de quien lo escribe; quien
+    # sepa el de un cliente creado desde el dashboard puede reclamar esa fila.
+    existente.celular_escrito = True
+    existente.jid_wa = usuario.jid_wa
+    for campo in ("nombre", "codigo_uninorte", "cedula"):
+        if not getattr(existente, campo):
+            setattr(existente, campo, getattr(usuario, campo))
+    existente.registro_completo = False  # se marca solo tras el "sí" del resumen
+    avisos = [a for a in (existente.aviso_privacidad_en, usuario.aviso_privacidad_en) if a]
+    existente.aviso_privacidad_en = min(avisos) if avisos else None
+    # Las dos únicas FK a usuarios.
+    Reserva.query.filter_by(usuario_id=usuario.id).update({"usuario_id": existente.id})
+    ReservaGrupo.query.filter_by(usuario_id=usuario.id).update({"usuario_id": existente.id})
+    db.session.delete(usuario)
+    db.session.commit()
+    return existente
 
 
 def preparar_usuario_dashboard(
