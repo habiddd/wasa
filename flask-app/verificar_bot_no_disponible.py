@@ -1,8 +1,8 @@
 """
 Qué dice el bot cuando le nombran un equipo sin unidades disponibles
 (docs/PRUEBAS_NO_DEVUELTO_2026-09-28.md, sección "El bot..."). No guarda nada:
-pone la Canon EOS R (2), el Rode NTG3 (4) y el lente 24-70 (19) en 'no_devuelto' dentro de una
-transacción que se revierte al final (el trípode 3 queda disponible).
+pone la Canon EOS R, el Rode NTG3 y el lente 24-70 en 'no_devuelto' dentro de una
+transacción que se revierte al final (el trípode Manfrotto queda disponible).
 No manda mensajes.
 
     docker exec -i lacs_flask_app python - < flask-app/verificar_bot_no_disponible.py
@@ -15,10 +15,11 @@ from app.models import Recurso, Usuario
 
 app = create_app()
 with app.app_context():
-    for i in (2, 4, 19):
+    ids = {n: Recurso.query.filter_by(nombre=n).one().id for n in ("Cámara Canon EOS R", "Micrófono Rode NTG3", "Lente Sony 24-70mm f/2.8", "Trípode Manfrotto")}
+    for i in list(ids.values())[:3]:
         db.session.get(Recurso, i).estado = "no_devuelto"
     db.session.flush()
-    assert db.session.get(Recurso, 3).estado == "disponible"
+    assert db.session.get(Recurso, ids["Trípode Manfrotto"]).estado == "disponible"
 
     def consulta(texto):
         respuesta = R.evaluar_consulta_disponibilidad(texto)
@@ -38,7 +39,7 @@ with app.app_context():
     r = consulta("tienen el trípode manfrotto?")  # recuperado: vuelve a estar
     assert "no está disponible" not in r
 
-    habid = db.session.get(Usuario, 24)
+    habid = Usuario.query.filter_by(telefono_wa="573045246117").one()
     mensaje, sesion = R._iniciar_reserva("quiero reservar la cámara canon eos r", habid, {})
     print(f"  reservar 'cámara canon eos r'\n    -> {mensaje!r}")
     assert "no se puede reservar" in mensaje and sesion == {}

@@ -47,7 +47,7 @@ MENSAJE_BIENVENIDA = (
     "registrarte -- son unos datos rápidos."
 )
 
-MENSAJE_DATO_FALTANTE = "¡Hola de nuevo! Antes de seguir, necesito un dato más."
+MENSAJE_DATO_FALTANTE = "¡Hola de nuevo! Antes de seguir, necesito completar tu registro."
 
 MENSAJE_AVISO_PRIVACIDAD = (
     "*AVISO*\n"

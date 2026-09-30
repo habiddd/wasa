@@ -1,7 +1,7 @@
 """
 Verificación del historial de estados (reserva_estado_historial + vista
 reserva_puntualidad) y de la bandera entrega_tardia. Usa al usuario habid
-(id 24), pero cada escenario se crea, transiciona y confirma en UNA sola
+(telefono 573045246117), pero cada escenario se crea, transiciona y confirma en UNA sola
 transacción: el barrido de avisos nunca ve una 'confirmada' de prueba, así
 que no sale ningún WhatsApp. No escribe actas a disco (llama directo a
 actas_service.aplicar_transicion).
@@ -22,13 +22,14 @@ from sqlalchemy.exc import ProgrammingError
 from app import actas_service as A
 from app import create_app
 from app.extensions import db
-from app.models import Reserva, ReservaGrupo
+from app.models import Recurso, Reserva, ReservaGrupo, Usuario
 
-HABID = 24
-RECURSOS = (1, 3, 4, 5)  # equipos libres ahora mismo; cambiar si chocan
+NOMBRES = ("Cámara Sony A7III", "Cámara Canon EOS R6", "Trípode Manfrotto", "Micrófono Rode NTG3")  # equipos libres ahora mismo; cambiar si chocan
 
 app = create_app()
 with app.app_context():
+    HABID = Usuario.query.filter_by(telefono_wa="573045246117").one().id
+    RECURSOS = [Recurso.query.filter_by(nombre=n).one().id for n in NOMBRES]
     ahora = datetime.now(timezone.utc)
     ids = {}
 

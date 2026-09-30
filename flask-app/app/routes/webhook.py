@@ -132,6 +132,7 @@ def recibir_webhook():
     # registro_service.py), sin pasar por clasificación de intent -- si no,
     # "Juan Pérez" como respuesta a "¿cuál es tu nombre?" se clasificaría
     # como intent "otro" y quedaría bloqueado por la whitelist. ---
+    numero_entrante = numero
     usuario = usuarios_service.obtener_o_crear_usuario(numero, remote_jid)
     # Si el mensaje llegó con JID "@lid" y sin `senderPn`, `numero` es el
     # LID; el usuario ya conocido trae el número real. Sin esto su sesión y
@@ -143,8 +144,12 @@ def recibir_webhook():
         respuesta, sesion = registro_service.procesar_registro(usuario, texto, sesion)
         # Si dio su celular, `telefono_wa` cambió (o se fusionó la fila): la
         # sesión y la auditoría van con el número nuevo, que es el que se
-        # resolverá en el próximo mensaje.
-        numero = usuarios_service.obtener_o_crear_usuario(numero, remote_jid).telefono_wa
+        # resolverá en el próximo mensaje. Se busca con el número tal como
+        # llegó en el mensaje, no con el `telefono_wa` de antes: si la persona
+        # acaba de corregir su celular, ese número viejo ya no es suyo y
+        # obtener_o_crear_usuario lo tomaría por un `senderPn` y le
+        # devolvería el número viejo.
+        numero = usuarios_service.obtener_o_crear_usuario(numero_entrante, remote_jid).telefono_wa
         sesiones.guardar_sesion(numero, sesion)
 
         enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
@@ -209,7 +214,7 @@ def recibir_webhook():
             # Misma oferta de reservar que tras una consulta de disponibilidad
             # normal (ver bloque de intent más abajo) -- esta es la otra de
             # las dos rutas que responden disponibilidad.
-            respuesta, sesion = menu_service.activar_oferta(sesion, respuesta)
+            respuesta, sesion = menu_service.activar_oferta(sesion, respuesta, payload)
         elif accion == "cancelar":
             respuesta, sesion = recursos_service.gestionar_cancelacion(payload, usuario, sesion)
         else:  # "responder": menú, reintento, salida o rendición
@@ -242,12 +247,13 @@ def recibir_webhook():
             # sin return: cae al bloque de clasificación de intent de abajo
         else:
             if accion == "reservar":
-                # El usuario solo dijo "sí" (o equivalente): no nombra ningún
-                # activo. `_iniciar_reserva` no resuelve ningún candidato con
-                # ese texto, así que el wizard arranca en su primer paso (el
-                # menú de subcategorías de equipo + espacios) en vez de
-                # precargar el activo que se acababa de consultar -- es lo
-                # que se pidió explícitamente: "desde el inicio".
+                # El usuario solo dijo "sí" (o equivalente), pero `payload` es
+                # el texto de la consulta que originó la oferta (ver
+                # `menu_service.activar_oferta`), así que la reserva arranca
+                # con el activo y la fecha que ya había dicho ("me prestan las
+                # luces led este sábado?"). Si la oferta no guardó texto
+                # (sesión vieja), payload es el "sí" y el wizard arranca en
+                # su primer paso (el menú de equipos y espacios).
                 respuesta, sesion = recursos_service.gestionar_reserva(payload, usuario, sesion)
             else:  # "responder": rechazo cordial
                 respuesta = payload
@@ -301,7 +307,7 @@ def recibir_webhook():
         # no cortar la conversación (ver menu_service.activar_oferta). La
         # oferta se pega acá, no dentro de `evaluar_consulta_disponibilidad`,
         # para no acoplar ese servicio puro al estado de sesión.
-        respuesta, sesion = menu_service.activar_oferta(sesion, respuesta)
+        respuesta, sesion = menu_service.activar_oferta(sesion, respuesta, texto)
         sesiones.guardar_sesion(numero, sesion)
     elif intent == "reservar":
         respuesta, sesion = recursos_service.gestionar_reserva(texto, usuario, sesion)

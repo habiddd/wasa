@@ -1,7 +1,7 @@
 """
 Verificación de la nota del administrador en el acta (reserva_actas.nota,
 anclas entrega_nota/devolucion_nota, ver docs/SESION_2026-09-28.md). Usa al
-usuario habid (id 24), la única cuenta de prueba permitida. Es de solo
+usuario habid (telefono 573045246117), la única cuenta de prueba permitida. Es de solo
 lectura: genera el PDF base en memoria y prueba el rechazo de una nota
 demasiado larga contra el endpoint real -- no escribe ninguna fila ni
 archivo (el POST se rechaza con 400 antes de llegar a actas_service.guardar).
@@ -24,13 +24,13 @@ from sqlalchemy import func
 
 from app import acta_pdf, actas_service, create_app
 from app.extensions import db
-from app.models import Reserva, ReservaActa
+from app.models import Reserva, ReservaActa, Usuario
 from app.routes.dashboard import _reservas_del_grupo, _validar_nota
 
-HABID = 24
 
 app = create_app()
 with app.app_context():
+    HABID = Usuario.query.filter_by(telefono_wa="573045246117").one().id
     # --- Grupo con más líneas: existencia y consistencia de las anclas ------
     grupo_grande, n_lineas = (
         db.session.query(Reserva.grupo_id, func.count())

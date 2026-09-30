@@ -250,11 +250,13 @@ PALABRAS_ACEPTAR_OFERTA = {"si", "1", "dale", "listo", "claro", "ok", "bueno", "
 PALABRAS_RECHAZAR_OFERTA = {"no", "nada", "gracias", "despues", "luego"}
 
 
-def activar_oferta(sesion: dict, respuesta: str) -> tuple[str, dict]:
+def activar_oferta(sesion: dict, respuesta: str, texto_consulta: str | None = None) -> tuple[str, dict]:
     """Se llama justo después de responder una consulta de disponibilidad.
     Pega la invitación a reservar al final de `respuesta` y marca la sesión
-    para interpretar el próximo mensaje contra esta oferta."""
-    nueva_sesion = {**sesion, CLAVE_OFERTA: {"activa": True}}
+    para interpretar el próximo mensaje contra esta oferta. `texto_consulta`
+    es lo que preguntó el usuario: si acepta, la reserva arranca con ese
+    texto (con su activo y su fecha), no con el "sí"."""
+    nueva_sesion = {**sesion, CLAVE_OFERTA: {"activa": True, "texto": texto_consulta}}
     return respuesta + TEXTO_OFERTA, nueva_sesion
 
 
@@ -291,13 +293,14 @@ def procesar_respuesta_oferta(texto_usuario: str, sesion: dict) -> tuple[str, st
                                    None.
       - auditoria: {"intent": str, "permitido": bool, "motivo_bloqueo": None}
     """
+    texto_consulta = (sesion.get(CLAVE_OFERTA) or {}).get("texto")
     sesion_limpia = {**sesion, CLAVE_OFERTA: None}
     opcion = _interpretar_respuesta_oferta(texto_usuario)
 
     if opcion == "aceptar":
         return (
             "reservar",
-            texto_usuario,
+            texto_consulta or texto_usuario,
             sesion_limpia,
             {"intent": "reservar", "permitido": True, "motivo_bloqueo": None},
         )

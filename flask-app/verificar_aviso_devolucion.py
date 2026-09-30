@@ -1,6 +1,6 @@
 """
 Prueba de sistema del aviso de devolución (docs/PLAN_aviso_devolucion_2026-09-29.md).
-Con habid (id 24; el aviso de A le llega de verdad por WhatsApp) y el reloj
+Con habid (telefono 573045246117; el aviso de A le llega de verdad por WhatsApp) y el reloj
 real. A C se le marcan de antemano los avisos del ciclo de no-show como ya
 resueltos, para que habid no reciba un "recordatorio" de una reserva de prueba:
   A: 'entregada' con fin = ahora+20 min  -> una fila (gid, 'devolucion') y un
@@ -20,13 +20,13 @@ from sqlalchemy import text
 
 from app import avisos_reservas, create_app, recursos_service
 from app.extensions import db
-from app.models import AuditoriaBot, Recurso, Reserva, ReservaAviso, ReservaGrupo
+from app.models import AuditoriaBot, Recurso, Reserva, ReservaAviso, ReservaGrupo, Usuario
 
-HABID = 24
 API = "/dashboard/api"
 
 app = create_app()
 with app.app_context():
+    HABID = Usuario.query.filter_by(telefono_wa="573045246117").one().id
     cliente = app.test_client()
     auth = (app.config["DASHBOARD_USER"], app.config["DASHBOARD_PASSWORD"])
     ahora = datetime.now(timezone.utc).replace(microsecond=0)

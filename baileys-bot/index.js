@@ -8,6 +8,8 @@ const { Boom } = require("@hapi/boom");
 const QRCode = require("qrcode");
 const axios = require("axios");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
 // Configuración desde variables de entorno
 const FLASK_WEBHOOK_URL = process.env.FLASK_WEBHOOK_URL || "http://flask-app:5000/webhook/whatsapp";
@@ -132,6 +134,17 @@ async function connectToWhatsApp() {
 
       if (shouldReconnect) {
         console.log("🔄 Reconectando...");
+        setTimeout(() => connectToWhatsApp(), 3000);
+      } else {
+        // Sesión cerrada desde el celular (dispositivo desvinculado): las
+        // credenciales guardadas ya no sirven y, si se reusan, nunca sale un
+        // QR nuevo. Se borra el contenido de SESSION_DIR (es el punto de
+        // montaje del volumen, la carpeta en sí no se puede borrar) y se
+        // vuelve a conectar desde cero, lo que genera el QR.
+        console.log("🚪 Sesión cerrada desde el celular: borrando credenciales para pedir un QR nuevo...");
+        for (const archivo of fs.readdirSync(SESSION_DIR)) {
+          fs.rmSync(path.join(SESSION_DIR, archivo), { recursive: true, force: true });
+        }
         setTimeout(() => connectToWhatsApp(), 3000);
       }
     } else if (connection === "open") {

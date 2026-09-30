@@ -4,7 +4,7 @@ docs/PRUEBAS_NO_DEVUELTO_2026-09-28.md). A diferencia de verificar_no_devuelto.p
 NO borra nada: reservas, actas (PDF en disco + filas), historial y el estado de
 los activos quedan en la base para revisarlos en el dashboard.
 
-Todo contra los endpoints reales del dashboard (test_client), con habid (id 24).
+Todo contra los endpoints reales del dashboard (test_client), con habid (telefono 573045246117).
 Las reservas son a dos días: el barrido de avisos nunca las ve 'confirmada', así
 que no sale ningún WhatsApp.
 
@@ -20,14 +20,14 @@ from datetime import datetime, timedelta, timezone
 
 from app import acta_pdf, create_app, recursos_service
 from app.extensions import db
-from app.models import Recurso, Reserva, ReservaGrupo
+from app.models import Recurso, Reserva, ReservaGrupo, Usuario
 from app.routes.dashboard import _reservas_del_grupo
 
-HABID = 24
 API = "/dashboard/api"
 
 app = create_app()
 with app.app_context():
+    HABID = Usuario.query.filter_by(telefono_wa="573045246117").one().id
     cliente = app.test_client()
     auth = (app.config["DASHBOARD_USER"], app.config["DASHBOARD_PASSWORD"])
     inicio = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=2)

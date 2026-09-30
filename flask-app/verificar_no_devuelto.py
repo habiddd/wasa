@@ -1,6 +1,6 @@
 """
 Prueba de sistema del estado no_devuelto (docs/SESION_2026-09-28.md, sección 10).
-Crea una reserva de habid (id 24) con dos equipos libres, firma la entrega con
+Crea una reserva de habid (telefono 573045246117) con dos equipos libres, firma la entrega con
 los dos marcados y la devolución con uno solo, contra los endpoints reales.
 Al final borra SOLO esa reserva (y sus PDFs) y deja el activo 'disponible'. El
 historial de esas líneas y del activo queda como evidencia (la app no puede
@@ -19,14 +19,14 @@ from sqlalchemy.exc import ProgrammingError
 
 from app import acta_pdf, create_app, recursos_service
 from app.extensions import db
-from app.models import Recurso, Reserva, ReservaGrupo
+from app.models import Recurso, Reserva, ReservaGrupo, Usuario
 from app.routes.dashboard import _reservas_del_grupo
 
-HABID = 24
 API = "/dashboard/api"
 
 app = create_app()
 with app.app_context():
+    HABID = Usuario.query.filter_by(telefono_wa="573045246117").one().id
     cliente = app.test_client()
     auth = (app.config["DASHBOARD_USER"], app.config["DASHBOARD_PASSWORD"])
     # Dos días adelante: el barrido de avisos/no-show nunca la ve 'confirmada'.

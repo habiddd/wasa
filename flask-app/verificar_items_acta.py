@@ -2,7 +2,7 @@
 Verificación de las anclas de marca por activo en el acta (columnas
 "Entr."/"Dev." de la tabla de activos, claves entrega_linea_<id>/
 devolucion_linea_<id> en acta_pdf.generar_acta_con_anclas, id = Reserva.id).
-Usa al usuario habid (id 24), la única cuenta de prueba permitida. Es de solo
+Usa al usuario habid (telefono 573045246117), la única cuenta de prueba permitida. Es de solo
 lectura: genera el PDF base en memoria y llama a /acta/estado con GET, no
 escribe ninguna fila ni archivo.
 
@@ -18,10 +18,9 @@ from sqlalchemy import func
 
 from app import acta_pdf, create_app
 from app.extensions import db
-from app.models import Reserva
+from app.models import Reserva, Usuario
 from app.routes.dashboard import _reservas_del_grupo
 
-HABID = 24
 
 
 def comprobar_anclas(reservas, anclas):
@@ -40,6 +39,7 @@ def comprobar_anclas(reservas, anclas):
 
 app = create_app()
 with app.app_context():
+    HABID = Usuario.query.filter_by(telefono_wa="573045246117").one().id
     por_grupo = (
         db.session.query(Reserva.grupo_id, func.count())
         .filter(Reserva.usuario_id == HABID)

@@ -589,8 +589,42 @@ def _mensaje_catalogo(catalogo_url: str) -> str:
     )
 
 
+def _estado_grupo_en_dia(nombre: str, inicio: datetime, fin: datetime) -> str:
+    """Como `_estado_grupo`, pero para el día (o días) por el que preguntó el
+    usuario en vez de "ahora": libre, o con reservas que se cruzan con ese
+    día (no se sabe si a la hora que quiere, eso lo valida el wizard)."""
+    unidades = _grupo(nombre)
+    if not unidades:
+        return "sin unidades activas"
+    ocupadas = ids_ocupados_en_rango(inicio, fin, [u.id for u in unidades])
+    if not ocupadas:
+        return "libre ese día"
+    if len(unidades) == 1:
+        return "ocupado en parte ese día (ya tiene reservas)"
+    return f"{len(unidades) - len(ocupadas)} de {len(unidades)} unidades libres todo ese día, el resto con reservas"
+
+
 def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
-    """Punto de entrada para el intent 'consultar_disponibilidad'. A
+    """Punto de entrada para el intent 'consultar_disponibilidad' (ver
+    `_consulta_disponibilidad`). Si el texto trae una fecha ("luces led este
+    sábado"), el estado de cada activo es el de ese día, no el de ahora, y si
+    ese día no se puede reservar se antepone el motivo -- el mismo que da el
+    wizard (`_error_fecha_bloqueada`)."""
+    ahora = datetime.now(timezone.utc)
+    fechas = _fechas_en_texto(texto_usuario, ahora.astimezone(ZONA_HORARIA_LACS))
+    if fechas is None:
+        return _consulta_disponibilidad(texto_usuario, lambda nombre: _estado_grupo(nombre, ahora))
+    motivo = _error_fecha_bloqueada({}, *fechas)
+    if motivo:  # día no hábil: "libre ese día" contradiría el aviso, se da el estado de ahora
+        return f"{motivo}\n\n" + _consulta_disponibilidad(texto_usuario, lambda nombre: _estado_grupo(nombre, ahora))
+    inicio = datetime(fechas[0].year, fechas[0].month, fechas[0].day, tzinfo=ZONA_HORARIA_LACS)
+    fin = datetime(fechas[1].year, fechas[1].month, fechas[1].day, tzinfo=ZONA_HORARIA_LACS) + timedelta(days=1)
+    return _consulta_disponibilidad(texto_usuario, lambda nombre: _estado_grupo_en_dia(nombre, inicio, fin))
+
+
+def _consulta_disponibilidad(texto_usuario: str, estado) -> str:
+    """Cuerpo de 'consultar_disponibilidad'; `estado(nombre)` da el estado de
+    un modelo (ahora, o el día consultado). A
     diferencia de reservar, aquí el usuario quiere saber qué hay y qué no --
     así que ante varias coincidencias se listan todas con su estado, en vez
     de preguntar cuál de todas necesita.
@@ -606,7 +640,6 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     web (`CATALOGO_URL`, ver `_mensaje_catalogo`). Si esa variable está vacía
     -- todavía no hay página -- se conserva el listado completo de antes: sin
     enlace, es la única forma de que el usuario sepa qué existe."""
-    ahora = datetime.now(timezone.utc)
     no_disponibles, ganan = modelos_no_disponibles_en_texto(texto_usuario)
     lineas_no_disponibles = [f"- {nombre}: no está disponible por ahora" for nombre in no_disponibles]
     if ganan:
@@ -616,7 +649,7 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
 
     if candidatos:
         lineas = "\n".join(
-            [f"- {r.nombre}: {_estado_grupo(r.nombre, ahora)}" for r in candidatos] + lineas_no_disponibles
+            [f"- {r.nombre}: {estado(r.nombre)}" for r in candidatos] + lineas_no_disponibles
         )
         salvedad = "\n(si buscabas otro activo, dime el nombre completo)" if es_match_debil else ""
         return f"Esto es lo que tengo:\n{lineas}{salvedad}"
@@ -626,7 +659,7 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
         grupos_subcategoria = _grupos_por_subcategoria(subcategoria)
         if grupos_subcategoria:
             lineas = "\n".join(
-                f"- {_describir_modelo(nombre, rep)}: {_estado_grupo(nombre, ahora)}"
+                f"- {_describir_modelo(nombre, rep)}: {estado(nombre)}"
                 for nombre, rep in grupos_subcategoria
             )
             return f"Esto es lo que tenemos en '{subcategoria}':\n{lineas}"
@@ -635,7 +668,7 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     if por_descripcion:
         # Coincidir por descripción es más indirecto que por nombre, así que
         # siempre va con salvedad, igual que un match débil por nombre.
-        lineas = "\n".join(f"- {r.nombre}: {_estado_grupo(r.nombre, ahora)}" for r in por_descripcion)
+        lineas = "\n".join(f"- {r.nombre}: {estado(r.nombre)}" for r in por_descripcion)
         return (
             f"Por lo que me cuentas, esto te puede servir:\n{lineas}\n"
             "(si buscabas otra cosa, dime el nombre del equipo o espacio)"
@@ -649,7 +682,7 @@ def evaluar_consulta_disponibilidad(texto_usuario: str) -> str:
     if catalogo_url:
         return _mensaje_catalogo(catalogo_url)
 
-    lineas = "\n".join(f"- {nombre}: {_estado_grupo(nombre, ahora)}" for nombre, _ in grupos)
+    lineas = "\n".join(f"- {nombre}: {estado(nombre)}" for nombre, _ in grupos)
     return f"No identifiqué un activo específico, así que aquí tienes el estado de todo:\n{lineas}"
 
 
@@ -1093,9 +1126,13 @@ def mensaje_aviso_previo(reservas: list[Reserva]) -> str:
     formateo de fecha/hora que mensaje_reserva_confirmada."""
     primera = reservas[0]
     inicio_local = primera.inicio.astimezone(ZONA_HORARIA_LACS)
-    minutos = current_app.config.get("AVISO_PREVIO_MIN", 30)
+    # Los minutos que faltan de verdad: el aviso puede salir tarde (barrido
+    # retrasado, reserva creada con el inicio ya cerca), no siempre faltan
+    # AVISO_PREVIO_MIN. Mínimo 1; si faltan esos o más, la constante.
+    faltan = round((primera.inicio - datetime.now(timezone.utc)).total_seconds() / 60)
+    minutos = min(current_app.config.get("AVISO_PREVIO_MIN", 30), max(1, faltan))
     return (
-        f"⏰ Recordatorio: en {minutos} minutos empieza tu reserva N.º {primera.grupo_id} "
+        f"⏰ Recordatorio: en {minutos} minuto{'s' if minutos != 1 else ''} empieza tu reserva N.º {primera.grupo_id} "
         f"({_formatear_fecha_hora(inicio_local)}). Te esperamos en la LACS a recoger "
         f"{_nombres_con_cantidad(reservas)}."
     )
@@ -1264,7 +1301,7 @@ def _interpretar_fecha_natural(texto: str, ahora_local: datetime) -> date | None
     quien llama a esta función debe pedirle confirmación al usuario antes
     de darla por buena -- nunca aceptarla directo (ver `_continuar_reserva`,
     paso "fecha"). Devuelve None si no reconoce nada."""
-    texto_norm = _normalizar(texto.strip())
+    texto_norm = re.sub(r"^(?:para\s+)?(?:(?:el|este)\s+)?", "", _normalizar(texto.strip()))
     hoy = ahora_local.date()
 
     if texto_norm == "hoy":
@@ -1278,14 +1315,9 @@ def _interpretar_fecha_natural(texto: str, ahora_local: datetime) -> date | None
     if m:
         return hoy + timedelta(days=int(m.group(1)))
 
-    for i, dia in enumerate(_DIAS_ES):
-        if _normalizar(dia) in texto_norm:
-            delta = (i - hoy.weekday()) % 7
-            if delta == 0 and any(p in texto_norm for p in ("proximo", "que viene", "entrante")):
-                delta = 7
-            return hoy + timedelta(days=delta)
-
-    m = re.match(r"^(\d{1,2})\s+de\s+([a-z]+)(?:\s+de\s+(\d{4}))?$", texto_norm)
+    # "N de <mes>" va ANTES que el nombre del día: "lunes 12 de octubre" es el
+    # 12, no el próximo lunes. `search` para aceptar "el lunes 12 de octubre".
+    m = re.search(r"(?<!\d)(\d{1,2})\s+de\s+([a-z]+)(?:\s+de\s+(\d{4}))?", texto_norm)
     if m and m.group(2) in _MESES_ES:
         dia = int(m.group(1))
         mes = _MESES_ES.index(m.group(2)) + 1
@@ -1297,6 +1329,24 @@ def _interpretar_fecha_natural(texto: str, ahora_local: datetime) -> date | None
         if not m.group(3) and fecha < hoy:
             fecha = date(anio + 1, mes, dia)
         return fecha
+
+    # "el 15", "jueves 15" (sin mes): el próximo día N del mes -- este mes si
+    # N >= hoy, si no el siguiente. Si el día de la semana no cuadra, gana el número.
+    m = re.fullmatch(rf"(?:para\s+)?(?:(?:el|del)\s+)?(?:(?:{_DIA_RE})\s+)?(\d{{1,2}})", _normalizar(texto.strip()))
+    if m and m.group(0) != m.group(1):  # un número suelto ("7") no es una fecha
+        dia = int(m.group(1))
+        anio, mes = (hoy.year, hoy.month) if dia >= hoy.day else (hoy.year + hoy.month // 12, hoy.month % 12 + 1)
+        try:
+            return date(anio, mes, dia)
+        except ValueError:
+            return None
+
+    for i, dia in enumerate(_DIAS_ES):
+        if _normalizar(dia) in texto_norm:
+            delta = (i - hoy.weekday()) % 7
+            if delta == 0 and any(p in texto_norm for p in ("proximo", "que viene", "entrante")):
+                delta = 7
+            return hoy + timedelta(days=delta)
 
     m = re.match(r"^(\d{1,2})[.\-](\d{1,2})[.\-](\d{4})$", texto_norm)
     if m:
@@ -1346,6 +1396,15 @@ def _interpretar_rango_fecha_natural(texto: str, ahora_local: datetime) -> tuple
         if fecha_fin is None:
             fecha_fin = _interpretar_fecha_natural(parte_fin, ahora_local)
 
+        # "del 7 al 9 de octubre": el lado izquierdo es solo un día y toma
+        # mes y año del derecho.
+        solo_dia = re.match(r"^(?:el\s+)?(\d{1,2})$", parte_inicio)
+        if solo_dia and fecha_fin is not None and "/" not in parte_fin:
+            try:
+                fecha_inicio = fecha_fin.replace(day=int(solo_dia.group(1)))
+            except ValueError:
+                fecha_inicio = None
+
         if fecha_inicio is not None and fecha_fin is not None:
             return fecha_inicio, fecha_fin
 
@@ -1385,20 +1444,121 @@ def _parsear_hora_individual(texto: str) -> tuple[int, int] | None:
     h, mnt = int(h), int(mnt or 0)
     if not (0 <= mnt <= 59):
         return None
+    if ampm is None and 1 <= h <= 6:
+        return None  # la LACS no abre de madrugada: "3" se interpreta como 3 p.m. (ver la relajada)
     h_24 = _hora_a_24h(h, _normalizar_ampm(ampm))
     return (h_24, mnt) if h_24 is not None else None
 
 
+_PATRON_HORA_PALABRAS = re.compile(
+    r"^(?:a\s+)?(?:las?\s+)?(\d{1,2})(?::(\d{2}))?(?:\s+y\s+(media|cuarto))?"
+    r"(?:\s*(?:(?:de|en)\s+la\s+(manana|tarde|noche)|(a\.?\s*m\.?|p\.?\s*m\.?)))?$"
+)
+_PERIODO_PALABRA = {"manana": "am", "tarde": "pm", "noche": "pm"}
+
+
 def _interpretar_hora_individual_relajada(texto: str) -> tuple[int, int] | None:
     """Segundo intento cuando la hora no vino en el formato exacto pero es
-    reconocible con variaciones comunes (ej. "a las 3pm", "las 15 horas").
+    reconocible con variaciones comunes (ej. "a las 3pm", "las 15 horas",
+    "9 de la mañana", "9 y media", "mediodía"). Sin periodo, 1 a 6 se toma
+    como p.m. (la LACS no abre de madrugada) y 7 a 11 como a.m.
     Igual que `_interpretar_fecha_natural`, es una interpretación -- el
     llamador debe confirmarla con el usuario antes de darla por buena."""
+    texto_norm = _normalizar(texto).strip()
+    if re.match(r"^(?:(?:a\s+)?(?:las?\s+)?12\s+del\s+)?medio\s?dia$", texto_norm):
+        return 12, 0
+    m = _PATRON_HORA_PALABRAS.match(texto_norm)
+    if m:
+        h, mnt, fraccion, palabra, ampm = m.groups()
+        h, mnt = int(h), int(mnt or 0) + {"media": 30, "cuarto": 15}.get(fraccion, 0)
+        periodo = _normalizar_ampm(ampm) if ampm else _PERIODO_PALABRA.get(palabra)
+        if periodo is None and 1 <= h <= 6:
+            periodo = "pm"
+        h_24 = _hora_a_24h(h, periodo)
+        return (h_24, mnt) if h_24 is not None and mnt <= 59 else None
+
     texto_limpio = re.sub(r"^\s*a\s+las\s+", "", texto, flags=re.IGNORECASE)
     texto_limpio = re.sub(r"^\s*(a|las)\s+", "", texto_limpio, flags=re.IGNORECASE)
     texto_limpio = re.sub(r"\bhrs?\.?\b|\bhoras?\b", "", texto_limpio, flags=re.IGNORECASE)
     texto_limpio = re.sub(r"\s+", " ", texto_limpio).strip()
     return _parsear_hora_individual(texto_limpio)
+
+
+_MES_RE = "|".join(_MESES_ES)
+_DIA_RE = "|".join(_normalizar(d) for d in _DIAS_ES)
+_PERIODO_RE = r"(?:(?:de|en|por)\s+la\s+(?:manana|tarde|noche)|(?<![a-z])[ap]\.?\s?m\b\.?)"
+_HORA_RE = r"(?:\d{1,2}(?::\d{2})?(?:\s+y\s+(?:media|cuarto))?|medio\s?dia)"
+_PATRON_RANGO_HORAS = re.compile(
+    rf"(?<![\d/])(?:(de|desde)\s+)?(?:las\s+)?({_HORA_RE})\s*({_PERIODO_RE})?\s+(?:a|hasta)\s+(?:las\s+)?"
+    rf"({_HORA_RE})\s*({_PERIODO_RE})?(?!\d|\s*de\s+(?:{_MES_RE}))"
+)
+_PATRON_HORA_INICIO = re.compile(rf"(?<![\d/])\ba\s+las\s+({_HORA_RE})\s*({_PERIODO_RE})?")
+_FECHA_DMA = r"\d{1,2}/\d{1,2}/\d{4}"
+_NO_HORA = r"(?![\d:/]|\s*(?:am\b|pm\b|[ap]\.\s?m|de\s+la\b|a\s+\d|horas?\b|y\s+(?:media|cuarto)))"
+_PATRONES_FECHA_TEXTO = [  # en orden de prioridad; el fragmento es el texto que matchea
+    re.compile(rf"{_FECHA_DMA}(?:\s*(?:a|al|hasta)\s*{_FECHA_DMA})?"),
+    re.compile(rf"(?:del|entre el|desde el|de)\s+\d{{1,2}}\s+(?:de\s+(?:{_MES_RE})\s+)?(?:al|y el|hasta el|a)\s+\d{{1,2}}"
+               rf"\s+de\s+(?:{_MES_RE})(?:\s+de\s+\d{{4}})?"),
+    re.compile(rf"(?:(?<![a-z])(?:del|el|este|proximo)\s+)?(?:(?:{_DIA_RE})\s+)?(?<!\d)\d{{1,2}}\s+de\s+(?:{_MES_RE})(?:\s+de\s+\d{{4}})?"),
+    # "jueves 15" / "el 15" (día del mes sin mes), sin confundirlo con una hora
+    re.compile(rf"(?:(?<![a-z])(?:del|el|este|proximo)\s+)?(?:{_DIA_RE})\s+\d{{1,2}}{_NO_HORA}"
+               rf"|(?<![a-z])(?:del|el)\s+\d{{1,2}}{_NO_HORA}"),
+    re.compile(r"\bpasado manana\b"),
+    re.compile(r"\bhoy\b"),
+    re.compile(r"(?<!la )\bmanana\b"),  # "de la mañana" es un periodo, no la fecha
+    re.compile(rf"(?<![a-z])(?:del|el|este|proximo)\s+(?:{_DIA_RE})(?:\s+(?:proximo|que viene))?"),
+]
+
+
+def _extraer_detalles_de_texto(texto: str, ahora_local: datetime | None = None) -> dict:
+    """Fecha y horas que el usuario ya dijo en texto libre ("mañana de 9 a 11
+    de la mañana"), como FRAGMENTOS de texto -- `{"fecha", "hora_inicio",
+    "hora_fin"}`, sin las claves que no encuentre -- no como valores. Nada
+    se acepta acá: cada fragmento se procesa después con los mismos pasos
+    del wizard que si el usuario lo hubiera escrito (ver `prefill` en
+    `_avanzar_wizard`), o sea, con sus validaciones y su "¿Es correcto?".
+    Pura y sin LLM. `ahora_local` no se usa hoy: queda por si el extractor
+    necesita descartar fechas pasadas."""
+    texto_norm = _normalizar(texto)
+    detalles: dict[str, str] = {}
+
+    for patron in _PATRONES_FECHA_TEXTO:
+        m = patron.search(texto_norm)
+        if m:
+            detalles["fecha"] = m.group(0).strip()
+            break
+
+    m = _PATRON_RANGO_HORAS.search(texto_norm)
+    if m and (m.group(1) or m.group(3) or m.group(5)):  # "5 a 7" suelto no es un horario
+        _, h1, per1, h2, per2 = m.groups()
+        num = lambda h: int(re.match(r"\d+", h).group()) % 12 if h[0].isdigit() else 0  # noqa: E731
+        if per2 and not per1 and num(h1) <= num(h2):  # "de 9 a 11 de la mañana": el periodo final vale para ambas
+            per1 = per2
+        detalles["hora_inicio"] = f"{h1} {per1 or ''}".strip()
+        detalles["hora_fin"] = f"{h2} {per2 or ''}".strip()
+    else:
+        m = _PATRON_HORA_INICIO.search(texto_norm)
+        if m:
+            detalles["hora_inicio"] = f"{m.group(1)} {m.group(2) or ''}".strip()
+    return detalles
+
+
+def _fechas_en_texto(texto: str, ahora_local: datetime) -> tuple[date, date] | None:
+    """(inicio, fin) de la fecha que trae el texto libre (`_extraer_detalles_de_texto`),
+    o None si no trae o ya pasó. Para consultas y cancelaciones, que no pasan
+    por el wizard: no se confirma, solo filtra o avisa."""
+    fragmento = _extraer_detalles_de_texto(texto).get("fecha")
+    if not fragmento:
+        return None
+    inicio, fin, _ = _parsear_rango_fecha_dd_mm_aaaa(fragmento, ahora_local)
+    if inicio is None:
+        inicio, _ = _parsear_fecha_dd_mm_aaaa(fragmento, ahora_local)
+    if inicio is None:
+        rango = _interpretar_rango_fecha_natural(fragmento, ahora_local)
+        inicio, fin = rango if rango else (_interpretar_fecha_natural(fragmento, ahora_local), None)
+    if inicio is None or inicio < ahora_local.date() or (fin is not None and fin < inicio):
+        return None
+    return inicio, fin or inicio
 
 
 # --- Wizard de reserva paso a paso -----------------------------------------
@@ -1477,7 +1637,10 @@ def _interpretar_opcion(texto_usuario: str, opciones: list[tuple[str, str]]) -> 
     coincidencias = [
         valor
         for valor, etiqueta in opciones
-        if _normalizar(etiqueta) in texto_norm or texto_norm in _normalizar(etiqueta)
+        # El texto dentro de la etiqueta solo vale al inicio de una palabra:
+        # "micro" encuentra "Micrófono", pero "si" no entra en "asignatura".
+        if _normalizar(etiqueta) in texto_norm
+        or re.search(rf"\b{re.escape(texto_norm)}", _normalizar(etiqueta))
     ]
     return coincidencias[0] if len(coincidencias) == 1 else None
 
@@ -1519,6 +1682,8 @@ def _mover_item_resuelto_al_carrito(wizard: dict) -> str:
     wizard["subcategoria"] = None
     wizard["marca"] = None
     wizard["resolviendo_item"] = False
+    if wizard.get("por_agregar"):  # como si eligiera "Agregar otro activo" y lo escribiera
+        _precargar_activo(wizard, wizard["por_agregar"].pop(0))
     return nombre
 
 
@@ -1898,10 +2063,14 @@ def _linea_sale_de_barranquilla(wizard: dict) -> str:
     la respuesta a este paso: matchea por substring de la etiqueta y "no" es
     substring de "no se queda..." tanto como de cualquier otra cosa, así que
     se prefiere `_interpretar_si_no`, ver el paso "sale_de_barranquilla" en
-    `_continuar_reserva`."""
+    `_continuar_reserva`. Como `_linea_nota`, incluye su propio salto de
+    línea y devuelve "" en una reserva solo de espacios (valor automático,
+    no se preguntó)."""
+    if wizard.get("sale_de_barranquilla_auto"):
+        return ""
     if wizard.get("sale_de_barranquilla"):
-        return f"Sale de Barranquilla: Sí (requiere seguro, mínimo {DIAS_MINIMOS_TRAMITE_SEGURO} días hábiles)"
-    return "Sale de Barranquilla: No"
+        return f"Sale de Barranquilla: Sí (requiere seguro, mínimo {DIAS_MINIMOS_TRAMITE_SEGURO} días hábiles)\n"
+    return "Sale de Barranquilla: No\n"
 
 
 def _linea_nota(wizard: dict) -> str:
@@ -1935,10 +2104,21 @@ def _opciones_confirmar(wizard: dict) -> list[tuple[str, str]]:
     agregar un activo, no de cambiar lo que ya está en el carrito. Sin `*`
     en la etiqueta: `_interpretar_opcion` matchea el texto literal, y un
     `*` de énfasis ahí rompería esa comparación."""
-    opciones = list(OPCIONES_CONFIRMAR)
+    opciones = [o for o in OPCIONES_CONFIRMAR
+                if not (wizard.get("sale_de_barranquilla_auto") and o[0] == "cambiar_sale_barranquilla")]
     extra = [(f"alternativas:{n}", f"Ver alternativas a {n}") for n in (wizard.get("alternativas_para") or [])]
     i = next(i for i, (v, _) in enumerate(opciones) if v == "agregar_item") + 1
     return opciones[:i] + extra + opciones[i:]
+
+
+# Pasos que pueden venir pre-llenados (`wizard["prefill"]`, ver
+# `_extraer_detalles_de_texto`) y la pregunta con la que cada uno cierra su mensaje.
+_PREGUNTA_PASO = {"fecha": "¿Qué fecha necesitas?", "hora_inicio": "¿A qué hora empieza?", "hora_fin": "¿A qué hora termina?"}
+
+
+def _es_espacio(nombre: str) -> bool:
+    unidades = _grupo(nombre)
+    return bool(unidades) and unidades[0].tipo == "espacio"
 
 
 def _siguiente_paso_wizard(wizard: dict) -> str:
@@ -2074,6 +2254,10 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
             nombre = _mover_item_resuelto_al_carrito(wizard)
             ya_en_carrito = {item["nombre_recurso"] for item in wizard["carrito"]}
             nuevos = [a for a in _accesorios_por_defecto(nombre) if a not in ya_en_carrito]
+            excluidos = _accesorios_excluidos(wizard.get("texto_inicial"), nuevos)
+            if excluidos:  # "sin el lente de 100-500": se quitan solos y se avisa
+                nuevos = [a for a in nuevos if a not in excluidos]
+                avisos.append(f"Quité {', '.join(excluidos)} como pediste.")
 
             if nuevos:
                 # Se incluyen de una vez -- por defecto van, no hay que
@@ -2112,6 +2296,15 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
 
             continue
 
+        # Un carrito solo de espacios (lo que el usuario eligió directo, no lo
+        # que el lugar trae) no sale de Barranquilla: no se pregunta. Si luego
+        # entra un equipo y el valor era automático, se vuelve a preguntar.
+        if wizard.get("carrito") and not wizard.get("resolviendo_item"):
+            if all(_es_espacio(i["nombre_recurso"]) for i in wizard["carrito"] if not i.get("por")):
+                wizard.update(sale_de_barranquilla=False, sale_de_barranquilla_auto=True)
+            elif wizard.pop("sale_de_barranquilla_auto", None):
+                wizard["sale_de_barranquilla"] = None
+
         # Si el usuario cambió a "sale de Barranquilla" DESPUÉS de ya tener
         # una fecha puesta (ej. "Cambiar si sale de Barranquilla" desde el
         # resumen), esa fecha puede quedar antes del plazo del seguro -- se
@@ -2142,6 +2335,19 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
                 continue
 
         paso = _siguiente_paso_wizard(wizard)
+
+        # Fecha/hora que ya venían en el primer mensaje: se procesan como si el
+        # usuario las acabara de escribir en este paso (mismas validaciones y
+        # "¿Es correcto?"). Se consumen una sola vez: si fallan, se muestra el
+        # error y la pregunta normal del paso.
+        fragmento = (wizard.get("prefill") or {}).pop(paso, None) if paso in _PREGUNTA_PASO else None
+        if fragmento:
+            wizard["paso"] = paso
+            mensaje, _ = _continuar_reserva(fragmento, usuario, {}, wizard)
+            if wizard.get("paso") != paso or _PREGUNTA_PASO[paso] in mensaje:
+                return _con_avisos(avisos, mensaje), wizard, False
+            avisos.append(mensaje)
+            continue
 
         if paso == "elegir_activo":
             opciones = _menu_paso_activo()
@@ -2391,7 +2597,7 @@ def _mensaje_resumen(wizard: dict, usuario: Usuario, opciones: list[tuple[str, s
         f"Reservado por: {usuario.nombre}\n"
         f"{_linea_tipo_uso(wizard)}\n"
         f"{_lineas_grupo(wizard)}\n"
-        f"{_linea_sale_de_barranquilla(wizard)}\n"
+        f"{_linea_sale_de_barranquilla(wizard)}"
         f"{_linea_nota(wizard)}"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
@@ -2601,7 +2807,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
         f"Reservado por: {usuario.nombre}\n"
         f"{_linea_tipo_uso(wizard)}\n"
         f"{_lineas_grupo(wizard)}\n"
-        f"{_linea_sale_de_barranquilla(wizard)}\n"
+        f"{_linea_sale_de_barranquilla(wizard)}"
         f"{_linea_nota(wizard)}"
         f"Inicio: {_formatear_fecha_hora(inicio_local)}\n"
         f"Fin: {_formatear_fecha_hora(fin_local)}\n"
@@ -2696,6 +2902,74 @@ def _aplicar_hora_fin_valida(wizard: dict, usuario: Usuario, sesion: dict, hora:
     return mensaje, {**sesion, "reserva_wizard": wizard}
 
 
+_PATRON_SIN = re.compile(r"\bsin\s+(.+?)(?=\s+y\s+|\s+para\s+|\s+con\s+|[,.;]|$)", re.IGNORECASE)
+
+
+def _accesorios_excluidos(texto: str | None, accesorios: list[str]) -> list[str]:
+    """De `accesorios`, los que el texto inicial pidió dejar fuera: "sin el
+    lente de 100-500" (solo el que trae esa medida), "sin lentes" (todos los
+    lentes). Coincide por nombre (`_puntaje_nombre_en_texto`) y, si el
+    fragmento trae una medida, el nombre también debe traerla."""
+    excluidos: list[str] = []
+    for fragmento in _PATRON_SIN.findall(_normalizar(texto or "")):
+        medidas = re.findall(r"\d+-\d+|\d{3,}|\d+(?=mm)", fragmento)
+        for nombre in accesorios:
+            if (nombre not in excluidos and _puntaje_nombre_en_texto(nombre, fragmento) > 0
+                    and all(medida in _normalizar(nombre) for medida in medidas)):
+                excluidos.append(nombre)
+    return excluidos
+
+
+def _separar_activos(texto: str) -> tuple[str, list[str]]:
+    """Parte el primer mensaje por " y " / "," / " con " y, si al menos dos
+    partes nombran activos distintos (un modelo, o subcategorías distintas si
+    son genéricos), devuelve (la primera, las demás); si no, (texto, []).
+    Solo por nombre: el nivel descripción es demasiado ruidoso para partir."""
+    claves, partes = set(), []
+    for parte in re.split(r"\s+y\s+|\s*,\s*|\s+con\s+", texto):
+        candidatos, _ = buscar_recursos_en_texto(parte)
+        subcategorias = {c.subcategoria for c in candidatos}
+        if len(candidatos) == 1:
+            clave = candidatos[0].nombre
+        elif len(subcategorias) == 1 and None not in subcategorias:
+            clave = subcategorias.pop()
+        else:
+            continue
+        if clave not in claves:
+            claves.add(clave)
+            partes.append(parte)
+    return (partes[0], partes[1:]) if len(partes) > 1 else (texto, [])
+
+
+def _precargar_activo(wizard: dict, texto: str) -> None:
+    """Pre-llena en el wizard el activo que nombra `texto` (activo resuelto,
+    o subcategoría/marca si es genérico) y lo deja resolviéndose. Lo usan el
+    primer mensaje de la reserva y cada activo de `por_agregar`."""
+    recurso, candidatos, _ = _resolver_recurso_para_reserva(texto, {})
+    wizard["resolviendo_item"] = True
+    if recurso is not None:
+        wizard["nombre_recurso"] = recurso.nombre
+    elif candidatos:
+        # el texto mencionaba algo genérico (ej. "una cámara") o una marca
+        # sin modelo (ej. "cámara canon", ambiguo entre EOS R y EOS R6) que
+        # matcheó varias unidades -- nos saltamos los pasos que ya están
+        # claros en el texto (tipo, y marca si todos los candidatos
+        # comparten una) y arrancamos directo en el primero que sí hace
+        # falta preguntar.
+        subcategorias_candidatos = {c.subcategoria for c in candidatos if c.subcategoria}
+        # Solo si TODOS los candidatos tienen subcategoría: un espacio no
+        # tiene, y antes simplemente se ignoraba al armar el set -- "quiero
+        # reservar audio" (empata "Interfaz de audio Focusrite" con "Cabina de
+        # audio 2") pre-llenaba "interfaz" y descartaba la cabina en silencio.
+        # Con la búsqueda por descripción esa mezcla es más fácil ("algo para
+        # podcast"), así que en ese caso se arranca en el menú general.
+        if len(subcategorias_candidatos) == 1 and all(c.subcategoria for c in candidatos):
+            wizard["subcategoria"] = next(iter(subcategorias_candidatos))
+            marcas_candidatos = {c.marca for c in candidatos if c.marca}
+            if len(marcas_candidatos) == 1:
+                wizard["marca"] = next(iter(marcas_candidatos))
+
+
 def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tuple[str, dict]:
     """Primer mensaje de un intento de reserva. El activo se identifica por
     palabra clave (`buscar_recursos_en_texto`): si el mensaje ya lo deja
@@ -2739,9 +3013,17 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
             sesion,
         )
 
-    recurso, candidatos, _ = _resolver_recurso_para_reserva(texto_usuario, {})
+    texto_activo, por_agregar = _separar_activos(_PATRON_SIN.sub("", texto_usuario))  # "sin X" no es un activo pedido
 
     wizard: dict = {
+        # Lo que el primer mensaje ya decía: los fragmentos de fecha/hora se
+        # consumen en los pasos correspondientes (ver `prefill` en
+        # `_avanzar_wizard`); los activos que nombró de más esperan en
+        # `por_agregar` (ver `_mover_item_resuelto_al_carrito`); el texto se
+        # guarda para los "sin <accesorio>". Lecturas con .get(): sesiones viejas.
+        "prefill": _extraer_detalles_de_texto(texto_usuario),
+        "por_agregar": por_agregar,
+        "texto_inicial": texto_usuario,
         "subcategoria": None,
         "marca": None,
         "nombre_recurso": None,
@@ -2784,27 +3066,7 @@ def _iniciar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tupl
         "alternativas_para": [],
     }
 
-    if recurso is not None:
-        wizard["nombre_recurso"] = recurso.nombre
-    elif candidatos:
-        # el texto mencionaba algo genérico (ej. "una cámara") o una marca
-        # sin modelo (ej. "cámara canon", ambiguo entre EOS R y EOS R6) que
-        # matcheó varias unidades -- nos saltamos los pasos que ya están
-        # claros en el texto (tipo, y marca si todos los candidatos
-        # comparten una) y arrancamos directo en el primero que sí hace
-        # falta preguntar.
-        subcategorias_candidatos = {c.subcategoria for c in candidatos if c.subcategoria}
-        # Solo si TODOS los candidatos tienen subcategoría: un espacio no
-        # tiene, y antes simplemente se ignoraba al armar el set -- "quiero
-        # reservar audio" (empata "Interfaz de audio Focusrite" con "Cabina de
-        # audio 2") pre-llenaba "interfaz" y descartaba la cabina en silencio.
-        # Con la búsqueda por descripción esa mezcla es más fácil ("algo para
-        # podcast"), así que en ese caso se arranca en el menú general.
-        if len(subcategorias_candidatos) == 1 and all(c.subcategoria for c in candidatos):
-            wizard["subcategoria"] = next(iter(subcategorias_candidatos))
-            marcas_candidatos = {c.marca for c in candidatos if c.marca}
-            if len(marcas_candidatos) == 1:
-                wizard["marca"] = next(iter(marcas_candidatos))
+    _precargar_activo(wizard, texto_activo)
 
     mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
     if listo:
@@ -3684,6 +3946,19 @@ def _mensaje_confirmar_cancelacion(bundles: list[list[Reserva]]) -> str:
     )
 
 
+def _pasar_a_confirmar_cancelacion(
+    wizard: dict, bundles: list[list[Reserva]], sesion: dict
+) -> tuple[str, dict]:
+    """Deja el wizard en "confirmar_cancelacion" para estos bundles y pregunta."""
+    mensaje = _mensaje_confirmar_cancelacion(bundles)
+    wizard["paso"] = "confirmar_cancelacion"
+    wizard["reserva_ids"] = [r.id for b in bundles for r in b]
+    wizard["cantidad_reservas"] = len(bundles)
+    wizard["opciones_actuales"] = OPCIONES_CONFIRMAR_CANCELACION
+    wizard["_mensaje_menu_actual"] = mensaje
+    return mensaje, {**sesion, "cancelacion_wizard": wizard}
+
+
 def _iniciar_cancelacion(texto_usuario: str, usuario: Usuario, sesion: dict) -> tuple[str, dict]:
     bundles = _reservas_cancelables_de(usuario.id)
     if not bundles:
@@ -3691,7 +3966,34 @@ def _iniciar_cancelacion(texto_usuario: str, usuario: Usuario, sesion: dict) -> 
             "No tienes reservas activas para cancelar."
         ), {**sesion, "cancelacion_wizard": None}
 
+    # "cancela la sala de edición del lunes": si el texto nombra un activo y/o
+    # una fecha, solo se consideran las reservas que coinciden (todas las
+    # pistas a la vez); si ninguna coincide o el texto no dice nada, la lista
+    # completa, como siempre.
+    ahora_local = datetime.now(timezone.utc).astimezone(ZONA_HORARIA_LACS)
+    texto_norm = _normalizar(texto_usuario)
+    fechas = _fechas_en_texto(texto_usuario, ahora_local)
+
+    def por_nombre(bundle: list[Reserva]) -> bool:
+        return any(_puntaje_nombre_en_texto(r.recurso.nombre, texto_norm) > 0 for r in bundle)
+
+    def en_fecha(bundle: list[Reserva]) -> bool:
+        ini, fin = (d.astimezone(ZONA_HORARIA_LACS).date() for d in (bundle[0].inicio, bundle[0].fin))
+        return ini <= fechas[1] and fin >= fechas[0]
+
+    hay_nombre = any(por_nombre(b) for b in bundles)
+    filtrados = [
+        b for b in bundles
+        if (not hay_nombre or por_nombre(b)) and (fechas is None or en_fecha(b))
+    ] if hay_nombre or fechas else []
+    if not filtrados and hay_nombre:  # nombre y fecha no coinciden a la vez: vale solo el nombre
+        filtrados = [b for b in bundles if por_nombre(b)]
+    if filtrados:
+        bundles = filtrados
+
     wizard = {"paso": "elegir_reserva", "bundles_ids": [[r.id for r in b] for b in bundles]}
+    if len(filtrados) == 1:
+        return _pasar_a_confirmar_cancelacion(wizard, bundles, sesion)
     return _mensaje_elegir_reserva_a_cancelar(bundles), {**sesion, "cancelacion_wizard": wizard}
 
 
@@ -3727,17 +4029,13 @@ def _continuar_cancelacion(
                 'hayan cancelado). Escribe "cancelar" de nuevo para ver tus reservas activas.'
             ), {**sesion, "cancelacion_wizard": None}
 
-        bundles_elegidos = _agrupar_por_reserva_grupo(filas)
-        mensaje = _mensaje_confirmar_cancelacion(bundles_elegidos)
-        wizard["paso"] = "confirmar_cancelacion"
-        wizard["reserva_ids"] = [r.id for r in filas]
-        wizard["cantidad_reservas"] = len(bundles_elegidos)
-        wizard["opciones_actuales"] = OPCIONES_CONFIRMAR_CANCELACION
-        wizard["_mensaje_menu_actual"] = mensaje
-        return mensaje, {**sesion, "cancelacion_wizard": wizard}
+        return _pasar_a_confirmar_cancelacion(wizard, _agrupar_por_reserva_grupo(filas), sesion)
 
     if paso == "confirmar_cancelacion":
         valor = _interpretar_opcion(texto_usuario, OPCIONES_CONFIRMAR_CANCELACION)
+        if valor is None:  # "dale", "no gracias": no coinciden con las etiquetas
+            si = _interpretar_si_no(texto_usuario)
+            valor = None if si is None else ("si" if si else "no")
         if valor is None:
             return (
                 "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or "")
@@ -3776,7 +4074,10 @@ def gestionar_cancelacion(texto_usuario: str, usuario: Usuario, sesion: dict) ->
     mismo motivo que `reserva_wizard` (ver `gestionar_reserva`)."""
     wizard = sesion.get("cancelacion_wizard")
 
-    if wizard is not None and set(_normalizar(texto_usuario).split()) & PALABRAS_CANCELAR:
+    # Acá "cancelar" es la respuesta afirmativa ("sí, cancelar"), así que la
+    # única palabra de escape es "cerrar" (la que anuncia el propio menú);
+    # un "no" lo resuelve el paso correspondiente.
+    if wizard is not None and "cerrar" in _normalizar(texto_usuario).split():
         return "No cancelé ninguna reserva.", {**sesion, "cancelacion_wizard": None}
 
     if wizard is None:
