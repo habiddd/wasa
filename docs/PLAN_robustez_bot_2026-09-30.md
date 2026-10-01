@@ -155,7 +155,7 @@ de edición del jueves 15" con la sala el 15/10 → directo a confirmar;
 
 ## Pruebas
 
-`flask-app/verificar_robustez_bot.py`, estilo de los otros `verificar_*.py`:
+`entregables/OE3/pruebas/verificar_robustez_bot.py`, estilo de los otros `verificar_*.py`:
 sin mensajes, en transacción revertida (parchear commit→flush), con un
 usuario ficticio completo (crear y revertir). Casos mínimos:
 - F1: wizard de cancelación con "si, cancelar" → cancela; "no" → no; "cerrar" → no.

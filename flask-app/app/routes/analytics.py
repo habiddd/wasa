@@ -5,8 +5,10 @@ from sqlalchemy import func
 
 from app.extensions import db
 from app.models import Reserva
+from app.routes.dashboard import _requiere_auth
 
 bp = Blueprint("analytics", __name__)
+bp.before_request(_requiere_auth)  # mismo Basic Auth que /dashboard
 
 
 @bp.route("/api/analytics/reservas-por-dia", methods=["GET"])

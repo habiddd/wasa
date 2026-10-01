@@ -102,3 +102,6 @@ class Config:
     # fondo compitiendo). El barrido perezoso del listado de reservas sigue
     # activo igual: no depende de esta variable.
     BARRIDO_ACTIVO = os.environ.get("BARRIDO_ACTIVO", "1") != "0"
+    # Días que se guarda el texto y el teléfono de auditoria_bot antes de
+    # anonimizarlos (guardrails.anonimizar_auditoria_vieja). 0 = no anonimizar.
+    AUDITORIA_RETENCION_DIAS = int(os.environ.get("AUDITORIA_RETENCION_DIAS", 180))

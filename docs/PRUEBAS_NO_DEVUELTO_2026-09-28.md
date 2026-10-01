@@ -12,10 +12,10 @@ devuelve uno o varios. El cambio que se prueba es el de la sección 10 de
 
 **Entorno:** todo dentro de Docker, contra la base viva y contra los endpoints
 reales del dashboard (`test_client` de Flask). El script es
-[`flask-app/verificar_no_devuelto_evidencia.py`](../flask-app/verificar_no_devuelto_evidencia.py):
+[`entregables/OE3/pruebas/verificar_no_devuelto_evidencia.py`](../entregables/OE3/pruebas/verificar_no_devuelto_evidencia.py):
 
 ```
-docker exec -i lacs_flask_app python - < flask-app/verificar_no_devuelto_evidencia.py
+docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_no_devuelto_evidencia.py
 ```
 
 **Usuario:** solo Habid Abdala (`usuarios.id = 24`). **No se mandó ningún
@@ -212,7 +212,7 @@ entre los modelos que no tienen ninguna unidad `disponible`. Para el
 estudiante, `no_devuelto`, `no_disponible` y `en_mantenimiento` son lo mismo:
 "no disponible".
 
-Prueba: [`flask-app/verificar_bot_no_disponible.py`](../flask-app/verificar_bot_no_disponible.py).
+Prueba: [`entregables/OE3/pruebas/verificar_bot_no_disponible.py`](../entregables/OE3/pruebas/verificar_bot_no_disponible.py).
 La Canon y el micrófono ya los habías vuelto a `disponible` desde Activos a
 las 16:32 (filas 8 a 10 de `recurso_estado_historial`). Por eso la prueba los
 pone en `no_devuelto` dentro de una transacción y la revierte al final: no

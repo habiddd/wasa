@@ -15,7 +15,7 @@ está protegida con el lock de Redis y, de fondo, con el UNIQUE de
 import threading
 import time
 
-from app import avisos_reservas
+from app import avisos_reservas, guardrails
 
 
 def _bucle(app):
@@ -41,6 +41,9 @@ def _bucle(app):
                         # (whatsapp_client, sesiones, llm_client) tampoco usa
                         # .info en ningún lado.
                         app.logger.warning("Barrido de avisos_reservas: %s", conteos)
+                    anonimizadas = guardrails.anonimizar_auditoria_vieja()
+                    if anonimizadas:
+                        app.logger.warning("Retención: %s filas de auditoria_bot anonimizadas", anonimizadas)
         except Exception:
             # Un hilo que muere en silencio es peor que uno que loguea y
             # sigue vivo para el próximo tick -- nunca dejar que una

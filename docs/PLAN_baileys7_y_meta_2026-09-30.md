@@ -164,7 +164,7 @@ avisos, decisiones de la LACS). Mantener la firma y despachar por proveedor:
   cambiar ("Los mensajes empezarán a salir por …"). Mantener el QR de
   Baileys como está.
 
-### B6. Pruebas (`flask-app/verificar_meta_whatsapp.py`)
+### B6. Pruebas (`entregables/OE3/pruebas/verificar_meta_whatsapp.py`)
 Sin credenciales reales ni llamadas a Meta (parchear `requests.post/get`
 dentro del script):
 - Verificación GET: token correcto → challenge; incorrecto → 403.

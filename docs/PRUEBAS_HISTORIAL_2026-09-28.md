@@ -4,11 +4,11 @@
 **Alcance:** la tabla `reserva_estado_historial` (y su trigger), la vista
 `reserva_puntualidad` y el arreglo de la bandera `entrega_tardia`.
 **Entorno:** todo dentro de Docker, contra la base viva (`reservas_db`). Script:
-[`flask-app/verificar_historial.py`](../flask-app/verificar_historial.py), que
+[`entregables/OE3/pruebas/verificar_historial.py`](../entregables/OE3/pruebas/verificar_historial.py), que
 corre con
 
 ```
-docker exec -i lacs_flask_app python - < flask-app/verificar_historial.py
+docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_historial.py
 ```
 
 **Usuario:** solo Habid Abdala (`usuarios.id = 24`, `573045246117`), el único

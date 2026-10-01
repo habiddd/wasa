@@ -147,7 +147,7 @@ _CAMBIOS_HORARIO = {
 - Cambia la numeración del menú (cancelar pasa a 4). Ningún `verificar_*.py`
   usa esos números (revisado).
 
-## Pruebas (agregar a `flask-app/verificar_robustez_bot.py`, antes del rollback)
+## Pruebas (agregar a `entregables/OE3/pruebas/verificar_robustez_bot.py`, antes del rollback)
 
 Mismo estilo: usuario ficticio, commit→flush, rollback. Helpers nuevos:
 ```python
@@ -202,7 +202,7 @@ def hasta_hora_inicio(texto, dia):
 - Cambiar el print final a "OK: F1 a F17". Correr también
   `verificar_bot_no_disponible.py`.
 
-Ejecución: `docker exec -i lacs_flask_app python - < flask-app/verificar_robustez_bot.py`
+Ejecución: `docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_robustez_bot.py`
 (igual para los otros `verificar_*.py`).
 
 Despliegue: `docker compose up -d --build flask-app` y luego

@@ -268,6 +268,9 @@ ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS mensaje_id VARCHAR(64);
 ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS estado_envio VARCHAR(20) NOT NULL DEFAULT 'n/a';
 -- El wamid de Meta lleva el número en base64: 62+ caracteres.
 ALTER TABLE auditoria_bot ALTER COLUMN mensaje_id TYPE VARCHAR(128);
+-- Milisegundos desde que llegó el mensaje hasta que se envió la respuesta
+-- (NULL en avisos que no responden a un mensaje y en filas anteriores).
+ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS latencia_ms INTEGER;
 
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cedula VARCHAR(20);
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS registro_completo BOOLEAN NOT NULL DEFAULT FALSE;

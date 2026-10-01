@@ -1945,7 +1945,7 @@ Una reserva `confirmada` que nadie recoge no se queda así para siempre:
   estudiante que devuelva. No cambia estado; pasado `fin` ya no se manda, y el
   texto lleva los minutos que de verdad quedan. Respeta el mismo corte de
   frescura `AVISO_VENTANA_MIN`, pero sin crear filas `vencido`. Probado con
-  `flask-app/verificar_aviso_devolucion.py`.
+  `entregables/OE3/pruebas/verificar_aviso_devolucion.py`.
 
 ```mermaid
 flowchart LR
@@ -2488,12 +2488,12 @@ incluye.
   escriben al final, con lo que de verdad se exportó. En `write_only`,
   openpyxl no deja buscar hojas por nombre (`wb[...]`, `move_sheet`), así
   que se guardan las hojas mismas.
-- **Verificación:** `flask-app/verificar_excel_raw.py` comprueba que cada
+- **Verificación:** `entregables/OE3/pruebas/verificar_excel_raw.py` comprueba que cada
   tabla y vista coincida con `count(*)`. Luego baja el límite a 100 filas
   para forzar el corte de `auditoria_bot` con los datos de hoy y revisa que
   entre todas las hojas estén todos los `id`, sin repetir ni perder ninguno.
   No escribe en la base:
-  `docker exec -i lacs_flask_app python - < flask-app/verificar_excel_raw.py`.
+  `docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_excel_raw.py`.
 - `_celda` escribe todo texto como texto (`data_type = "s"`). Sin eso, un
   mensaje de WhatsApp en `auditoria_bot` que empiece por `=` se ejecutaría
   como fórmula al abrir el archivo. También quita los caracteres de control

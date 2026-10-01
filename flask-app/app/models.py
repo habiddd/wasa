@@ -196,6 +196,7 @@ class AuditoriaBot(db.Model):
     # Baileys recibe el ack de WhatsApp (server_ack/delivery_ack/leido/error).
     mensaje_id = db.Column(db.String(128))
     estado_envio = db.Column(db.String(20), nullable=False, default="n/a")
+    latencia_ms = db.Column(db.Integer)
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
 

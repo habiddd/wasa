@@ -92,9 +92,9 @@ flowchart TD
 ## Verificación (en Docker, nunca en el host)
 
 - Reconstruir/reiniciar `flask-app` y el frontend con `docker compose`.
-- Script `flask-app/verificar_aviso_devolucion.py`, estilo de
+- Script `entregables/OE3/pruebas/verificar_aviso_devolucion.py`, estilo de
   `verificar_no_devuelto.py`, corrido con
-  `docker exec -i lacs_flask_app python - < flask-app/verificar_aviso_devolucion.py`.
+  `docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_aviso_devolucion.py`.
   Usa el usuario de pruebas `000000000000` (id 1; su envío falla solo, no le
   escribe a nadie; tarda ~10 s). **No llamar `barrer(ahora=<futuro>)`**: movería
   reservas reales de otros usuarios. Usar el reloj real:

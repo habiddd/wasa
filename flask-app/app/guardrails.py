@@ -9,7 +9,8 @@ import time
 import unicodedata
 from collections import defaultdict, deque
 
-from flask import current_app
+from flask import current_app, g, has_request_context
+from sqlalchemy import text
 
 from app.extensions import db
 from app.models import AuditoriaBot
@@ -195,7 +196,11 @@ def registrar_interaccion(
     mensaje_id: str | None = None,
     estado_envio: str = "n/a",
 ):
+    # webhook._procesar_mensaje marca la llegada del mensaje; los avisos que
+    # salen del ticker no responden a nada y quedan sin latencia.
+    inicio = getattr(g, "inicio_mensaje", None) if has_request_context() else None
     entrada = AuditoriaBot(
+        latencia_ms=round((time.monotonic() - inicio) * 1000) if inicio else None,
         telefono_wa=telefono_wa,
         mensaje_entrante=mensaje_entrante,
         intent_detectado=intent_detectado,
@@ -207,6 +212,27 @@ def registrar_interaccion(
     )
     db.session.add(entrada)
     db.session.commit()
+
+
+def anonimizar_auditoria_vieja() -> int:
+    """Política de retención (entregables/OE4/POLITICA_RETENCION_AUDITORIA.md):
+    pasados AUDITORIA_RETENCION_DIAS se borran el texto de los mensajes y el
+    teléfono; se conservan intent, permitido, motivo de bloqueo, estado de
+    envío, latencia y fecha, que es lo que usan las métricas. 0 desactiva la
+    purga."""
+    dias = current_app.config.get("AUDITORIA_RETENCION_DIAS", 180)
+    if dias <= 0:
+        return 0
+    filas = db.session.execute(
+        text(
+            "UPDATE auditoria_bot SET mensaje_entrante = NULL, respuesta_enviada = NULL, "
+            "telefono_wa = 'anonimizado' "
+            "WHERE creado_en < now() - make_interval(days => :dias) AND telefono_wa <> 'anonimizado'"
+        ),
+        {"dias": dias},
+    ).rowcount
+    db.session.commit()
+    return filas
 
 
 def actualizar_estado_envio(mensaje_id: str, estado: str) -> bool:

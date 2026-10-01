@@ -671,6 +671,55 @@ def api_metricas():
         """,
         **p,
     )
+    # Desde que llega el mensaje hasta que sale la respuesta. Las filas
+    # anteriores a la columna latencia_ms no cuentan.
+    latencia = _filas(
+        f"""
+        SELECT COUNT(latencia_ms) AS n, AVG(latencia_ms) AS promedio_ms,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY latencia_ms) AS p50_ms,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY latencia_ms) AS p95_ms
+        FROM auditoria_bot WHERE latencia_ms IS NOT NULL AND {filtro_bot}
+        """,
+        **p,
+    )[0]
+    latencia = {k: (round(v) if v is not None else None) for k, v in latencia.items()}
+    latencia_por_intent = _filas(
+        f"""
+        SELECT intent_detectado AS intent, COUNT(*) AS total, ROUND(AVG(latencia_ms))::int AS promedio_ms
+        FROM auditoria_bot WHERE latencia_ms IS NOT NULL AND {filtro_bot}
+        GROUP BY 1 ORDER BY promedio_ms DESC
+        """,
+        **p,
+    )
+    # Una solicitud (grupo) del bot se resolvió sin intervención humana si
+    # ninguna de sus líneas pasó por 'pendiente' (la LACS no tuvo que decidir).
+    sin_intervencion = _filas(
+        f"""
+        SELECT COUNT(*) AS solicitudes, COUNT(*) FILTER (WHERE NOT con_lacs) AS sin_intervencion
+        FROM (
+            SELECT r.grupo_id,
+                   bool_or(r.estado IN ('pendiente','denegada') OR EXISTS (
+                       SELECT 1 FROM reserva_estado_historial h
+                       WHERE h.reserva_id = r.id AND h.estado_nuevo = 'pendiente')) AS con_lacs
+            FROM reservas r WHERE r.canal_origen = 'whatsapp' AND {filtro}
+            GROUP BY r.grupo_id
+        ) s
+        """,
+        **p,
+    )[0]
+    por_periodo = {
+        unidad: [
+            {"inicio": str(f["inicio"]), "total": f["total"]}
+            for f in _filas(
+                f"""
+                SELECT date_trunc('{unidad}', r.inicio AT TIME ZONE :zona)::date AS inicio, COUNT(*) AS total
+                FROM reservas r WHERE {filtro} GROUP BY 1 ORDER BY 1
+                """,
+                **p,
+            )
+        ]
+        for unidad in ("week", "month")
+    }
 
     # Inventario: altas por recursos.creado_en; bajas y mantenimiento por
     # transiciones de recurso_estado_historial (no registra el alta). "Dado de
@@ -736,6 +785,8 @@ def api_metricas():
             "usuarios": usuarios,
             "puntualidad": puntualidad,
             "reservas_por_dia": [{"dia": str(f["dia"]), "total": f["total"]} for f in por_dia],
+            "reservas_por_semana": por_periodo["week"],
+            "reservas_por_mes": por_periodo["month"],
             "por_dia_semana": [por_dow.get(k, 0) for k in range(7)],
             "por_hora": [por_hora.get(k, 0) for k in range(24)],
             "habitos": {
@@ -743,7 +794,11 @@ def api_metricas():
                 "anticipacion_seg": _segundos(resumen["anticipacion_seg"]),
                 "canales": canales,
             },
-            "bot": {**bot, "intents": intents, "avisos": avisos},
+            "bot": {
+                **bot, "intents": intents, "avisos": avisos,
+                "latencia": latencia, "latencia_por_intent": latencia_por_intent,
+                "sin_intervencion": sin_intervencion,
+            },
         }
     )
 

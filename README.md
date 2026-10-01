@@ -286,7 +286,7 @@ El canal de Meta ya está integrado junto a Baileys. Para activarlo:
 4. En el dashboard, Servicios → QR / WhatsApp, elige **Meta**. Ahí mismo
    aparecen sus métricas: gastos, mensajes enviados, ventanas de 24 h
    abiertas, estado del número y de la cuenta, y plantillas.
-5. Prueba: `docker exec -i lacs_flask_app python - < flask-app/verificar_meta_whatsapp.py`
+5. Prueba: `docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_meta_whatsapp.py`
    (no llama a Meta ni manda mensajes).
 
 La política de Meta vigente desde enero de 2026 permite bots de reservas y

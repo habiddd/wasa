@@ -32,9 +32,9 @@ Siempre dentro de Docker, nunca con el python o node del host:
 
 ```
 docker compose up -d --build flask-app && docker compose restart dashboard-frontend
-docker exec -i lacs_flask_app python - < flask-app/verificar_meta_whatsapp.py
-docker exec -i lacs_flask_app python - < flask-app/verificar_robustez_bot.py
-docker exec -i lacs_flask_app python - < flask-app/verificar_celular_registro.py
+docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_meta_whatsapp.py
+docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_robustez_bot.py
+docker exec -i lacs_flask_app python - < entregables/OE3/pruebas/verificar_celular_registro.py
 ```
 
 Las tres pruebas tienen que terminar en OK. Lo nuevo se agrega como `assert` en `verificar_meta_whatsapp.py`, con `requests.post` parcheado: nunca se llama a Meta.

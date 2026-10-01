@@ -73,7 +73,7 @@ campos llenos, no LID, y `registro_completo = False` → toca confirmar.
    telefono_es_lid(usuario)`.
 10. `MENSAJE_BIENVENIDA` sigue "son unos datos rápidos".
 
-### Pruebas (reescribir `flask-app/verificar_celular_registro.py`)
+### Pruebas (reescribir `entregables/OE3/pruebas/verificar_celular_registro.py`)
 
 Sin mensajes reales, base igual al final, IDs/números ficticios.
 1. JID `@s.whatsapp.net`: 3 campos → resumen con celular de WhatsApp, no
@@ -138,7 +138,7 @@ quedarse con su cuenta. Reglas:
    persona, no el personal).
 5. Nada más en dashboard ni webhook.
 
-### Pruebas (actualizar `flask-app/verificar_celular_registro.py`)
+### Pruebas (actualizar `entregables/OE3/pruebas/verificar_celular_registro.py`)
 
 1. JID real `@s.whatsapp.net`: tras la cédula pregunta el celular; un número
    distinto → mensaje de "no coincide", sigue sin completar; el mismo número
@@ -222,7 +222,7 @@ Sin cambios de esquema.
 
 ## Pruebas
 
-`flask-app/verificar_celular_registro.py`, estilo de los otros `verificar_*.py`
+`entregables/OE3/pruebas/verificar_celular_registro.py`, estilo de los otros `verificar_*.py`
 (asserts, `docker exec -i lacs_flask_app python - < ...`), todo dentro de una
 transacción que se revierte al final, sin mandar mensajes (llamar
 `procesar_registro` / `obtener_o_crear_usuario` directo, no el webhook):

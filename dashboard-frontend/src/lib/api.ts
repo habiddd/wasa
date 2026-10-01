@@ -218,6 +218,9 @@ export type Metricas = {
   usuarios: FilaUsuario[]
   puntualidad: { entrega?: PuntualidadEvento; devolucion?: PuntualidadEvento }
   reservas_por_dia: { dia: string; total: number }[]
+  // `inicio` = lunes de la semana / día 1 del mes (YYYY-MM-DD).
+  reservas_por_semana: { inicio: string; total: number }[]
+  reservas_por_mes: { inicio: string; total: number }[]
   por_dia_semana: number[] // 0 = domingo
   por_hora: number[]
   habitos: {
@@ -230,6 +233,9 @@ export type Metricas = {
     bloqueados: number
     intents: { intent: string | null; total: number }[]
     avisos: { tipo: string; enviados: number; fallidos: number }[]
+    latencia: { n: number; promedio_ms: number | null; p50_ms: number | null; p95_ms: number | null }
+    latencia_por_intent: { intent: string | null; total: number; promedio_ms: number }[]
+    sin_intervencion: { solicitudes: number; sin_intervencion: number }
   }
 }
 

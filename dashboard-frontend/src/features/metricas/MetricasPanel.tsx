@@ -137,6 +137,14 @@ export function etiquetaDia(dia: string) {
   return ETIQUETA_DIA.format(new Date(`${dia}T00:00:00Z`))
 }
 
+const ETIQUETA_MES = new Intl.DateTimeFormat("es-CO", { timeZone: "UTC", month: "short", year: "2-digit" })
+
+/** Milisegundos legibles: 850 -> "850 ms"; 13400 -> "13,4 s". */
+function ms(valor: number | null | undefined) {
+  if (valor == null) return "—"
+  return valor < 1000 ? `${valor} ms` : `${(valor / 1000).toLocaleString("es-CO", { maximumFractionDigits: 1 })} s`
+}
+
 /** "los últimos 30 días", o "el periodo del 1 sep. al 15 oct." para el rango personalizado. */
 function etiquetaFiltro(f: FiltroMetricas) {
   if (f.periodo !== "rango") return ETIQUETA_PERIODO[f.periodo]
@@ -708,6 +716,99 @@ function DescargarExcel({ filtro, valido }: { filtro: FiltroMetricas; valido: bo
   )
 }
 
+/** Turnos agrupados por semana (desde el lunes) y por mes. */
+function PorSemanaYMes({ m }: { m: Pick<Metricas, "reservas_por_semana" | "reservas_por_mes"> }) {
+  if (m.reservas_por_semana.length === 0) return null
+  return (
+    <div className="grid gap-6 pt-2 @3xl:grid-cols-2">
+      <div className="space-y-1">
+        <Subtitulo>Por semana</Subtitulo>
+        <Columnas
+          titulo="Reservas por semana"
+          ejeCada={Math.max(1, Math.ceil(m.reservas_por_semana.length / 6))}
+          desdeElFinal
+          datos={m.reservas_por_semana.map((s) => ({
+            clave: s.inicio,
+            eje: etiquetaDia(s.inicio),
+            tooltip: `Semana del ${etiquetaDia(s.inicio)}`,
+            total: s.total,
+          }))}
+        />
+      </div>
+      <div className="space-y-1">
+        <Subtitulo>Por mes</Subtitulo>
+        <Columnas
+          titulo="Reservas por mes"
+          ejeCada={Math.max(1, Math.ceil(m.reservas_por_mes.length / 6))}
+          desdeElFinal
+          datos={m.reservas_por_mes.map((s) => {
+            const mes = ETIQUETA_MES.format(new Date(`${s.inicio}T00:00:00Z`))
+            return { clave: s.inicio, eje: mes, tooltip: mes, total: s.total }
+          })}
+        />
+      </div>
+    </div>
+  )
+}
+
+function RendimientoBot({ m }: { m: Metricas | null }) {
+  const b = m?.bot
+  const si = b?.sin_intervencion
+  return (
+    <>
+      <Cifras className="@2xl:grid-cols-4">
+        <Cifra valor={b?.recibidos ?? "—"} etiqueta="Mensajes registrados" />
+        <Cifra
+          valor={b?.bloqueados ?? "—"}
+          etiqueta="Bloqueados por guardrails"
+          detalle={b && b.recibidos ? `${porcentaje(b.bloqueados, b.recibidos)} de los mensajes` : undefined}
+        />
+        <Cifra
+          valor={si ? porcentaje(si.sin_intervencion, si.solicitudes) : "—"}
+          etiqueta="Solicitudes del bot sin intervención humana"
+          detalle={si ? `${si.sin_intervencion} de ${si.solicitudes} no pasaron por la LACS` : undefined}
+        />
+        <Cifra
+          valor={ms(b?.latencia.promedio_ms)}
+          etiqueta="Tiempo de respuesta promedio"
+          detalle={b?.latencia.n ? `mediana ${ms(b.latencia.p50_ms)} · p95 ${ms(b.latencia.p95_ms)}` : undefined}
+        />
+      </Cifras>
+
+      {b && (
+        <>
+          <div className="grid gap-4 @4xl:grid-cols-2">
+            <Seccion titulo="Tipos de mensaje más frecuentes">
+              <BarrasH
+                titulo="Mensajes por tipo"
+                datos={sumarPorEtiqueta(b.intents.map((i) => ({ etiqueta: legible(i.intent, ETIQUETA_INTENT), total: i.total })))}
+              />
+            </Seccion>
+            <Seccion titulo="Tiempo de respuesta por tipo">
+              {b.latencia_por_intent.length === 0 ? (
+                <Vacio>Sin mensajes medidos en este periodo (se mide desde que existe la columna latencia_ms).</Vacio>
+              ) : (
+                <Datos
+                  filas={b.latencia_por_intent.map((l): [string, ReactNode] => [
+                    `${legible(l.intent, ETIQUETA_INTENT)} (${l.total})`,
+                    ms(l.promedio_ms),
+                  ])}
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                Desde que llega el mensaje hasta que sale la respuesta; incluye la clasificación con el LLM.
+              </p>
+            </Seccion>
+          </div>
+          <Seccion titulo="Avisos automáticos">
+            <Avisos avisos={b.avisos} />
+          </Seccion>
+        </>
+      )}
+    </>
+  )
+}
+
 export function filtroValido(f: FiltroMetricas) {
   return f.periodo !== "rango" || Boolean(f.desde && f.hasta && f.hasta >= f.desde)
 }
@@ -746,6 +847,7 @@ function General({ m, filtro }: { m: Metricas | null; filtro: FiltroMetricas }) 
 
           <Seccion titulo="Cuándo se reserva">
             <CuandoSeReserva m={m} filtro={filtro} />
+            <PorSemanaYMes m={m} />
           </Seccion>
 
           <PanelActivos activos={m.activos} />
@@ -789,37 +891,19 @@ function General({ m, filtro }: { m: Metricas | null; filtro: FiltroMetricas }) 
             </Seccion>
           </div>
 
-          <div className="grid gap-4 @4xl:grid-cols-2">
-            <Seccion titulo="Hábitos">
-              <Datos
-                filas={[
-                  ["Duración promedio", duracion(m.habitos.duracion_seg)],
-                  ["Anticipación promedio", duracion(m.habitos.anticipacion_seg)],
-                ]}
-              />
-              <Subtitulo>Canal de origen</Subtitulo>
-              <BarrasH
-                titulo="Reservas por canal"
-                datos={m.habitos.canales.map((c) => ({ etiqueta: legible(c.canal, ETIQUETA_CANAL), total: c.total }))}
-              />
-            </Seccion>
-
-            <Seccion titulo="Bot">
-              <Datos
-                filas={[
-                  ["Mensajes registrados", m.bot.recibidos],
-                  ["Bloqueados por guardrails", m.bot.bloqueados],
-                ]}
-              />
-              <Subtitulo>Tipos de mensaje más frecuentes</Subtitulo>
-              <BarrasH
-                titulo="Mensajes por tipo"
-                datos={sumarPorEtiqueta(m.bot.intents.map((i) => ({ etiqueta: legible(i.intent, ETIQUETA_INTENT), total: i.total })))}
-              />
-              <Subtitulo>Avisos automáticos</Subtitulo>
-              <Avisos avisos={m.bot.avisos} />
-            </Seccion>
-          </div>
+          <Seccion titulo="Hábitos">
+            <Datos
+              filas={[
+                ["Duración promedio", duracion(m.habitos.duracion_seg)],
+                ["Anticipación promedio", duracion(m.habitos.anticipacion_seg)],
+              ]}
+            />
+            <Subtitulo>Canal de origen</Subtitulo>
+            <BarrasH
+              titulo="Reservas por canal"
+              datos={m.habitos.canales.map((c) => ({ etiqueta: legible(c.canal, ETIQUETA_CANAL), total: c.total }))}
+            />
+          </Seccion>
         </>
       )}
     </>
@@ -831,7 +915,7 @@ export function MetricasPanel() {
   // Al elegir "Personalizado" arrancan con los últimos 30 días (fechas civiles de la LACS).
   const [desde, setDesde] = useState(() => claveDe(sumarDias(hoy(), -30)))
   const [hasta, setHasta] = useState(() => claveDe(hoy()))
-  const [vista, setVista] = useState<"general" | "activo" | "uso">("general")
+  const [vista, setVista] = useState<"general" | "activo" | "uso" | "bot">("general")
   // Vive aquí para no perderse al cambiar de pestaña o de periodo.
   const [activoId, setActivoId] = useState<number | null>(null)
   const [vistaActivo, setVistaActivo] = useState<VistaActivo>("metricas")
@@ -905,20 +989,23 @@ export function MetricasPanel() {
 
         {/* Pestañas de vista (qué se mira) separadas del periodo (cuándo): la
             línea las distingue de los filtros segmentados de arriba. */}
-        <Tabs value={vista} onValueChange={(v) => setVista(v as "general" | "activo" | "uso")} className="border-b">
+        <Tabs value={vista} onValueChange={(v) => setVista(v as typeof vista)} className="border-b">
           <TabsList variant="line" className="h-9">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="activo">Por activo</TabsTrigger>
             <TabsTrigger value="uso">Por uso</TabsTrigger>
+            <TabsTrigger value="bot">Rendimiento bot</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
 
-      {vista === "general" &&
+      {(vista === "general" || vista === "bot") &&
         (error && !data ? (
           <p className="text-sm text-destructive-text">No se pudieron cargar las métricas.</p>
-        ) : (
+        ) : vista === "general" ? (
           <General m={m} filtro={filtro} />
+        ) : (
+          <RendimientoBot m={m} />
         ))}
 
       {vista === "uso" && <MetricasUso filtro={filtro} />}

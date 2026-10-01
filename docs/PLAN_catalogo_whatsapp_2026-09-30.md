@@ -95,7 +95,7 @@ que hablarlo con el usuario.
 
 ## Pruebas
 
-- `flask-app/verificar_catalogo_whatsapp.py`: crea por `test_client` (con las
+- `entregables/OE3/pruebas/verificar_catalogo_whatsapp.py`: crea por `test_client` (con las
   credenciales del dashboard, como los otros verificar que usan endpoints) un
   equipo "PRUEBA LACS catálogo" → la respuesta trae `catalogo.estado ==
   "creado"`; `GET /catalog` de Baileys lo lista con su `retailerId`; crear otra

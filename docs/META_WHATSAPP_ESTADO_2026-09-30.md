@@ -113,7 +113,7 @@ Plan: [PLAN_baileys7_y_meta_2026-09-30.md](PLAN_baileys7_y_meta_2026-09-30.md).
     `timezone_id` 1); el dashboard asigna cada punto al día de su mediodía.
   - Los conteos llegan con unas horas de retraso.
   - Sin método de pago la cuenta no tiene moneda: el costo sale sin unidad.
-- **Pruebas**: `flask-app/verificar_meta_whatsapp.py` (sin llamar a Meta;
+- **Pruebas**: `entregables/OE3/pruebas/verificar_meta_whatsapp.py` (sin llamar a Meta;
   incluye los periodos inválidos de las métricas),
   más las regresiones `verificar_robustez_bot.py` y
   `verificar_celular_registro.py`. Todas pasan.

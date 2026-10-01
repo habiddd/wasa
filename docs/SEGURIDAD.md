@@ -174,8 +174,8 @@ flowchart TD
       expone detrás de un reverse proxy hay que validar ese header antes.
 
 ### Aplicación
-- [ ] Autenticación en los endpoints `/api/analytics/*` (hoy están abiertos;
-      agrega al menos una API key o sesión de admin).
+- [x] Autenticación en los endpoints `/api/analytics/*`: usan el mismo
+      Basic Auth que `/dashboard` (`routes/analytics.py`).
 - [ ] Mover el rate limiter de `guardrails.py` de memoria a Redis si vas a
       correr más de un worker de Gunicorn (con memoria, cada worker tiene
       su propio contador y el límite real se vuelve inconsistente).
@@ -184,9 +184,10 @@ flowchart TD
       falta validar esos datos contra algún padrón de Uninorte (ej. que el
       código de estudiante exista de verdad) en vez de aceptar lo que sea
       que el usuario escriba.
-- [ ] Logs sin datos sensibles innecesarios (evita loguear el cuerpo
-      completo de cada mensaje en texto plano de forma indefinida; define
-      una política de retención para `auditoria_bot`).
+- [x] Política de retención para `auditoria_bot`: a los
+      `AUDITORIA_RETENCION_DIAS` (180) se borran texto y teléfono y se
+      conservan los campos de las métricas. Ver
+      `entregables/OE4/POLITICA_RETENCION_AUDITORIA.md`.
 - [ ] Definir si la eliminación física desde el dashboard debe mantenerse
       para producción o reemplazarse por una cancelación lógica/auditable;
       el flujo actual elimina las líneas de `reservas` y su `reserva_grupos`

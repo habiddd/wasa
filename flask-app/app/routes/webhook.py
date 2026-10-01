@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import time
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request
 
 from app import (
     whatsapp_client,
@@ -112,6 +112,7 @@ def recibir_webhook():
 def _procesar_mensaje(numero: str, texto: str, remote_jid: str, pisar_jid: bool = True):
     """Cuerpo común a los dos canales (Baileys y Meta): guardrails,
     identidad, wizards, intent y respuesta. Devuelve la respuesta de Flask."""
+    g.inicio_mensaje = time.monotonic()  # latencia_ms en guardrails.registrar_interaccion
     # --- Guardrail 1: rate limiting por número ---
     if guardrails.excede_limite_mensajes(numero):
         guardrails.registrar_interaccion(

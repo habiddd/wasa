@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import holidays
 from flask import current_app
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app import fechas_bloqueadas_service, llm_client, registro_service
 from app.extensions import db
@@ -932,6 +932,14 @@ def crear_reservas_grupo(
     except IntegrityError:
         db.session.rollback()
         return None, "choque"
+    except OperationalError as e:
+        # Dos inserciones simultáneas que se solapan pueden bloquearse entre sí
+        # al revisar la EXCLUDE: Postgres aborta una con deadlock (40P01) en vez
+        # de violación de restricción. Es el mismo choque.
+        db.session.rollback()
+        if getattr(e.orig, "pgcode", None) == "40P01":
+            return None, "choque"
+        raise
     return reservas, None
 
 
