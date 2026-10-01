@@ -87,8 +87,12 @@ los submenús.
   salud de los servicios): submenú desplegable de dos entradas. "Estado"
   muestra el estado en vivo de Postgres, Redis, Baileys/WhatsApp, el LLM
   local y el propio Flask (se refresca solo cada 10s). "QR / WhatsApp"
-  muestra el código QR de vinculación mientras no esté conectado, o el
-  número vinculado una vez lo esté (se refresca solo cada 5s).
+  tiene el selector del canal (Baileys o la API oficial de Meta); con Meta
+  activo, las métricas de Meta por semana, mes, año o rango (gastos,
+  mensajes enviados, ventanas de 24 h, estado de la cuenta y plantillas);
+  y la sesión de Baileys: el código QR de vinculación mientras no esté
+  conectado, o el número vinculado una vez lo esté (se refresca solo cada
+  5s). Ver `docs/GUIA_META_WHATSAPP.md`.
 - **Métricas**: números sacados de los datos que ya guarda la base, para
   un periodo de 30 días, 90 días, todo, o un rango de fechas a elección
   ("Personalizado"). El periodo es uno solo para General y para las

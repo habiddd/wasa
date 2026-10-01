@@ -18,7 +18,9 @@ Todo está en la rama `dev` (commit `fe787b3`).
 | Plantilla `lacs_aviso` para avisos fuera de 24 h | ⏳ Creada, en revisión de Meta |
 | Recibir mensajes por Meta (webhook) | ✅ Llega por el túnel `lacs_tunel` (URL temporal) |
 | Número real de la LACS en la Cloud API | ❌ Hoy se usa el número de prueba de Meta |
-| Canal activo | **Baileys** (Meta configurado pero sin activar) |
+| Prueba completa por Meta (registro, reserva, cancelación) | ✅ Hecha por Habid el 2026-10-01: funciona igual que Baileys |
+| Canal activo | **Meta** desde el 2026-10-01 (Baileys sigue vinculado) |
+| Métricas de Meta en el dashboard | ✅ Gastos, envíos, ventanas de 24 h, cuenta y plantillas, por periodo |
 | Catálogo de WhatsApp desde el dashboard | ❌ No se pudo; ver abajo |
 
 ## 1. Baileys 7
@@ -70,11 +72,42 @@ Plan: [PLAN_baileys7_y_meta_2026-09-30.md](PLAN_baileys7_y_meta_2026-09-30.md).
 - **nginx** (`dashboard-frontend/nginx.conf`): expone solo
   `location = /webhook/meta` hacia Flask, sin usuario/contraseña (lo protege
   la firma). El resto de `/webhook/` sigue sin exponerse.
-- **Dashboard**: tarjeta "Canal de WhatsApp" en Servicios → "QR / WhatsApp",
-  con botones Baileys | Meta, estado de cada canal (Meta: número, nombre
-  verificado y calidad) y la lista de variables faltantes. Endpoint
-  `GET/PUT /dashboard/api/whatsapp/proveedor`.
-- **Pruebas**: `flask-app/verificar_meta_whatsapp.py` (sin llamar a Meta),
+- **Dashboard**: Servicios → "QR / WhatsApp" (página "WhatsApp"):
+  - Tarjeta **Canal de WhatsApp**: botones Baileys | Meta (el activo en
+    negro con ✓, no deshabilitado), qué canal se usa, y solo los avisos que
+    impiden elegir uno (variables faltantes en `.env`, Meta sin responder).
+    Endpoint `GET/PUT /dashboard/api/whatsapp/proveedor`.
+  - Tarjeta **API de Meta** (solo con Meta activo), endpoint
+    `GET /dashboard/api/whatsapp/meta/metricas?periodo=7|30|365|rango&desde=&hasta=`.
+    Periodos: Semana, Mes, Año y Personalizado (fechas civiles de la LACS).
+    Muestra, en este orden:
+    1. **Gastos**: costo total (de `pricing_analytics`), mensajes gratis y
+       con tarifa, barras por tipo de cobro.
+    2. **Mensajes enviados**: enviados y entregados (de `analytics`) y
+       gráfico por día (por mes si el rango pasa de 62 días).
+    3. **Ventanas de 24 h abiertas**: de Redis (`meta:ventana:<número>` y
+       su TTL), no de Meta.
+    4. **Número y cuenta**: número, nombre verificado, estado, calidad,
+       modo, límite de mensajes, velocidad, revisión, verificación del
+       negocio y si puede iniciar conversaciones; bloqueos traducidos al
+       español con enlace a la configuración del negocio de Meta.
+    5. **Plantillas** con estado (oculta las de ejemplo `jaspers_market_*`).
+    Lo del periodo son las secciones 1 y 2; el resto es el estado actual.
+    Se refresca cada minuto (tres consultas a la Graph API por carga).
+  - Tarjeta **Sesión de Baileys**: número vinculado o QR, siempre visible.
+- **Límites de las estadísticas de Meta** (probados el 2026-10-01):
+  - Solo los **últimos 365 días** (error 2388336 si el inicio cae en el
+    borde: se usa 365 días menos una hora). El endpoint responde 400 si el
+    rango es más viejo.
+  - Con granularidad mensual (`MONTH`/`MONTHLY`) Meta **omite el mes en
+    curso**; por eso siempre se pide por día y se agrupa por mes en el
+    navegador.
+  - Los días de Meta empiezan a medianoche del Pacífico (zona de la cuenta,
+    `timezone_id` 1); el dashboard asigna cada punto al día de su mediodía.
+  - Los conteos llegan con unas horas de retraso.
+  - Sin método de pago la cuenta no tiene moneda: el costo sale sin unidad.
+- **Pruebas**: `flask-app/verificar_meta_whatsapp.py` (sin llamar a Meta;
+  incluye los periodos inválidos de las métricas),
   más las regresiones `verificar_robustez_bot.py` y
   `verificar_celular_registro.py`. Todas pasan.
 - Versión de la Graph API: **v25.0** (la que usa hoy el panel de Meta).
@@ -118,7 +151,7 @@ Variables en `.env` (valores fuera de este documento): `WHATSAPP_PROVEEDOR_DEFAU
 
 1. **Aprobación de `lacs_aviso`.** Revisar su estado (WhatsApp Manager →
    Plantillas). Sin ella, los avisos a quien no escribió en 24 h no salen.
-2. **Probar texto libre desde el código del bot.** Habid le escribe "hola"
+2. ~~**Probar texto libre desde el código del bot.**~~ Hecho el 2026-10-01. Habid le escribe "hola"
    al +1 555 173 6097 (abre la ventana de 24 h en Meta) y se llama a la rama
    Meta de `whatsapp_client`.
 3. **URL pública con HTTPS** para `/webhook/meta`. Hecho el 2026-10-01:
@@ -134,7 +167,7 @@ Variables en `.env` (valores fuera de este documento): `WHATSAPP_PROVEEDOR_DEFAU
    por la API; la app Lacs quedó en `subscribed_apps` de la cuenta. Un
    "hola" de Habid llegó a las 14:38 con firma válida, **con la app sin
    publicar**. Publicarla hará falta para el número real.
-5. **Prueba completa por Meta**: cambiar el canal en Servicios y hacer
+5. ~~**Prueba completa por Meta**~~ Hecha el 2026-10-01: cambiar el canal en Servicios y hacer
    registro, reserva y avisos.
 6. **Número real de la LACS.** El 573245927008 está en la app Business y
    vinculado a Baileys. Para usarlo en la Cloud API hay que agregarlo con la

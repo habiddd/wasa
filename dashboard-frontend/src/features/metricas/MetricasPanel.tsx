@@ -217,12 +217,15 @@ export function Columnas({
   ejeCada = 1,
   ejeAngosto = 1,
   unidad = reservas,
+  desdeElFinal = false,
 }: {
   datos: Punto[]
   titulo: string
   ejeCada?: number
   ejeAngosto?: number
   unidad?: (n: number) => string
+  /** Cuenta los rótulos del eje desde la última barra, para que siempre se rotule. */
+  desdeElFinal?: boolean
 }) {
   const [hover, setHover] = useState<number | null>(null)
   const max = Math.max(1, ...datos.map((d) => d.total))
@@ -232,8 +235,12 @@ export function Columnas({
   const valores = datos.length <= 12 ? "" : datos.length <= 45 ? "hidden @3xl:block" : "hidden"
   const alto = (v: number) => `${(v / tope) * 100}%`
   // Con el eje salteado, la primera y la última fecha rotuladas se alinean hacia adentro para no salirse.
+  // `pos` es la posición desde donde se cuentan los rótulos: el inicio, o el final con `desdeElFinal`.
+  const pos = (idx: number) => (desdeElFinal ? datos.length - 1 - idx : idx)
   const ultima = Math.floor((datos.length - 1) / ejeCada) * ejeCada
-  const alinear = (idx: number) => (ejeCada === 1 ? "justify-center" : idx === 0 ? "justify-start" : idx === ultima ? "justify-end" : "justify-center")
+  const [bordeInicio, bordeFin] = desdeElFinal ? ["justify-end", "justify-start"] : ["justify-start", "justify-end"]
+  const alinear = (idx: number) =>
+    ejeCada === 1 ? "justify-center" : pos(idx) === 0 ? bordeInicio : pos(idx) === ultima ? bordeFin : "justify-center"
 
   return (
     <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 pt-4">
@@ -299,7 +306,7 @@ export function Columnas({
             className={cn(
               "flex min-w-0 flex-1 whitespace-nowrap",
               alinear(idx),
-              idx % ejeCada ? "invisible" : idx % ejeAngosto ? "@max-4xl:invisible" : "",
+              pos(idx) % ejeCada ? "invisible" : pos(idx) % ejeAngosto ? "@max-4xl:invisible" : "",
             )}
           >
             {d.eje}

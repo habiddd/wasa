@@ -358,15 +358,51 @@ def _errores_salud(salud: dict) -> list[str]:
     ]
 
 
+_PERIODOS_META = {"7": 7, "30": 30, "365": 365}
+# Meta solo entrega estadísticas de los últimos 365 días (error 2388336 si la
+# fecha de inicio cae justo en el borde): se deja una hora de margen.
+_MAX_ATRAS_META = timedelta(days=365) - timedelta(hours=1)
+
+
+def _periodo_meta() -> tuple[int, int]:
+    """(inicio, fin) en segundos Unix del query string; ValueError con el mensaje si es inválido.
+    Con periodo=rango, `desde` y `hasta` son fechas civiles de la LACS, ambas incluidas."""
+    ahora = datetime.now(timezone.utc)
+    limite = ahora - _MAX_ATRAS_META
+    periodo = request.args.get("periodo", "30")
+    if periodo == "rango":
+        try:
+            d, h = _fecha_civil(request.args.get("desde")), _fecha_civil(request.args.get("hasta"))
+        except ValueError:
+            raise ValueError("desde y hasta son obligatorios con periodo=rango y deben tener formato YYYY-MM-DD") from None
+        if h < d:
+            raise ValueError("hasta no puede ser anterior a desde")
+        zona = recursos_service.ZONA_HORARIA_LACS
+        inicio = datetime(d.year, d.month, d.day, tzinfo=zona)
+        sig = h + timedelta(days=1)
+        fin = min(datetime(sig.year, sig.month, sig.day, tzinfo=zona), ahora)
+        if inicio < limite:
+            raise ValueError("Meta solo guarda las estadísticas de los últimos 365 días.")
+        if inicio >= fin:
+            raise ValueError("El rango todavía no ha empezado.")
+    elif periodo in _PERIODOS_META:
+        inicio, fin = max(ahora - timedelta(days=_PERIODOS_META[periodo]), limite), ahora
+    else:
+        raise ValueError("periodo debe ser 7, 30, 365 o rango")
+    return int(inicio.timestamp()), int(fin.timestamp())
+
+
 @bp.route("/api/whatsapp/meta/metricas")
 def api_metricas_meta():
-    """Datos del número y la cuenta de Meta, uso y costo de los últimos 30 días,
+    """Datos del número y la cuenta de Meta, uso y costo del periodo pedido,
     plantillas y ventanas de 24 h abiertas (estas salen de Redis, no de Meta)."""
     if whatsapp_client.meta_faltantes():
         return jsonify({"error": "Meta no está configurado."}), 400
+    try:
+        inicio, fin = _periodo_meta()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     cfg = current_app.config
-    fin = int(datetime.now(timezone.utc).timestamp())
-    inicio = fin - 30 * 86400
     try:
         numero = _graph(
             cfg["META_WA_PHONE_NUMBER_ID"],
@@ -418,12 +454,12 @@ def api_metricas_meta():
             "puede_iniciar": (cuenta.get("health_status") or {}).get("can_send_message"),
             "bloqueos": _errores_salud(cuenta.get("health_status")),
         },
-        "uso_30_dias": {
+        "uso": {
             "enviados": sum(p.get("sent", 0) for p in por_dia),
             "entregados": sum(p.get("delivered", 0) for p in por_dia),
             "por_dia": [{"dia": p["start"], "enviados": p.get("sent", 0), "entregados": p.get("delivered", 0)} for p in por_dia],
         },
-        "costos_30_dias": {
+        "costos": {
             "total": sum(f["costo"] for f in costos.values()),
             "detalle": sorted(costos.values(), key=lambda f: -f["mensajes"]),
         },
@@ -432,6 +468,11 @@ def api_metricas_meta():
         ],
         "ventanas_abiertas": ventanas,
         "consultado_en": datetime.now(timezone.utc).isoformat(),
+        # Fechas civiles de la LACS que cubre la consulta, para armar el eje del gráfico.
+        "periodo": {
+            "desde": datetime.fromtimestamp(inicio, recursos_service.ZONA_HORARIA_LACS).date().isoformat(),
+            "hasta": datetime.fromtimestamp(fin - 1, recursos_service.ZONA_HORARIA_LACS).date().isoformat(),
+        },
     })
 
 

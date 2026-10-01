@@ -226,9 +226,10 @@ dashboard da error 502.
 
 ## 11. Comprobar y activar
 
-1. Dashboard → **Servicios → QR / WhatsApp → Canal de WhatsApp**: Meta debe
-   salir **configurado**, con el número, el nombre verificado y la calidad.
-   Si falta algo, la tarjeta lista qué variables faltan.
+1. Dashboard → **Servicios → QR / WhatsApp → Canal de WhatsApp**: el botón
+   **Meta (API oficial)** debe estar habilitado. Si falta algo, la tarjeta
+   lista qué variables de `.env` faltan; si Meta no responde (token o ids
+   malos), muestra el error de Meta.
 2. Prueba de envío con la plantilla de ejemplo de Meta:
    ```
    curl -X POST "https://graph.facebook.com/v25.0/<PHONE_NUMBER_ID>/messages" \
@@ -240,7 +241,16 @@ dashboard da error 502.
 4. Escribirle "hola" al número de Meta y recorrer registro → reserva →
    cancelación. Revisar `auditoria_bot` (dashboard) para ver cada mensaje y
    su estado de entrega.
-5. Para volver a Baileys, el mismo switch. Siempre está permitido.
+5. Con Meta activo aparece la tarjeta **API de Meta**, con periodo Semana,
+   Mes, Año o Personalizado: gastos, mensajes enviados y entregados (con
+   gráfico), ventanas de 24 h abiertas, estado del número y la cuenta (y
+   qué bloquea los envíos, con enlace para resolverlo) y plantillas. Sirve
+   para confirmar que llegan los conteos y que la cuenta no tiene bloqueos.
+   Meta solo guarda los últimos 365 días y suma los conteos con unas horas
+   de retraso.
+6. Para volver a Baileys, el mismo switch. Siempre está permitido. La sesión
+   de Baileys sigue vinculada mientras se usa Meta (tarjeta "Sesión de
+   Baileys").
 
 ## 12. Pasar al número real
 

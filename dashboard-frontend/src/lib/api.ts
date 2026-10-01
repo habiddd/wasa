@@ -121,22 +121,31 @@ export type MetricasMeta = {
     puede_iniciar: string | null
     bloqueos: string[]
   }
-  uso_30_dias: {
+  uso: {
     enviados: number
     entregados: number
     por_dia: { dia: number; enviados: number; entregados: number }[]
   }
-  costos_30_dias: {
+  costos: {
     total: number
     detalle: { categoria: string; tipo: string; mensajes: number; costo: number }[]
   }
   plantillas: { name: string; status: string; category: string; language: string }[]
   ventanas_abiertas: { numero: string; segundos_restantes: number }[]
   consultado_en: string
+  periodo: { desde: string; hasta: string }
 }
 
-export function fetchMetricasMeta() {
-  return request<MetricasMeta>("/whatsapp/meta/metricas")
+export type PeriodoMeta = "7" | "30" | "365" | "rango"
+export type FiltroMeta = { periodo: PeriodoMeta; desde?: string; hasta?: string }
+
+export function fetchMetricasMeta({ periodo, desde, hasta }: FiltroMeta) {
+  const q = new URLSearchParams({ periodo })
+  if (periodo === "rango" && desde && hasta) {
+    q.set("desde", desde)
+    q.set("hasta", hasta)
+  }
+  return request<MetricasMeta>(`/whatsapp/meta/metricas?${q}`)
 }
 
 // --- Métricas --------------------------------------------------------------

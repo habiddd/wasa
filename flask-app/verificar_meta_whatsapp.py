@@ -138,6 +138,23 @@ with app.app_context():
         assert r.get_json() == {"status": "ignorado_proveedor"}, r.get_json()
         assert not Usuario.query.filter_by(telefono_wa=NUM2).count()
         print("webhook Baileys con Meta activo: ignorado_proveedor")
+
+        # Periodos inválidos de las métricas de Meta: se rechazan antes de consultar la Graph API
+        from base64 import b64encode
+        from datetime import date, timedelta
+        auth = {"Authorization": "Basic " + b64encode(
+            f"{app.config.get('DASHBOARD_USER', '')}:{app.config.get('DASHBOARD_PASSWORD', '')}".encode()).decode()}
+        hoy = date.today()
+        for q, error in (
+            ("periodo=99", "periodo debe ser"),
+            (f"periodo=rango&desde={hoy}&hasta={hoy - timedelta(days=3)}", "anterior a desde"),
+            (f"periodo=rango&desde={hoy - timedelta(days=400)}&hasta={hoy}", "últimos 365 días"),
+            (f"periodo=rango&desde={hoy + timedelta(days=3)}&hasta={hoy + timedelta(days=5)}", "no ha empezado"),
+            ("periodo=rango&desde=ayer&hasta=hoy", "YYYY-MM-DD"),
+        ):
+            r = c.get(f"/dashboard/api/whatsapp/meta/metricas?{q}", headers=auth)
+            assert r.status_code == 400 and error in r.get_json()["error"], (q, r.status_code, r.get_json())
+        print("periodos inválidos de métricas Meta: 400")
         print("OK")
     finally:
         W.requests.post = post_real
