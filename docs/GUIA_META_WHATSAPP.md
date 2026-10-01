@@ -92,7 +92,8 @@ La primera vez, el número de prueba puede responder
 `#133010 Account not registered`. Para destrabarlo:
 
 1. En **Paso 1. Pruébalo** → **Generar token** (temporal, solo para esa
-   página) → **Enviar mensaje** al destinatario verificado.
+   página) → **Enviar mensaje** al destinatario verificado. Ese token
+   **no** va en `.env`: es de usuario y vence en horas.
 2. Si aun así sale `133010`, registrarlo por la API con un PIN de 6 dígitos
    (queda como verificación en dos pasos del número; anotarlo en `.env` como
    `META_WA_PIN`):
@@ -133,8 +134,28 @@ con HTTPS:
   `http://dashboard-frontend:80`. Sin cuenta ("quick tunnel") la URL cambia
   en cada reinicio; con un dominio en Cloudflare es fija.
 
+Quick tunnel (lo que se usa hoy). Es un contenedor aparte, fuera de
+`docker-compose.yml` y del repo, y no necesita credenciales:
+
+```
+docker run -d --name lacs_tunel --restart unless-stopped --network lacs-reservas-bot_backend cloudflare/cloudflared:latest tunnel --no-autoupdate --url http://dashboard-frontend:80
+docker logs lacs_tunel 2>&1 | grep trycloudflare
+```
+
+El segundo comando muestra la URL (`https://<algo>.trycloudflare.com`). Si
+el contenedor se reinicia (o Docker), la URL cambia y hay que actualizarla
+en Meta (paso 9).
+
+Comprobar antes de ir a Meta (debe responder `12345`; con un token falso,
+403):
+
+```
+curl "https://<url>/webhook/meta?hub.mode=subscribe&hub.verify_token=<META_WEBHOOK_VERIFY_TOKEN>&hub.challenge=12345"
+```
+
 **No** apuntar el túnel directo a `flask-app:5000`: expondría
-`/webhook/whatsapp` (Baileys), que no tiene autenticación.
+`/webhook/whatsapp` (Baileys), que no tiene autenticación. A través de nginx
+esa ruta da 404.
 
 La URL final del webhook es `https://<dominio>/webhook/meta`.
 
@@ -146,10 +167,35 @@ La URL final del webhook es `https://<dominio>/webhook/meta`.
    **Token de verificación**: el `META_WEBHOOK_VERIFY_TOKEN`.
    → **Verificar y guardar**. Meta hace un `GET` y Flask responde el
    `hub.challenge` si el token coincide.
-3. **Campos del webhook** → suscribirse a **messages**.
-4. Suscribir la app a la cuenta de WhatsApp (si el panel no lo hizo):
+3. **Campos del webhook** → suscribirse a **messages**. **Ojo:** el
+   "Verificar y guardar" de **Paso 2: Configuración de producción** guarda
+   la URL pero puede dejar la suscripción **sin ningún campo**, y entonces
+   no llega nada. Comprobarlo con el token de la app
+   (`<APP_ID>|<META_APP_SECRET>`):
+   `GET https://graph.facebook.com/v25.0/<APP_ID>/subscriptions?access_token=<APP_ID>|<APP_SECRET>`
+   → en `fields` debe aparecer `messages`. Si sale vacío, suscribirlo por
+   la API (mismos URL y verify token):
+   `POST https://graph.facebook.com/v25.0/<APP_ID>/subscriptions` con
+   `object=whatsapp_business_account`, `callback_url=<URL>`,
+   `verify_token=<META_WEBHOOK_VERIFY_TOKEN>`, `fields=messages` y el mismo
+   `access_token`.
+4. Suscribir la app a la cuenta de WhatsApp:
    `POST https://graph.facebook.com/v25.0/<WABA_ID>/subscribed_apps` con el
-   token del usuario del sistema.
+   token del usuario del sistema. Comprobar con un `GET` al mismo endpoint
+   que la app (p. ej. **Lacs**) aparece en la lista; la "WA DevX Webhook
+   Events 1P App" es la app de pruebas de Meta y no cuenta.
+5. Probar: escribirle "hola" al número desde el celular verificado. En
+   `docker logs lacs_dashboard_frontend` debe aparecer un
+   `POST /webhook/meta ... 200` con agente `facebookexternalua`.
+
+**App sin publicar.** El panel avisa que mientras la app no esté publicada
+solo llegan los webhooks de prueba. En la práctica (2026-10-01), con el
+número de prueba, los mensajes del destinatario verificado **sí llegaron**
+sin publicar la app. Para el número real y usuarios cualquiera hay que
+publicarla (pide URL de política de privacidad e ícono).
+
+Los mensajes que llegan mientras no hay campo suscrito o el webhook está
+caído se pierden (Meta no los reenvía después).
 
 ## 10. Cargar la configuración en el bot
 
@@ -219,6 +265,8 @@ dashboard da error 502.
 | El token no ve la cuenta de WhatsApp | La cuenta no está asignada al usuario del sistema como activo. |
 | Los avisos no salen por Meta | Plantilla sin aprobar o `META_PLANTILLA_AVISO` vacío; o el usuario solo tiene JID `@lid` sin número. |
 | Error `131047` al enviar texto | Fuera de la ventana de 24 h: debe salir como plantilla. |
+| Webhook verificado pero no llega ningún mensaje | La suscripción quedó sin el campo `messages`, o la app no está en `subscribed_apps` de la cuenta. Ver paso 9. |
+| Dejó de llegar todo de un día para otro | Se reinició `lacs_tunel` y cambió la URL del quick tunnel. Sacar la nueva (paso 8) y actualizarla en Meta. |
 | Meta no verifica el webhook | URL sin HTTPS válido, `META_WEBHOOK_VERIFY_TOKEN` distinto o Flask sin recrear tras editar `.env`. |
 | Webhook responde 403 | Firma inválida: `META_APP_SECRET` no es el de la app que envía. |
 | Personas sin número en el webhook | Usan nombre de usuario de WhatsApp; Meta manda solo su BSUID. El bot les pide el número. |

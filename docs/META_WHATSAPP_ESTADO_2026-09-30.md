@@ -5,7 +5,7 @@ reservas de la LACS pueda usar la **WhatsApp Cloud API de Meta** además de
 Baileys, qué quedó funcionando y qué falta. El paso a paso completo, para
 repetirlo desde cero, está en [GUIA_META_WHATSAPP.md](GUIA_META_WHATSAPP.md).
 
-Nada de esto tiene commit todavía (rama `dev`).
+Todo está en la rama `dev` (commit `fe787b3`).
 
 ## Resumen
 
@@ -16,7 +16,7 @@ Nada de esto tiene commit todavía (rama `dev`).
 | Credenciales de Meta en `.env` | ✅ Completas |
 | Envío por la API oficial | ✅ Probado (`hello_world` llegó a Habid) |
 | Plantilla `lacs_aviso` para avisos fuera de 24 h | ⏳ Creada, en revisión de Meta |
-| Recibir mensajes por Meta (webhook) | ❌ Falta una URL pública con HTTPS |
+| Recibir mensajes por Meta (webhook) | ✅ Llega por el túnel `lacs_tunel` (URL temporal) |
 | Número real de la LACS en la Cloud API | ❌ Hoy se usa el número de prueba de Meta |
 | Canal activo | **Baileys** (Meta configurado pero sin activar) |
 | Catálogo de WhatsApp desde el dashboard | ❌ No se pudo; ver abajo |
@@ -121,15 +121,19 @@ Variables en `.env` (valores fuera de este documento): `WHATSAPP_PROVEEDOR_DEFAU
 2. **Probar texto libre desde el código del bot.** Habid le escribe "hola"
    al +1 555 173 6097 (abre la ventana de 24 h en Meta) y se llama a la rama
    Meta de `whatsapp_client`.
-3. **URL pública con HTTPS** para `/webhook/meta`. Propuesta: túnel de
-   Cloudflare (`cloudflared`) en un contenedor apuntando a nginx; publica el
-   dashboard (con usuario/contraseña) y `/webhook/meta`. La versión gratis
-   cambia de URL al reiniciar; para una fija hace falta un dominio en
-   Cloudflare. Pendiente de decisión del usuario.
-4. **Registrar el webhook en Meta**: URL de devolución de llamada, verify
-   token, campo `messages`, y suscribir la app a la cuenta de WhatsApp
-   (`POST /<WABA_ID>/subscribed_apps`; hoy solo está suscrita la app interna
-   de pruebas de Meta).
+3. **URL pública con HTTPS** para `/webhook/meta`. Hecho el 2026-10-01:
+   contenedor `lacs_tunel` (quick tunnel de Cloudflare, fuera del
+   `docker-compose.yml` y del repo, sin credenciales) apuntando a
+   `dashboard-frontend:80`. Se creó con
+   `docker run -d --name lacs_tunel --restart unless-stopped --network lacs-reservas-bot_backend cloudflare/cloudflared:latest tunnel --no-autoupdate --url http://dashboard-frontend:80`.
+   La URL (`docker logs lacs_tunel 2>&1 | grep trycloudflare`) **cambia si el
+   contenedor se reinicia**: hay que actualizarla en Meta. Para una fija hace
+   falta un dominio en Cloudflare.
+4. ~~**Registrar el webhook en Meta**~~ Hecho el 2026-10-01: Meta verificó
+   la URL; el panel dejó la suscripción sin campos y se agregó `messages`
+   por la API; la app Lacs quedó en `subscribed_apps` de la cuenta. Un
+   "hola" de Habid llegó a las 14:38 con firma válida, **con la app sin
+   publicar**. Publicarla hará falta para el número real.
 5. **Prueba completa por Meta**: cambiar el canal en Servicios y hacer
    registro, reserva y avisos.
 6. **Número real de la LACS.** El 573245927008 está en la app Business y
@@ -139,7 +143,6 @@ Variables en `.env` (valores fuera de este documento): `WHATSAPP_PROVEEDOR_DEFAU
    pago en la cuenta.
 7. **Soporte completo de BSUID** (usuarios con nombre de usuario): columna
    nueva en `usuarios`.
-8. **Commits** de todo lo de hoy.
 
 ## 6. Catálogo de WhatsApp (intentado, no resuelto)
 
