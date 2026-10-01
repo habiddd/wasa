@@ -3,16 +3,23 @@
 Scaffold inicial para el bot de reservas de equipos/espacios de la LACS
 (Uninorte) por WhatsApp, con IA local y back-office de analítica.
 
-**Diseño clave:** el canal de WhatsApp corre sobre **Baileys** (WhatsApp Web
-no oficial, gratuito), que conecta directamente a WhatsApp mediante WebSocket
-sin necesidad de la API oficial de Meta. Tu backend Flask recibe los mensajes
-por webhook desde el servicio de Baileys, aplica guardrails, consulta al LLM
-local y responde por WhatsApp.
+**Diseño clave:** el canal de WhatsApp tiene dos proveedores y se elige cuál
+está activo desde el dashboard (Servicios → QR / WhatsApp), sin reiniciar:
+
+- **Baileys** (WhatsApp Web no oficial, gratuito): se vincula escaneando un QR.
+- **API oficial de Meta** (WhatsApp Cloud API): Meta llama al webhook
+  `/webhook/meta`, firmado con el App Secret. Fuera de la ventana de 24 h
+  solo se puede escribir con una plantilla aprobada.
+
+Flask recibe los mensajes por webhook, aplica guardrails, consulta al LLM
+local y responde por el canal activo. El webhook del otro proveedor ignora
+los mensajes.
 
 ```
-WhatsApp (tu número) → Baileys Bot → webhook → Flask → Postgres
-                                                     ↓
-                                              LLM local (Ollama/LM Studio)
+WhatsApp → Baileys Bot ──┐
+                         ├→ webhook → Flask → Postgres
+WhatsApp → Meta Cloud ───┘              ↓
+                                 LLM local (Ollama/LM Studio)
 ```
 
 ## 1. Requisitos previos
@@ -262,22 +269,30 @@ npm install
 npm run dev   # sirve en http://localhost:5173/dashboard/, con proxy hacia Flask :5000
 ```
 
-## 6. Migrar a la API oficial de Meta (cuando estés listo para producción)
+## 6. Canal oficial de Meta (WhatsApp Cloud API)
 
-Si en el futuro quieres migrar a la API oficial de Meta:
+El canal de Meta ya está integrado junto a Baileys. Para activarlo:
 
-1. Completa la verificación de negocio de Meta (Meta Business Manager +
-   WhatsApp Business Platform) — este trámite puede tardar días, empiézalo
-   con tiempo.
-2. Reemplaza el servicio `baileys-bot` en `docker-compose.yml` con
-   Evolution API (configuración con `WA_BUSINESS_TOKEN` y
-   `WA_BUSINESS_URL`).
-3. Actualiza `flask-app/app/whatsapp_client.py` para usar la API de
-   Evolution en lugar de Baileys.
-4. Diseña tus respuestas como **flujo guiado** (botones/listas, no chat
-   libre) — así calzas con la política de Meta vigente desde enero 2026,
-   que permite bots de reservas/soporte con resultados predecibles, pero
-   prohíbe chatbots de IA conversacional abierta en la Cloud API.
+1. Sigue `docs/GUIA_META_WHATSAPP.md`: app de Meta, token permanente de
+   usuario del sistema, webhook y plantilla. Lo que falta para producción
+   (número real, verificación del negocio, método de pago, publicar la app)
+   está en `docs/META_WHATSAPP_ESTADO_2026-09-30.md`.
+2. Llena las variables `META_*` en `.env` (ver `.env.example`). Todas las
+   credenciales van solo ahí, nunca en el código.
+3. Meta necesita una URL pública con HTTPS para `/webhook/meta`. En
+   desarrollo se usa un túnel de Cloudflare (paso 8 de la guía). Su URL
+   cambia cada vez que el túnel se reinicia, y entonces hay que actualizarla
+   en Meta.
+4. En el dashboard, Servicios → QR / WhatsApp, elige **Meta**. Ahí mismo
+   aparecen sus métricas: gastos, mensajes enviados, ventanas de 24 h
+   abiertas, estado del número y de la cuenta, y plantillas.
+5. Prueba: `docker exec -i lacs_flask_app python - < flask-app/verificar_meta_whatsapp.py`
+   (no llama a Meta ni manda mensajes).
+
+La política de Meta vigente desde enero de 2026 permite bots de reservas y
+soporte con resultados predecibles, pero prohíbe los chatbots de IA
+conversacional abierta en la Cloud API: mantén las respuestas como un
+**flujo guiado**.
 
 ## 7. Qué ya incluye este scaffold
 
@@ -296,7 +311,7 @@ Si en el futuro quieres migrar a la API oficial de Meta:
   de tu back-office.
 - Dashboard interno en `/dashboard` con estado de servicios, QR y
   métricas (ver sección 5).
-- Separación clara: canal (Baileys) / lógica de negocio (Flask) /
+- Separación clara: canal (Baileys o Meta) / lógica de negocio (Flask) /
   IA (LLM local) — para que cada pieza se pueda reemplazar sin romper
   las demás.
 
@@ -337,7 +352,7 @@ lacs-reservas-bot/
 │   │   ├── whatsapp_client.py
 │   │   ├── llm_client.py
 │   │   └── routes/
-│   │       ├── webhook.py       # recibe mensajes de WhatsApp
+│   │       ├── webhook.py       # recibe mensajes de WhatsApp (Baileys y /webhook/meta)
 │   │       ├── analytics.py     # endpoints de analítica
 │   │       └── dashboard.py     # API del panel de monitoreo (/dashboard/api/*)
 │   └── wsgi.py
