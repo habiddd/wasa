@@ -1,6 +1,6 @@
 # OE1 — Caracterizar el proceso actual y construir el modelo de datos relacional
 
-**Repositorio:** _______________________________________________
+**Repositorio:** [github.com/habiddd/wasa](https://github.com/habiddd/wasa)
 
 ## Entregable 1: repositorio con los scripts DDL y las migraciones versionadas
 

@@ -7,7 +7,7 @@ Samudio (LACS) — Universidad del Norte**
 Practicante: Habid Abdala Navarro · Ingeniería Electrónica · 200085000
 Jefe inmediato: Carlos Barrios Márquez, Coordinador de Producción
 
-**Repositorio del código fuente:** _______________________________________________
+**Repositorio del código fuente:** [github.com/habiddd/wasa](https://github.com/habiddd/wasa)
 
 Esta carpeta reúne, por objetivo específico, los entregables comprometidos en
 el anteproyecto. El código fuente no se duplica aquí: cada documento indica la

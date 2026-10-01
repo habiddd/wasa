@@ -1,6 +1,6 @@
 # OE3 — Lógica de negocio de reservas con validación transaccional y confirmación explícita
 
-**Repositorio:** _______________________________________________
+**Repositorio:** [github.com/habiddd/wasa](https://github.com/habiddd/wasa)
 
 ## Entregable 1: módulo de reservas en operación
 

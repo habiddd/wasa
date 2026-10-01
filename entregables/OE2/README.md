@@ -1,6 +1,6 @@
 # OE2 — Implementar el asistente conversacional sobre WhatsApp con clasificación de intenciones
 
-**Repositorio:** _______________________________________________
+**Repositorio:** [github.com/habiddd/wasa](https://github.com/habiddd/wasa)
 
 ## Entregable 1: servicio de mensajería integrado con la pasarela de WhatsApp, en operación y con sesión persistente
 
