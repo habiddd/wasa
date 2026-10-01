@@ -13,12 +13,14 @@ from app.extensions import db
 from app.models import Reserva, ReservaGrupo, Usuario
 
 
-def obtener_o_crear_usuario(telefono_wa: str, jid_wa: str | None = None) -> Usuario:
+def obtener_o_crear_usuario(telefono_wa: str, jid_wa: str | None = None, pisar_jid: bool = True) -> Usuario:
     """`jid_wa` es el JID completo del mensaje entrante. Se guarda (o se
     actualiza si cambió) para poder escribirle después sin un mensaje suyo
-    al que responder -- ver Usuario.jid_wa."""
+    al que responder -- ver Usuario.jid_wa. Con `pisar_jid=False` (Meta) no se
+    reemplaza un JID ya guardado. Un JID "@bsuid" (persona de Meta sin número
+    visible) se trata igual que un "@lid": se busca por `jid_wa`."""
     usuario = Usuario.query.filter_by(telefono_wa=telefono_wa).first()
-    if not usuario and jid_wa and jid_wa.endswith("@lid"):
+    if not usuario and jid_wa and jid_wa.endswith(("@lid", "@bsuid")):
         usuario = Usuario.query.filter_by(jid_wa=jid_wa).first()
         # Si `telefono_wa` es el propio LID, este mensaje llegó sin
         # `senderPn` (WhatsApp no siempre lo manda, a veces ni en el mismo
@@ -31,7 +33,9 @@ def obtener_o_crear_usuario(telefono_wa: str, jid_wa: str | None = None) -> Usua
             usuario.celular_escrito = False  # ahora sí vino de WhatsApp
             db.session.commit()
     if usuario:
-        if jid_wa and usuario.jid_wa != jid_wa:
+        # Meta no pisa el JID de Baileys (@lid); sí rellena uno vacío, para que
+        # asignar_celular no tome la fila por una del dashboard.
+        if jid_wa and usuario.jid_wa != jid_wa and (pisar_jid or not usuario.jid_wa):
             usuario.jid_wa = jid_wa
             db.session.commit()
         return usuario
@@ -54,10 +58,11 @@ def normalizar_telefono(valor: str) -> str | None:
 
 
 def telefono_es_lid(usuario: Usuario) -> bool:
-    """True si la persona escribe por JID "@lid" y aún no tenemos su número
-    real: `telefono_wa` es el propio LID (ver obtener_o_crear_usuario)."""
+    """True si la persona escribe por JID "@lid" (o "@bsuid" de Meta) y aún no
+    tenemos su número real: `telefono_wa` es el propio LID/BSUID (ver
+    obtener_o_crear_usuario)."""
     jid = usuario.jid_wa or ""
-    return jid.endswith("@lid") and usuario.telefono_wa == jid.split("@")[0]
+    return jid.endswith(("@lid", "@bsuid")) and usuario.telefono_wa == jid.split("@")[0]
 
 
 def asignar_celular(usuario: Usuario, telefono_normalizado: str) -> Usuario | None:

@@ -1180,6 +1180,11 @@ def mensaje_aviso_devolucion(reservas: list[Reserva], minutos: int) -> str:
 
 
 PALABRAS_CANCELAR = {"no", "cancelar", "cancela", "cerrar"}
+# "reservas?\b" no matchea "reservar": "tengo que reservar" no entra.
+_PATRON_VER_RESERVAS = re.compile(
+    r"\bmis\s+reservas?\b|\b(?:que|cuales|cuantas)\s+reservas?\b"
+    r"|\btengo\s+(?:algo\s+|alguna\s+|algunas\s+)?reserv(?:as?|ado|ada)\b"
+    r"|\breservas?\s+(?:tengo|activas)\b")
 
 _DIAS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
@@ -1634,6 +1639,15 @@ def _interpretar_opcion(texto_usuario: str, opciones: list[tuple[str, str]]) -> 
         return opciones[idx][0] if 0 <= idx < len(opciones) else None
 
     texto_norm = _normalizar(texto)
+    # Menús Sí/No: un sí o un no explícito basta ("si correcto", "no gracias"),
+    # salvo que traiga fecha/hora/dígitos ("no, el viernes"): eso lo reinterpreta
+    # cada paso en vez de aceptarlo o descartarlo a ciegas.
+    tokens = set(re.findall(r"[a-z]+", texto_norm))
+    if ({v for v, _ in opciones} == {"si", "no"} and tokens & (_SI_EXPLICITO | _NO_EXPLICITO)
+            and not re.search(r"\d", texto) and not _extraer_detalles_de_texto(texto)):
+        r = _interpretar_si_no(texto)
+        if r is not None:
+            return "si" if r else "no"
     coincidencias = [
         valor
         for valor, etiqueta in opciones
@@ -1642,7 +1656,20 @@ def _interpretar_opcion(texto_usuario: str, opciones: list[tuple[str, str]]) -> 
         if _normalizar(etiqueta) in texto_norm
         or re.search(rf"\b{re.escape(texto_norm)}", _normalizar(etiqueta))
     ]
-    return coincidencias[0] if len(coincidencias) == 1 else None
+    if coincidencias:
+        return coincidencias[0] if len(coincidencias) == 1 else None
+    # Sin coincidencia: raíces de palabras ("confirmala" -> Confirmar, "cambia
+    # la fecha" -> Cambiar fecha). Gana el puntaje máximo si es único.
+    # ponytail: raíces por prefijo, sin stemmer; basta para verbos -ar con enclítico.
+    palabras = [w for w in tokens if len(w) >= 4 and w not in PALABRAS_VACIAS_DESCRIPCION]
+    puntajes = []
+    for valor, etiqueta in opciones:
+        raices = [p[:max(4, len(p) - 2)] for p in re.findall(r"[a-z]+", _normalizar(etiqueta))
+                  if len(p) >= 4 and p not in PALABRAS_VACIAS_DESCRIPCION]
+        puntajes.append((sum(any(w.startswith(r) for r in raices) for w in palabras), valor))
+    mejor = max((p for p, _ in puntajes), default=0)
+    ganadoras = [v for p, v in puntajes if p == mejor]
+    return ganadoras[0] if mejor and len(ganadoras) == 1 else None
 
 
 def _aplicar_respuesta_menu(wizard: dict, texto_usuario: str) -> str | None:
@@ -1739,6 +1766,9 @@ def _mensaje_confirmar_contenidos_espacio(nombre_espacio: str, incluidos: list[d
     )
 
 
+_ORDINALES = ("primer", "segund", "tercer", "cuart", "quint")
+
+
 def _interpretar_seleccion_multiple(texto: str, cantidad: int) -> list[int] | None:
     """Interpreta la respuesta a un menú donde se puede elegir más de una
     opción a la vez por número (ej. qué accesorios por defecto quitar):
@@ -1759,6 +1789,9 @@ def _interpretar_seleccion_multiple(texto: str, cantidad: int) -> list[int] | No
     if texto_norm in ("ninguno", "ninguna", "ningun", "ningún", "no"):
         return []
 
+    # "la segunda", "primera y tercera": los ordinales cuentan como su número.
+    texto_norm = re.sub(r"\b(primer|segund|tercer|cuart|quint)[oa]?\b",
+                        lambda m: str(_ORDINALES.index(m.group(1)) + 1), texto_norm)
     numeros = re.findall(r"\d+", texto_norm)
     if not numeros:
         return None
@@ -2616,13 +2649,17 @@ def _con_avisos(avisos: list[str], mensaje: str) -> str:
 
 OPCIONES_NO_DISPONIBLE = [
     ("quitar", "Quitar esos activos y volver al resumen"),
+    ("cambiar_fecha", "Cambiar fecha"),
+    ("cambiar_hora", "Cambiar hora"),
     ("cancelar_reserva", "Cancelar toda la reserva"),
 ]
 # Misma acción, pero cuando quitar deja el carrito vacío: no hay resumen al que volver.
-OPCIONES_NO_DISPONIBLE_CARRITO_VACIO = [
-    ("quitar", "Quitar esos activos y elegir otro"),
-    ("cancelar_reserva", "Cancelar toda la reserva"),
-]
+OPCIONES_NO_DISPONIBLE_CARRITO_VACIO = [("quitar", "Quitar esos activos y elegir otro"), *OPCIONES_NO_DISPONIBLE[1:]]
+# Cambiar el horario: las alternativas se calcularon para el horario anterior, ya no valen.
+_CAMBIOS_HORARIO = {
+    "cambiar_fecha": {"fecha": None, "fecha_fin": None, "inicio": None, "fin": None, "alternativas_para": []},
+    "cambiar_hora": {"inicio": None, "fin": None, "alternativas_para": []},
+}
 
 
 def _mensaje_no_disponibles(no_disponibles: list[dict], opciones: list[tuple[str, str]]) -> str:
@@ -3218,6 +3255,14 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             ), {**sesion, "reserva_wizard": wizard}
         if valor:
             wizard["quiere_nota"] = True
+            # "sí, es para grabar una entrevista": la nota viene en el mismo mensaje.
+            primera, _, resto = texto_usuario.strip().partition(" ")
+            if _normalizar(primera.strip(",.!")) in _SI_EXPLICITO | {"1"}:
+                palabras = [p for p in re.findall(r"[a-z]+", _normalizar(resto))
+                            if p not in {"quiero", "dejar", "una", "nota", "por", "favor", "porfa", "gracias"}]
+                if len(palabras) >= 3:
+                    wizard["paso"] = "nota_texto"
+                    return _continuar_reserva(resto.strip(" ,."), usuario, sesion, wizard)
         else:
             wizard["quiere_nota"] = False
             wizard["nota"] = None
@@ -3410,6 +3455,10 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
 
     if paso == "hora_inicio":
         texto = texto_usuario.strip()
+        rango = _extraer_detalles_de_texto(f"de {texto}")  # ponytail: el "de" hace que "10 a 12" suelto cuente como horario
+        if "hora_fin" in rango:
+            texto = rango["hora_inicio"]
+            wizard["prefill"] = {**(wizard.get("prefill") or {}), "hora_fin": rango["hora_fin"]}
 
         hora = _parsear_hora_individual(texto)
         if hora is not None:
@@ -3562,14 +3611,11 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
             # lo que se quitó, no para esto que el usuario está agregando
             # aparte.
             wizard.update(subcategoria=None, marca=None, nombre_recurso=None, resolviendo_item=True, alternativas_para=[])
+            _precargar_activo(wizard, texto_usuario)  # "agregale el micrófono rode"; si no nombra nada, menú de activos
         elif valor == "quitar_item":
             return _iniciar_quitar_item(wizard, sesion)  # conserva alternativas_para
-        elif valor == "cambiar_fecha":
-            # Cambia el horario: las alternativas se calcularon para el
-            # horario anterior, ya no valen.
-            wizard.update(fecha=None, fecha_fin=None, inicio=None, fin=None, alternativas_para=[])
-        elif valor == "cambiar_hora":
-            wizard.update(inicio=None, fin=None, alternativas_para=[])
+        elif valor in _CAMBIOS_HORARIO:
+            wizard.update(_CAMBIOS_HORARIO[valor])
         elif valor == "cambiar_uso":
             wizard.update(tipo_uso=None, nrc=None)
         elif valor == "cambiar_grupo":
@@ -3661,6 +3707,14 @@ def _continuar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict, wizar
         # cambio puede seguir con confirmado=True (ver `_pausar_por_no_disponibles`,
         # que ya lo pone en False para las nuevas).
         wizard["confirmado"] = False
+
+        if valor in _CAMBIOS_HORARIO:  # el carrito no se toca; hora_fin revisa el horario nuevo
+            wizard.update(_CAMBIOS_HORARIO[valor])
+            wizard["opciones_actuales"] = None
+            mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
+            if listo:
+                return _crear_reserva_desde_wizard(wizard, usuario, sesion)
+            return mensaje, {**sesion, "reserva_wizard": wizard}
 
         # "quitar" -- se quitan los activos no disponibles y, en cascada, lo
         # que colgaba de ellos (mismo criterio de arrastre que "Quitar un
@@ -3820,10 +3874,25 @@ def gestionar_reserva(texto_usuario: str, usuario: Usuario, sesion: dict) -> tup
     if wizard is not None and wizard.get("paso") == "nota_texto":
         palabras_cancelar = set()
 
-    if wizard is not None and set(_normalizar(texto_usuario).split()) & palabras_cancelar:
-        return (
-            "Reserva cancelada, no se guardó nada. Si quieres reservar otra cosa, dime qué necesitas."
-        ), {**sesion, "reserva_wizard": None}
+    palabras = set(_normalizar(texto_usuario).split())
+    if wizard is not None and palabras & palabras_cancelar:
+        mensaje = "Reserva cancelada, no se guardó nada. Si quieres reservar otra cosa, dime qué necesitas."
+        if palabras & {"cancelar", "cancela"}:
+            mensaje += (' Si lo que querías era anular una reserva que ya tienes, escríbemelo de nuevo '
+                        '(ej. "cancela la sala de edición del martes").')
+        return mensaje, {**sesion, "reserva_wizard": None}
+
+    # "¿Qué reservas tengo?" también contiene "reserv" y llegaría acá como
+    # intent "reservar": se responde con la lista, sin abrir wizard.
+    # ponytail: auditoría queda con intent "reservar"; intent propio si se mide aparte.
+    if (wizard or {}).get("paso") != "nota_texto" and _PATRON_VER_RESERVAS.search(_normalizar(texto_usuario)):
+        bundles = _reservas_cancelables_de(usuario.id)
+        mensaje = (_mensaje_elegir_reserva_a_cancelar(bundles, pregunta=(
+            'Si quieres cancelar alguna, dime cuál (ej. "cancela la sala de edición del martes").'))
+            if bundles else "No tienes reservas activas.")
+        if wizard:
+            mensaje += "\n\nTu reserva en curso sigue abierta: responde la última pregunta para seguir."
+        return mensaje, sesion  # sin wizard nuevo, sin cancelacion_wizard
 
     if wizard is None:
         return _iniciar_reserva(texto_usuario, usuario, sesion)
@@ -3893,7 +3962,14 @@ def _linea_reserva_cancelable(reserva: Reserva) -> str:
     return f"    • {reserva.recurso.nombre}{pendiente}"
 
 
-def _mensaje_elegir_reserva_a_cancelar(bundles: list[list[Reserva]]) -> str:
+def _mensaje_elegir_reserva_a_cancelar(
+    bundles: list[list[Reserva]],
+    pregunta: str = (
+        "¿Cuáles quieres cancelar? Responde con el número, con varios separados "
+        'por coma (ej. "1,2"), "todos" para cancelarlas todas, o "cerrar" para '
+        "no cancelar nada."
+    ),
+) -> str:
     bloques = []
     for i, bundle in enumerate(bundles, start=1):
         nombres = "\n".join(_linea_reserva_cancelable(r) for r in bundle)
@@ -3910,9 +3986,7 @@ def _mensaje_elegir_reserva_a_cancelar(bundles: list[list[Reserva]]) -> str:
         f"{_DIVISOR_FACTURA}\n"
         f"{cuerpo}\n"
         f"{_DIVISOR_FACTURA}\n"
-        "¿Cuáles quieres cancelar? Responde con el número, con varios separados "
-        'por coma (ej. "1,2"), "todos" para cancelarlas todas, o "cerrar" para '
-        "no cancelar nada."
+        f"{pregunta}"
     )
 
 
@@ -3990,6 +4064,13 @@ def _iniciar_cancelacion(texto_usuario: str, usuario: Usuario, sesion: dict) -> 
         filtrados = [b for b in bundles if por_nombre(b)]
     if filtrados:
         bundles = filtrados
+    # "la del lunes en la tarde": la franja desempata, si deja alguna.
+    franja = re.search(r"\b(?:en|de|por)\s+la\s+(manana|tarde|noche)\b", texto_norm)
+    if franja:
+        pm = franja.group(1) != "manana"
+        por_franja = [b for b in bundles if (b[0].inicio.astimezone(ZONA_HORARIA_LACS).hour >= 12) == pm]
+        if por_franja:
+            bundles = filtrados = por_franja
 
     wizard = {"paso": "elegir_reserva", "bundles_ids": [[r.id for r in b] for b in bundles]}
     if len(filtrados) == 1:
@@ -4033,9 +4114,6 @@ def _continuar_cancelacion(
 
     if paso == "confirmar_cancelacion":
         valor = _interpretar_opcion(texto_usuario, OPCIONES_CONFIRMAR_CANCELACION)
-        if valor is None:  # "dale", "no gracias": no coinciden con las etiquetas
-            si = _interpretar_si_no(texto_usuario)
-            valor = None if si is None else ("si" if si else "no")
         if valor is None:
             return (
                 "No reconocí esa opción.\n\n" + (wizard.get("_mensaje_menu_actual") or "")

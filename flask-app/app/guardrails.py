@@ -221,6 +221,10 @@ def actualizar_estado_envio(mensaje_id: str, estado: str) -> bool:
     )
     if entrada is None:
         return False
+    # Meta no garantiza el orden: un "sent" tardío no pisa un "delivered"/"read".
+    orden = ("server_ack", "delivery_ack", "leido")
+    if estado in orden and entrada.estado_envio in orden and orden.index(estado) < orden.index(entrada.estado_envio):
+        return True
     entrada.estado_envio = estado
     db.session.commit()
     return True

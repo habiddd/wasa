@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import time
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
@@ -108,7 +109,7 @@ def recibir_webhook():
     return _procesar_mensaje(numero, texto, remote_jid)
 
 
-def _procesar_mensaje(numero: str, texto: str, remote_jid: str):
+def _procesar_mensaje(numero: str, texto: str, remote_jid: str, pisar_jid: bool = True):
     """Cuerpo común a los dos canales (Baileys y Meta): guardrails,
     identidad, wizards, intent y respuesta. Devuelve la respuesta de Flask."""
     # --- Guardrail 1: rate limiting por número ---
@@ -148,7 +149,7 @@ def _procesar_mensaje(numero: str, texto: str, remote_jid: str):
     # "Juan Pérez" como respuesta a "¿cuál es tu nombre?" se clasificaría
     # como intent "otro" y quedaría bloqueado por la whitelist. ---
     numero_entrante = numero
-    usuario = usuarios_service.obtener_o_crear_usuario(numero, remote_jid)
+    usuario = usuarios_service.obtener_o_crear_usuario(numero, remote_jid, pisar_jid=pisar_jid)
     # Si el mensaje llegó con JID "@lid" y sin `senderPn`, `numero` es el
     # LID; el usuario ya conocido trae el número real. Sin esto su sesión y
     # su auditoría se partirían en dos claves distintas.
@@ -164,7 +165,7 @@ def _procesar_mensaje(numero: str, texto: str, remote_jid: str):
         # acaba de corregir su celular, ese número viejo ya no es suyo y
         # obtener_o_crear_usuario lo tomaría por un `senderPn` y le
         # devolvería el número viejo.
-        numero = usuarios_service.obtener_o_crear_usuario(numero_entrante, remote_jid).telefono_wa
+        numero = usuarios_service.obtener_o_crear_usuario(numero_entrante, remote_jid, pisar_jid=pisar_jid).telefono_wa
         sesiones.guardar_sesion(numero, sesion)
 
         enviado, mensaje_id = whatsapp_client.enviar_mensaje_texto(remote_jid, respuesta)
@@ -356,11 +357,6 @@ def _procesar_mensaje(numero: str, texto: str, remote_jid: str):
 # guardrails.actualizar_estado_envio).
 _ESTADO_META = {"sent": "server_ack", "delivered": "delivery_ack", "read": "leido", "failed": "fallido"}
 
-_AVISO_SIN_NUMERO = (
-    "Hola, para atenderte necesito tu número de celular. Escríbenos desde una "
-    "cuenta que lo muestre o compártelo con el equipo de la LACS."
-)
-
 
 @bp.route("/webhook/meta", methods=["GET"])
 def verificar_meta():
@@ -390,17 +386,18 @@ def _procesar_mensaje_meta(msg: dict) -> None:
         return
     if whatsapp_client.proveedor_activo() != "meta":
         return
-    numero = msg.get("from")
+    # Sin número (la persona usa nombre de usuario) se identifica por su BSUID:
+    # se trata como un LID, el registro le pide el celular.
+    numero = msg.get("from") or msg.get("from_user_id")
     if not numero:
-        # Solo BSUID (la persona usa nombre de usuario). ponytail: soporte
-        # completo requiere una columna nueva en `usuarios`; por ahora se le
-        # pide el número.
-        current_app.logger.warning("Mensaje de Meta sin número (BSUID %s).", msg.get("from_user_id"))
-        if msg.get("from_user_id"):
-            whatsapp_client.enviar_meta_a_bsuid(msg["from_user_id"], _AVISO_SIN_NUMERO)
         return
-    redis_client.set(f"meta:ventana:{numero}", 1, ex=86400)  # abre la ventana de 24 h
-    _procesar_mensaje(numero, msg["text"]["body"], f"{numero}@s.whatsapp.net")
+    # La ventana cuenta desde que la persona escribió, no desde que llegó el webhook (Meta reintenta hasta 36 h).
+    ttl = 86400 - 300 - int(time.time() - int(msg.get("timestamp") or time.time()))
+    if ttl > 0:
+        for clave in {msg.get("from"), msg.get("from_user_id")} - {None}:
+            redis_client.set(f"meta:ventana:{clave}", 1, ex=ttl)
+    jid = f"{numero}@s.whatsapp.net" if msg.get("from") else f"{numero}@bsuid"
+    _procesar_mensaje(numero, msg["text"]["body"], jid, pisar_jid=False)
 
 
 @bp.route("/webhook/meta", methods=["POST"])
@@ -412,6 +409,10 @@ def recibir_webhook_meta():
     for entrada in payload.get("entry", []):
         for cambio in entrada.get("changes", []):
             valor = cambio.get("value", {})
+            if valor.get("metadata", {}).get("phone_number_id") != current_app.config["META_WA_PHONE_NUMBER_ID"]:
+                continue  # evento de otro número de la cuenta: no se contesta desde el nuestro
+            for err in valor.get("errors", []):
+                current_app.logger.warning("Error de Meta en webhook: %s", err)
             # Nunca un 500: Meta reintentaría todo el lote. Se loguea y se sigue.
             for msg in valor.get("messages", []):
                 try:
@@ -420,6 +421,8 @@ def recibir_webhook_meta():
                     current_app.logger.exception("Error procesando mensaje de Meta %s", msg.get("id"))
                     db.session.rollback()
             for st in valor.get("statuses", []):
+                if st.get("status") == "failed":
+                    current_app.logger.warning("Meta no entregó %s: %s", st.get("id"), st.get("errors"))
                 estado = _ESTADO_META.get(st.get("status"))
                 try:
                     if estado and st.get("id"):

@@ -183,9 +183,10 @@ Baileys directo (`whatsapp_client.py`), documentado en
 - Permite correr en modo no oficial (gratis, rápido de arrancar) mientras
   tramitas la verificación de negocio de Meta, sin bloquear tu desarrollo.
 - El costo es que Flask queda acoplado directamente al formato de eventos
-  de Baileys en vez de a un formato intermediario estable — si más
-  adelante se migra a Meta Cloud API, `webhook.py`/`whatsapp_client.py`
-  necesitan un adaptador.
+  de Baileys en vez de a un formato intermediario estable. El canal de Meta
+  Cloud API se agregó al lado (`POST /webhook/meta`, rama Meta de
+  `whatsapp_client`) traduciendo cada evento al mismo `_procesar_mensaje`;
+  ver `docs/META_WHATSAPP_ESTADO_2026-09-30.md`.
 
 ## JIDs `@lid` — por qué no se puede reconstruir el destino desde el número
 
@@ -229,6 +230,19 @@ flowchart TD
     U --> S
     N -. "el bug: rearmar numero@s.whatsapp.net" .-> X["JID equivocado en cuentas @lid<br/>sendMessage da éxito y WhatsApp no entrega nada"]
 ```
+
+**Con el canal de Meta.** Meta no conoce los `@lid`: escribe a un número
+(`to`) o a un BSUID (`recipient`, personas con nombre de usuario). Por eso:
+- `jid_de` con Meta activo devuelve `<telefono_wa>@s.whatsapp.net`, salvo
+  que el usuario solo tenga `@lid` o `@bsuid` (`telefono_es_lid`): entonces
+  devuelve ese `jid_wa`. Un `@lid` se rechaza al enviar (se registra el
+  error); un `@bsuid` sale por `recipient`.
+- Un mensaje que llega por Meta **no pisa** un `jid_wa` ya guardado
+  (`obtener_o_crear_usuario(..., pisar_jid=False)`): si se vuelve a
+  Baileys, el `@lid` sigue encontrando a la persona. Solo rellena un
+  `jid_wa` vacío.
+- Quien llega solo con BSUID se trata como un LID: `telefono_wa` = BSUID,
+  `jid_wa` = `<BSUID>@bsuid`, y el registro le pide el celular.
 
 ## Por qué separar el LLM de la lógica de reservas
 

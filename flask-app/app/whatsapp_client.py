@@ -9,13 +9,11 @@ El canal activo vive en Redis (`whatsapp:proveedor`); sin clave, el de
 WHATSAPP_PROVEEDOR_DEFAULT.
 """
 
-from datetime import datetime, timedelta, timezone
-
 import requests
 from flask import current_app
 
-from app.extensions import db, redis_client
-from app.models import AuditoriaBot
+from app import usuarios_service
+from app.extensions import redis_client
 
 PROVEEDORES = ("baileys", "meta")
 _CLAVE_PROVEEDOR = "whatsapp:proveedor"
@@ -60,8 +58,11 @@ def jid_de(usuario) -> str:
     mensaje que mandó (Usuario.jid_wa). Si no hay, porque no ha escrito
     desde que existe esa columna, lo rearma con el número: sirve para las
     cuentas "@s.whatsapp.net" pero no para las "@lid" (ver
-    enviar_mensaje_texto). Con Meta el LID no sirve: solo se escribe por número."""
+    enviar_mensaje_texto). Con Meta el LID no sirve: solo se escribe por
+    número o BSUID."""
     if proveedor_activo() == "meta":
+        if usuarios_service.telefono_es_lid(usuario):
+            return usuario.jid_wa  # @lid: _enviar_meta lo rechaza; @bsuid: sale por recipient
         return f"{usuario.telefono_wa}@s.whatsapp.net"
     return usuario.jid_wa or f"{usuario.telefono_wa}@s.whatsapp.net"
 
@@ -104,18 +105,9 @@ def enviar_mensaje_texto(jid_destino: str, texto: str, timeout: int = 10) -> tup
 
 
 def _escribio_en_24h(numero: str) -> bool:
-    # La marca de Redis la pone el webhook de Meta al recibir: la respuesta al
-    # primer mensaje sale antes de que exista su fila de auditoría.
-    if redis_client.exists(f"meta:ventana:{numero}"):
-        return True
-    desde = datetime.now(timezone.utc) - timedelta(hours=24)
-    return db.session.query(
-        AuditoriaBot.query.filter(
-            AuditoriaBot.telefono_wa == numero,
-            AuditoriaBot.mensaje_entrante.isnot(None),
-            AuditoriaBot.creado_en >= desde,
-        ).exists()
-    ).scalar()
+    # Solo Redis: la auditoría mezcla mensajes de los dos canales y la ventana
+    # de Meta solo la abre un mensaje que llegó por Meta (ver routes/webhook.py).
+    return bool(redis_client.exists(f"meta:ventana:{numero}"))
 
 
 def _enviar_meta(jid_destino: str, texto: str, timeout: int) -> tuple[bool, str | None]:
@@ -125,16 +117,21 @@ def _enviar_meta(jid_destino: str, texto: str, timeout: int) -> tuple[bool, str 
     ponytail: una sola plantilla genérica; si Meta la rechaza o se quieren
     textos por tipo de aviso, pasar a una por tipo."""
     cfg = current_app.config
-    if not jid_destino.endswith("@s.whatsapp.net"):
-        current_app.logger.error("Meta necesita el número, no el JID %s: no se envía.", jid_destino)
+    if jid_destino.endswith("@bsuid"):
+        numero, destino = jid_destino.removesuffix("@bsuid"), "recipient"
+    elif jid_destino.endswith("@s.whatsapp.net"):
+        numero, destino = jid_destino.split("@")[0], "to"
+    else:
+        current_app.logger.error("Meta necesita número o BSUID, no el JID %s: no se envía.", jid_destino)
         return False, None
-    numero = jid_destino.split("@")[0]
 
-    payload = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": numero}
+    payload = {"messaging_product": "whatsapp", "recipient_type": "individual", destino: numero}
     if _escribio_en_24h(numero):
         payload.update(type="text", text={"body": texto})
     elif cfg["META_PLANTILLA_AVISO"]:
-        plano = " · ".join(l.strip() for l in texto.splitlines() if l.strip())[:1000]
+        # Meta: sin \n ni \t ni más de 4 espacios seguidos, y el cuerpo entero ≤ 1024 (el texto fijo de lacs_aviso ocupa ~96).
+        plano = " · ".join(" ".join(l.split()) for l in texto.splitlines() if l.strip())
+        plano = plano if len(plano) <= 900 else plano[:899] + "…"
         payload.update(type="template", template={
             "name": cfg["META_PLANTILLA_AVISO"],
             "language": {"code": cfg["META_PLANTILLA_IDIOMA"]},
@@ -147,14 +144,6 @@ def _enviar_meta(jid_destino: str, texto: str, timeout: int) -> tuple[bool, str 
     return _post_meta(payload, timeout)
 
 
-def enviar_meta_a_bsuid(bsuid: str, texto: str, timeout: int = 10) -> tuple[bool, str | None]:
-    """Texto libre a quien escribió sin exponer su número (solo BSUID)."""
-    return _post_meta({
-        "messaging_product": "whatsapp", "recipient_type": "individual",
-        "recipient": bsuid, "type": "text", "text": {"body": texto},
-    }, timeout)
-
-
 def _post_meta(payload: dict, timeout: int) -> tuple[bool, str | None]:
     cfg = current_app.config
     url = f"https://graph.facebook.com/{cfg['META_GRAPH_VERSION']}/{cfg['META_WA_PHONE_NUMBER_ID']}/messages"
@@ -163,7 +152,11 @@ def _post_meta(payload: dict, timeout: int) -> tuple[bool, str | None]:
             url, json=payload, timeout=timeout,
             headers={"Authorization": f"Bearer {cfg['META_WA_TOKEN']}"},
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            # El cuerpo trae error.code (190 token, 131030, 132xxx plantilla…).
+            # ponytail: sin reenviar como plantilla al recibir 131047; el texto libre ya solo sale con la ventana abierta.
+            current_app.logger.error("Meta rechazó el envío (%s): %s", resp.status_code, resp.text[:500])
+            return False, None
         return True, resp.json()["messages"][0]["id"]
     except (requests.RequestException, KeyError, IndexError, ValueError) as exc:
         current_app.logger.error("Error enviando mensaje por Meta: %s", exc)

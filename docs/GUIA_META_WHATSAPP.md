@@ -273,13 +273,13 @@ dashboard da error 502.
 | `#100 Missing Permission` al listar negocios | El token no tiene `business_management`. No hace falta: copiar los ids del panel. |
 | Token que vence en horas | Es de usuario o del Explorer. Usar el del usuario del sistema (paso 3). |
 | El token no ve la cuenta de WhatsApp | La cuenta no está asignada al usuario del sistema como activo. |
-| Los avisos no salen por Meta | Plantilla sin aprobar o `META_PLANTILLA_AVISO` vacío; o el usuario solo tiene JID `@lid` sin número. |
+| Los avisos no salen por Meta | Plantilla sin aprobar o `META_PLANTILLA_AVISO` vacío; o el usuario solo tiene JID `@lid` sin número. El código de error de Meta queda en el log de Flask ("Meta rechazó el envío"). |
 | Error `131047` al enviar texto | Fuera de la ventana de 24 h: debe salir como plantilla. |
 | Webhook verificado pero no llega ningún mensaje | La suscripción quedó sin el campo `messages`, o la app no está en `subscribed_apps` de la cuenta. Ver paso 9. |
 | Dejó de llegar todo de un día para otro | Se reinició `lacs_tunel` y cambió la URL del quick tunnel. Sacar la nueva (paso 8) y actualizarla en Meta. |
 | Meta no verifica el webhook | URL sin HTTPS válido, `META_WEBHOOK_VERIFY_TOKEN` distinto o Flask sin recrear tras editar `.env`. |
 | Webhook responde 403 | Firma inválida: `META_APP_SECRET` no es el de la app que envía. |
-| Personas sin número en el webhook | Usan nombre de usuario de WhatsApp; Meta manda solo su BSUID. El bot les pide el número. |
+| Personas sin número en el webhook | Usan nombre de usuario de WhatsApp; Meta manda solo su BSUID. Se registran con él (`jid_wa` = `<BSUID>@bsuid`) y el bot les pide el celular. |
 | Dashboard con error 502 tras recrear Flask | Reiniciar `dashboard-frontend`. |
 
 ## Referencias

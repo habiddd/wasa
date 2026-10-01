@@ -266,6 +266,8 @@ CREATE TABLE IF NOT EXISTS auditoria_bot (
 -- (postgres/init/*.sql solo corre la primera vez que se crea el volumen).
 ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS mensaje_id VARCHAR(64);
 ALTER TABLE auditoria_bot ADD COLUMN IF NOT EXISTS estado_envio VARCHAR(20) NOT NULL DEFAULT 'n/a';
+-- El wamid de Meta lleva el número en base64: 62+ caracteres.
+ALTER TABLE auditoria_bot ALTER COLUMN mensaje_id TYPE VARCHAR(128);
 
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cedula VARCHAR(20);
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS registro_completo BOOLEAN NOT NULL DEFAULT FALSE;
@@ -275,6 +277,10 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS aviso_privacidad_en TIMESTAMPTZ;
 -- TRUE = telefono_wa lo escribió la persona en el registro (no vino de WhatsApp),
 -- así que es el único celular que puede corregir (ver registro_service).
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS celular_escrito BOOLEAN NOT NULL DEFAULT FALSE;
+-- BSUID ("CO.xxxx…") como identidad mientras la persona no dé su celular (ver usuarios_service.telefono_es_lid).
+ALTER TABLE usuarios ALTER COLUMN telefono_wa TYPE VARCHAR(200);
+ALTER TABLE usuarios ALTER COLUMN jid_wa TYPE VARCHAR(220);
+ALTER TABLE auditoria_bot ALTER COLUMN telefono_wa TYPE VARCHAR(200);
 
 ALTER TABLE recursos ADD COLUMN IF NOT EXISTS placa VARCHAR(10);
 ALTER TABLE recursos ALTER COLUMN placa TYPE VARCHAR(10);

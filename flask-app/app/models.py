@@ -13,11 +13,11 @@ class Usuario(db.Model):
     # registro_service.py), no siempre se conoce en el momento en que se
     # crea el Usuario (primer contacto, antes de preguntarle nada).
     nombre = db.Column(db.String(150))
-    telefono_wa = db.Column(db.String(20), unique=True, nullable=False)
+    telefono_wa = db.Column(db.String(200), unique=True, nullable=False)
     # JID completo del último mensaje entrante ("...@s.whatsapp.net" o
     # "...@lid"): para escribirle sin un mensaje suyo al que responder. Ver
     # whatsapp_client.jid_de y postgres/init/02-schema.sql.
-    jid_wa = db.Column(db.String(64))
+    jid_wa = db.Column(db.String(220))
     codigo_uninorte = db.Column(db.String(30))
     cedula = db.Column(db.String(20))
     registro_completo = db.Column(db.Boolean, nullable=False, default=False)
@@ -185,7 +185,7 @@ class AuditoriaBot(db.Model):
     __tablename__ = "auditoria_bot"
 
     id = db.Column(db.Integer, primary_key=True)
-    telefono_wa = db.Column(db.String(20), nullable=False)
+    telefono_wa = db.Column(db.String(200), nullable=False)
     intent_detectado = db.Column(db.String(50))
     mensaje_entrante = db.Column(db.Text)
     respuesta_enviada = db.Column(db.Text)
@@ -194,7 +194,7 @@ class AuditoriaBot(db.Model):
     # Id del mensaje de WhatsApp (lo devuelve Baileys al enviar) y su último
     # estado de entrega conocido, actualizado vía POST /webhook/ack cuando
     # Baileys recibe el ack de WhatsApp (server_ack/delivery_ack/leido/error).
-    mensaje_id = db.Column(db.String(64))
+    mensaje_id = db.Column(db.String(128))
     estado_envio = db.Column(db.String(20), nullable=False, default="n/a")
     creado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 

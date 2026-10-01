@@ -52,12 +52,15 @@ Plan: [PLAN_baileys7_y_meta_2026-09-30.md](PLAN_baileys7_y_meta_2026-09-30.md).
   No deja cambiar a Meta si faltan credenciales.
 - **Envío** (`flask-app/app/whatsapp_client.py`): todo mensaje del bot pasa
   por `enviar_mensaje_texto`, que despacha según el canal activo. Por Meta:
-  - Texto libre si la persona escribió en las últimas 24 h (Redis
-    `meta:ventana:<numero>` o la auditoría).
+  - Texto libre si la persona escribió por Meta en las últimas 24 h: la
+    ventana vive solo en Redis (`meta:ventana:<numero>`) y se mide desde el
+    `timestamp` del mensaje, no desde la auditoría (que mezcla los dos canales).
   - Si no, la plantilla `META_PLANTILLA_AVISO` con el texto en un solo
-    parámetro (saltos de línea cambiados por " · ", máximo 1000 caracteres).
+    parámetro (saltos de línea y espacios repetidos cambiados por " · " o un
+    espacio, máximo 900 caracteres).
   - A un usuario que solo tiene JID `@lid` (sin número) no se le puede
-    escribir por Meta: se registra el error.
+    escribir por Meta: se registra el error. Con `@bsuid` sí, por `recipient`.
+  - Si Meta rechaza el envío, se registra su código de error (`error.code`).
 - **Recepción** (`flask-app/app/routes/webhook.py`):
   - `GET /webhook/meta`: verificación con `META_WEBHOOK_VERIFY_TOKEN`.
   - `POST /webhook/meta`: valida la firma `X-Hub-Signature-256` con
@@ -66,9 +69,13 @@ Plan: [PLAN_baileys7_y_meta_2026-09-30.md](PLAN_baileys7_y_meta_2026-09-30.md).
     Los estados de entrega se mapean a la auditoría (sent → `server_ack`,
     delivered → `delivery_ack`, read → `leido`, failed → `fallido`).
   - Solo se atienden mensajes del canal activo; el otro canal se ignora.
-  - Quien escribe con nombre de usuario (sin número, solo BSUID) recibe un
-    mensaje pidiéndole su número. El soporte completo de BSUID necesita una
-    columna nueva en `usuarios` y quedó fuera.
+  - Se ignoran los eventos cuyo `metadata.phone_number_id` no es el
+    configurado, y los `failed` y `errors` quedan en el log.
+  - Meta ya no pisa `usuarios.jid_wa` (no reemplaza el `@lid` de Baileys; sí
+    rellena uno vacío).
+  - Quien escribe con nombre de usuario (sin número, solo BSUID) se registra
+    con `telefono_wa` = BSUID y `jid_wa` = `<BSUID>@bsuid`, como un LID: el
+    bot le pide el celular.
 - **nginx** (`dashboard-frontend/nginx.conf`): expone solo
   `location = /webhook/meta` hacia Flask, sin usuario/contraseña (lo protege
   la firma). El resto de `/webhook/` sigue sin exponerse.
@@ -174,8 +181,8 @@ Variables en `.env` (valores fuera de este documento): `WHATSAPP_PROVEEDOR_DEFAU
    opción de **coexistencia** (si Meta la ofrece) o usar otro número. Para
    producción también hacen falta la verificación del negocio y un método de
    pago en la cuenta.
-7. **Soporte completo de BSUID** (usuarios con nombre de usuario): columna
-   nueva en `usuarios`.
+7. ~~**Soporte completo de BSUID**~~ Hecho el 2026-10-01, sin columna nueva
+   (`telefono_wa` y `jid_wa` se ensancharon; ver `PLAN_meta_completo_2026-10-01.md`).
 
 ## 6. Catálogo de WhatsApp (intentado, no resuelto)
 
