@@ -102,6 +102,43 @@ export function cambiarProveedorWhatsapp(proveedor: ProveedorWhatsapp) {
   })
 }
 
+export type MetricasMeta = {
+  numero: {
+    telefono: string | null
+    nombre_verificado: string | null
+    estado_nombre: string | null
+    calidad: string | null
+    estado: string | null
+    modo: string | null
+    limite_diario: string | null
+    rendimiento: string | null
+  }
+  cuenta: {
+    nombre: string | null
+    moneda: string | null
+    revision: string | null
+    verificacion_negocio: string | null
+    puede_iniciar: string | null
+    bloqueos: string[]
+  }
+  uso_30_dias: {
+    enviados: number
+    entregados: number
+    por_dia: { dia: number; enviados: number; entregados: number }[]
+  }
+  costos_30_dias: {
+    total: number
+    detalle: { categoria: string; tipo: string; mensajes: number; costo: number }[]
+  }
+  plantillas: { name: string; status: string; category: string; language: string }[]
+  ventanas_abiertas: { numero: string; segundos_restantes: number }[]
+  consultado_en: string
+}
+
+export function fetchMetricasMeta() {
+  return request<MetricasMeta>("/whatsapp/meta/metricas")
+}
+
 // --- Métricas --------------------------------------------------------------
 
 export type Periodo = "30" | "90" | "todo" | "rango"

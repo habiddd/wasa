@@ -318,6 +318,123 @@ def api_proveedor_whatsapp():
     })
 
 
+def _graph(ruta: str, campos: str) -> dict:
+    cfg = current_app.config
+    resp = requests.get(
+        f"https://graph.facebook.com/{cfg['META_GRAPH_VERSION']}/{ruta}",
+        params={"fields": campos},
+        headers={"Authorization": f"Bearer {cfg['META_WA_TOKEN']}"},
+        timeout=15,
+    )
+    datos = resp.json()
+    if not resp.ok:
+        raise RuntimeError(datos.get("error", {}).get("message", f"error {resp.status_code}"))
+    return datos
+
+
+_BLOQUEOS_META = {
+    141006: "Falta un método de pago válido en la cuenta: no se pueden iniciar conversaciones (plantillas).",
+    141010: "El negocio no ha pasado la verificación de Meta.",
+}
+
+
+def _texto_bloqueo(err: dict) -> str:
+    descripcion = err.get("error_description", "")
+    if descripcion.startswith("Your business profile is incomplete"):
+        # 131000 es un código genérico: se reconoce por el texto.
+        campos = descripcion.split("required:", 1)[-1].strip(" .")
+        for en, es in (("Legal Name", "nombre legal"), ("Country", "país"), ("Website", "sitio web"), (", and ", " y "), (" and ", " y ")):
+            campos = campos.replace(en, es)
+        return f"El perfil del negocio está incompleto. Falta: {campos}."
+    return _BLOQUEOS_META.get(err.get("error_code"), descripcion)
+
+
+def _errores_salud(salud: dict) -> list[str]:
+    return [
+        _texto_bloqueo(err)
+        for entidad in (salud or {}).get("entities", [])
+        if entidad.get("can_send_message") != "AVAILABLE"
+        for err in entidad.get("errors", [])
+    ]
+
+
+@bp.route("/api/whatsapp/meta/metricas")
+def api_metricas_meta():
+    """Datos del número y la cuenta de Meta, uso y costo de los últimos 30 días,
+    plantillas y ventanas de 24 h abiertas (estas salen de Redis, no de Meta)."""
+    if whatsapp_client.meta_faltantes():
+        return jsonify({"error": "Meta no está configurado."}), 400
+    cfg = current_app.config
+    fin = int(datetime.now(timezone.utc).timestamp())
+    inicio = fin - 30 * 86400
+    try:
+        numero = _graph(
+            cfg["META_WA_PHONE_NUMBER_ID"],
+            "display_phone_number,verified_name,quality_rating,status,name_status,"
+            "messaging_limit_tier,throughput,account_mode,health_status",
+        )
+        cuenta = _graph(
+            cfg["META_WA_WABA_ID"],
+            "name,currency,account_review_status,business_verification_status,health_status,"
+            f"analytics.start({inicio}).end({fin}).granularity(DAY),"
+            f"pricing_analytics.start({inicio}).end({fin}).granularity(DAILY)"
+            '.dimensions(["PRICING_CATEGORY","PRICING_TYPE"])',
+        )
+        plantillas = _graph(f"{cfg['META_WA_WABA_ID']}/message_templates", "name,status,category,language")
+    except (requests.RequestException, ValueError, RuntimeError) as exc:
+        return jsonify({"error": f"Meta no respondió: {exc}"}), 502
+
+    por_dia = cuenta.get("analytics", {}).get("data_points", [])
+    costos: dict[tuple, dict] = {}
+    for grupo in cuenta.get("pricing_analytics", {}).get("data", []):
+        for punto in grupo.get("data_points", []):
+            clave = (punto.get("pricing_category"), punto.get("pricing_type"))
+            fila = costos.setdefault(clave, {"categoria": clave[0], "tipo": clave[1], "mensajes": 0, "costo": 0.0})
+            fila["mensajes"] += punto.get("volume", 0)
+            fila["costo"] += punto.get("cost", 0) or 0
+
+    ventanas = []
+    for clave in redis_client.scan_iter("meta:ventana:*"):
+        clave = clave.decode() if isinstance(clave, bytes) else clave
+        ventanas.append({"numero": clave.split(":", 2)[2], "segundos_restantes": redis_client.ttl(clave)})
+    ventanas.sort(key=lambda v: v["segundos_restantes"])
+
+    return jsonify({
+        "numero": {
+            "telefono": numero.get("display_phone_number"),
+            "nombre_verificado": numero.get("verified_name"),
+            "estado_nombre": numero.get("name_status"),
+            "calidad": numero.get("quality_rating"),
+            "estado": numero.get("status"),
+            "modo": numero.get("account_mode"),
+            "limite_diario": numero.get("messaging_limit_tier"),
+            "rendimiento": (numero.get("throughput") or {}).get("level"),
+        },
+        "cuenta": {
+            "nombre": cuenta.get("name"),
+            "moneda": cuenta.get("currency"),
+            "revision": cuenta.get("account_review_status"),
+            "verificacion_negocio": cuenta.get("business_verification_status"),
+            "puede_iniciar": (cuenta.get("health_status") or {}).get("can_send_message"),
+            "bloqueos": _errores_salud(cuenta.get("health_status")),
+        },
+        "uso_30_dias": {
+            "enviados": sum(p.get("sent", 0) for p in por_dia),
+            "entregados": sum(p.get("delivered", 0) for p in por_dia),
+            "por_dia": [{"dia": p["start"], "enviados": p.get("sent", 0), "entregados": p.get("delivered", 0)} for p in por_dia],
+        },
+        "costos_30_dias": {
+            "total": sum(f["costo"] for f in costos.values()),
+            "detalle": sorted(costos.values(), key=lambda f: -f["mensajes"]),
+        },
+        "plantillas": [
+            {k: p.get(k) for k in ("name", "status", "category", "language")} for p in plantillas.get("data", [])
+        ],
+        "ventanas_abiertas": ventanas,
+        "consultado_en": datetime.now(timezone.utc).isoformat(),
+    })
+
+
 @bp.route("/api/whatsapp/proveedor", methods=["PUT"])
 def api_cambiar_proveedor_whatsapp():
     proveedor = (request.get_json(silent=True) or {}).get("proveedor")

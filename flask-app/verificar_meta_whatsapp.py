@@ -95,7 +95,7 @@ with app.app_context():
         assert r.status_code == 200
         assert len(enviados) == 1, enviados
         url, cuerpo, headers = enviados[0]
-        assert url == "https://graph.facebook.com/v23.0/123/messages", url
+        assert url == f"https://graph.facebook.com/{app.config['META_GRAPH_VERSION']}/123/messages", url
         assert headers["Authorization"] == "Bearer token-falso"
         assert cuerpo["to"] == NUM and cuerpo["type"] == "text" and cuerpo["text"]["body"], cuerpo
         fila = AuditoriaBot.query.filter_by(telefono_wa=NUM, mensaje_entrante="hola").one()

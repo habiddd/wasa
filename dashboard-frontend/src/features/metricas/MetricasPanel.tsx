@@ -133,7 +133,7 @@ const ETIQUETA_DIA = new Intl.DateTimeFormat("es-CO", {
   month: "short",
 })
 
-function etiquetaDia(dia: string) {
+export function etiquetaDia(dia: string) {
   return ETIQUETA_DIA.format(new Date(`${dia}T00:00:00Z`))
 }
 
@@ -180,7 +180,7 @@ const DIA_MS = 86_400_000
  * El backend solo manda los días con reservas: se rellenan los huecos con 0
  * para que el eje sea continuo y una racha vacía se vea como tal.
  */
-function conDiasVacios(datos: { dia: string; total: number }[]) {
+export function conDiasVacios(datos: { dia: string; total: number }[]) {
   if (datos.length === 0) return datos
   const total = new Map(datos.map((d) => [d.dia, d.total]))
   const fin = Date.parse(`${datos[datos.length - 1].dia}T00:00:00Z`)
@@ -211,16 +211,18 @@ type Punto = { clave: string; eje: string; tooltip: string; total: number }
  * se rotula cada `ejeCada` barras (cada `ejeAngosto` en contenedores angostos).
  * La tabla sr-only da a lectores de pantalla el detalle completo.
  */
-function Columnas({
+export function Columnas({
   datos,
   titulo,
   ejeCada = 1,
   ejeAngosto = 1,
+  unidad = reservas,
 }: {
   datos: Punto[]
   titulo: string
   ejeCada?: number
   ejeAngosto?: number
+  unidad?: (n: number) => string
 }) {
   const [hover, setHover] = useState<number | null>(null)
   const max = Math.max(1, ...datos.map((d) => d.total))
@@ -282,7 +284,7 @@ function Columnas({
                   className="pointer-events-none absolute left-1/2 z-10 mb-5 -translate-x-1/2 rounded-md bg-foreground px-2 py-1 text-xs whitespace-nowrap text-background shadow-md"
                   style={{ bottom: alto(d.total) }}
                 >
-                  {d.tooltip} · {reservas(d.total)}
+                  {d.tooltip} · {unidad(d.total)}
                 </div>
               )}
             </div>
