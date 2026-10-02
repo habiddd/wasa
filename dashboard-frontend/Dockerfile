@@ -34,4 +34,4 @@ RUN chmod +x /docker-entrypoint.d/40-dashboard-htpasswd.sh
 
 COPY --from=build /frontend/dist /usr/share/nginx/html/dashboard
 
-EXPOSE 80
+EXPOSE 80 443

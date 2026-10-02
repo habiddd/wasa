@@ -196,7 +196,15 @@ services:
       flask-app:
         condition: service_started
     ports:
-      - "127.0.0.1:8080:80"
+      # Expuesto a la red local: es la única puerta de entrada (Nginx pide
+      # login y hace proxy a flask-app por la red interna). Flask, Baileys y
+      # Postgres siguen solo en 127.0.0.1.
+      - "8080:80"
+      # HTTPS. Sin certificado propio en ./dashboard-frontend/certs usa uno
+      # autofirmado (ver docker-entrypoint.sh).
+      - "8443:443"
+    volumes:
+      - ./dashboard-frontend/certs:/etc/nginx/certs
     environment:
       # Mismas credenciales que flask-app: Nginx exige el login para servir
       # el shell estático (igual que antes hacía Flask); las peticiones a
