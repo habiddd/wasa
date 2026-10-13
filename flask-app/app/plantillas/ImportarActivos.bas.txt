@@ -1,0 +1,179 @@
+Option Explicit
+
+' Formulario de la hoja Inicio -> filas de la hoja Activos.
+' No conoce las columnas: cada campo es un nombre definido "f_<clave>" y su
+' columna es la de la hoja Activos cuyo encabezado (fila 1) dice <clave>. Si
+' la plantilla gana o pierde columnas, este código no cambia.
+
+Private Const HOJA_DATOS As String = "Activos"
+Private Const PREFIJO As String = "f_"
+Private Const TITULO As String = "Importar activos"
+Private Const MAX_FILA As Long = 2001
+
+Private Function Campo(ByVal clave As String) As Range
+    Set Campo = ThisWorkbook.Names(PREFIJO & clave).RefersToRange
+End Function
+
+Private Function Valor(ByVal clave As String) As String
+    Valor = Trim$(CStr(Campo(clave).Value))
+End Function
+
+Private Function ColumnaDe(ByVal ws As Worksheet, ByVal clave As String) As Long
+    Dim c As Long
+    For c = 1 To ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+        If LCase$(Trim$(CStr(ws.Cells(1, c).Value))) = clave Then
+            ColumnaDe = c
+            Exit Function
+        End If
+    Next c
+End Function
+
+Private Sub Mensaje(ByVal texto As String)
+    ThisWorkbook.Names("msg_formulario").RefersToRange.Value = texto
+End Sub
+
+Private Sub Avisar(ByVal texto As String, ByVal clave As String)
+    Mensaje texto
+    MsgBox texto, vbExclamation, TITULO
+    Campo(clave).Select
+End Sub
+
+Public Sub AgregarActivo()
+    Dim ws As Worksheet
+    Dim n As Name
+    Dim clave As String, tipo As String, placa As String, texto As String
+    Dim colNombre As Long, colPlaca As Long, col As Long
+    Dim ultima As Long, fila As Long, f As Long
+
+    Set ws = ThisWorkbook.Worksheets(HOJA_DATOS)
+    tipo = LCase$(Valor("tipo"))
+    placa = UCase$(Replace(Valor("placa"), " ", ""))
+
+    If Valor("nombre") = "" Then
+        Avisar "Escribe el nombre.", "nombre"
+        Exit Sub
+    End If
+    If tipo <> "espacio" And tipo <> "lugar" Then
+        If placa = "" Then
+            Avisar "Un equipo necesita placa.", "placa"
+            Exit Sub
+        End If
+        If Valor("categoria") = "" Then
+            Avisar "Un equipo necesita categoría.", "categoria"
+            Exit Sub
+        End If
+    End If
+
+    colNombre = ColumnaDe(ws, "nombre")
+    colPlaca = ColumnaDe(ws, "placa")
+    If colNombre = 0 Then
+        MsgBox "La hoja Activos no tiene la columna nombre.", vbCritical, TITULO
+        Exit Sub
+    End If
+
+    ultima = ws.Cells(ws.Rows.Count, colNombre).End(xlUp).Row
+    If colPlaca > 0 Then
+        If ws.Cells(ws.Rows.Count, colPlaca).End(xlUp).Row > ultima Then
+            ultima = ws.Cells(ws.Rows.Count, colPlaca).End(xlUp).Row
+        End If
+    End If
+    fila = ultima + 1
+    If fila > MAX_FILA Then
+        MsgBox "La hoja Activos ya tiene el máximo de 2000 filas. Importa este archivo y sigue en otro.", vbExclamation, TITULO
+        Exit Sub
+    End If
+
+    If placa <> "" And colPlaca > 0 Then
+        For f = 2 To ultima
+            If UCase$(Trim$(CStr(ws.Cells(f, colPlaca).Value))) = placa Then
+                Avisar "La placa " & placa & " ya está en la fila " & f & " de la hoja Activos.", "placa"
+                Exit Sub
+            End If
+        Next f
+    End If
+
+    For Each n In ThisWorkbook.Names
+        If Left$(n.Name, Len(PREFIJO)) = PREFIJO Then
+            clave = Mid$(n.Name, Len(PREFIJO) + 1)
+            col = ColumnaDe(ws, clave)
+            If col > 0 Then
+                texto = Trim$(CStr(n.RefersToRange.Value))
+                If clave = "placa" Or clave = "placa_padre" Then texto = UCase$(Replace(texto, " ", ""))
+                With ws.Cells(fila, col)
+                    .NumberFormat = "@"
+                    .Value = texto
+                End With
+            End If
+        End If
+    Next n
+
+    texto = Valor("nombre")
+    LimpiarFormulario False
+    Mensaje "Agregado «" & texto & "» en la fila " & fila & " de la hoja Activos."
+End Sub
+
+' todo = True: vacía el formulario entero. False: solo lo que cambia de un
+' activo al siguiente, para cargar varios parecidos sin reescribir el resto.
+Public Sub LimpiarFormulario(Optional ByVal todo As Boolean = True)
+    Dim n As Name
+    Dim clave As Variant
+
+    If todo Then
+        For Each n In ThisWorkbook.Names
+            If Left$(n.Name, Len(PREFIJO)) = PREFIJO Then n.RefersToRange.ClearContents
+        Next n
+        Mensaje ""
+    Else
+        For Each clave In Array("nombre", "placa", "identificador", "descripcion")
+            Campo(CStr(clave)).ClearContents
+        Next clave
+    End If
+End Sub
+
+' Agrega el valor del campo `campo` (nombre definido en Inicio) a la columna
+' de la hoja Listas cuyo encabezado es `encabezado`. Los desplegables de
+' categoría y subcategoría leen de ahí (filas 2 a 500).
+Public Sub AgregarALista(ByVal campo As String, ByVal encabezado As String)
+    Dim ws As Worksheet
+    Dim celda As Range
+    Dim texto As String
+    Dim col As Long, ultima As Long, f As Long
+
+    Set ws = ThisWorkbook.Worksheets("Listas")
+    Set celda = ThisWorkbook.Names(campo).RefersToRange
+    texto = Trim$(CStr(celda.Value))
+    If texto = "" Then
+        MensajeListas "Escribe el valor que quieres agregar."
+        Exit Sub
+    End If
+
+    col = ColumnaDe(ws, encabezado)
+    If col = 0 Then
+        MsgBox "La hoja Listas no tiene la columna " & encabezado & ".", vbCritical, TITULO
+        Exit Sub
+    End If
+
+    ultima = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
+    For f = 2 To ultima
+        If LCase$(Trim$(CStr(ws.Cells(f, col).Value))) = LCase$(texto) Then
+            celda.ClearContents
+            MensajeListas "«" & texto & "» ya estaba en " & encabezado & "."
+            Exit Sub
+        End If
+    Next f
+    If ultima + 1 > 500 Then
+        MsgBox "La lista de " & encabezado & " está llena (499 valores).", vbExclamation, TITULO
+        Exit Sub
+    End If
+
+    With ws.Cells(ultima + 1, col)
+        .NumberFormat = "@"
+        .Value = texto
+    End With
+    celda.ClearContents
+    MensajeListas "Agregado «" & texto & "» a " & encabezado & "."
+End Sub
+
+Private Sub MensajeListas(ByVal texto As String)
+    ThisWorkbook.Names("msg_listas").RefersToRange.Value = texto
+End Sub

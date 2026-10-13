@@ -240,9 +240,11 @@ los submenús.
   "Disponible" entran al catálogo que ofrece el bot por WhatsApp. El botón
   "+ Agregar activo" crea uno nuevo, decidiendo ahí mismo si es un activo
   independiente (padre) o un hijo de otro equipo ya existente. El botón
-  "Importar" agrega activos y lugares en lote desde una plantilla de Excel
-  o CSV que se descarga en el mismo diálogo, con el padre por placa y el
-  lugar por nombre. Solo agrega, y si una fila tiene un error no se importa
+  "Importar" agrega activos y lugares en lote desde una plantilla que se
+  descarga en el mismo diálogo: un Excel con macros (`.xlsm`) que se llena
+  con el formulario de su primera hoja o directo en la tabla, y desde el que
+  también se agregan categorías y subcategorías; o un CSV. El padre va por
+  placa y el lugar por nombre. Solo agrega, y si una fila tiene un error no se importa
   ninguna (ver `docs/ARQUITECTURA.md`, "Importar activos"). No se
   auto-refresca -- botón "Refrescar" manual, para no perder una edición a
   medio hacer.

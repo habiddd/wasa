@@ -2693,19 +2693,26 @@ def api_crear_activo():
     return jsonify(_serializar_recurso(recurso)), 201
 
 
-@bp.route("/api/activos/plantilla.<any(xlsx, csv):formato>")
+@bp.route("/api/activos/plantilla.<any(xlsm, csv):formato>")
 def api_plantilla_activos(formato):
-    """Plantilla vacía para importar activos (ver app/importar_activos.py)."""
+    """Plantilla para importar activos (ver app/importar_activos.py). Trae listas de
+    lugares, categorías, subcategorías y equipos existentes para los desplegables."""
     if formato == "csv":
         return send_file(
             io.BytesIO(importar_activos.plantilla_csv()), as_attachment=True,
             download_name="plantilla-activos.csv", mimetype="text/csv",
         )
-    lugares = [r.nombre for r in Recurso.query.filter_by(tipo="espacio").order_by(Recurso.nombre)]
+    equipos = Recurso.query.filter(Recurso.tipo == "equipo", Recurso.placa.isnot(None)).order_by(Recurso.nombre).all()
+    listas = {
+        "lugares": [r.nombre for r in Recurso.query.filter_by(tipo="espacio").order_by(Recurso.nombre)],
+        "categorias": sorted({r.categoria for r in equipos if r.categoria}),
+        "subcategorias": sorted({r.subcategoria for r in equipos if r.subcategoria}),
+        "equipos": [(r.placa, r.nombre) for r in equipos],
+    }
     return send_file(
-        io.BytesIO(importar_activos.plantilla_xlsx(lugares)), as_attachment=True,
-        download_name="plantilla-activos.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        io.BytesIO(importar_activos.plantilla_xlsm(listas)), as_attachment=True,
+        download_name="plantilla-activos.xlsm",
+        mimetype="application/vnd.ms-excel.sheet.macroEnabled.12",
     )
 
 
@@ -2718,7 +2725,7 @@ def api_importar_activos():
     """
     archivo = request.files.get("archivo")
     if not archivo or not archivo.filename:
-        return jsonify({"error": "Adjunta un archivo .xlsx o .csv."}), 400
+        return jsonify({"error": "Adjunta un archivo .xlsx, .xlsm o .csv."}), 400
 
     try:
         filas = importar_activos.leer_filas(archivo.filename, archivo.read())

@@ -887,7 +887,7 @@ export function crearActivo(cambios: CambiosActivo) {
 // no modifica ni borra activos, y si una fila falla no importa ninguna (ver
 // app/importar_activos.py). Multipart a mano por lo mismo que registrarActa.
 export const URL_PLANTILLA_ACTIVOS = {
-  xlsx: `${BASE}/activos/plantilla.xlsx`,
+  xlsm: `${BASE}/activos/plantilla.xlsm`,
   csv: `${BASE}/activos/plantilla.csv`,
 }
 

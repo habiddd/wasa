@@ -2528,9 +2528,47 @@ en `routes/dashboard.py` (`api_importar_activos`).
 
 | Endpoint | Qué hace |
 |---|---|
-| `GET /api/activos/plantilla.xlsx` | Hojas Instrucciones, Activos (encabezados, listas desplegables, placas como texto) y Lugares (los existentes) |
+| `GET /api/activos/plantilla.xlsm` | Excel con macros: hoja Inicio (guía, formulario y botones), Activos y Listas |
 | `GET /api/activos/plantilla.csv` | Solo la fila de encabezados, separada por `;` y con BOM |
-| `POST /api/activos/importar` | Multipart con `archivo` (.xlsx o .csv); 201 `{creados}` o 400 `{error, errores: [{fila, mensaje}]}` |
+| `POST /api/activos/importar` | Multipart con `archivo` (.xlsm, .xlsx o .csv); 201 `{creados}` o 400 `{error, errores: [{fila, mensaje}]}` |
+
+- **Una sola plantilla de Excel, con dos formas de llenarla.** Se genera en
+  cada descarga (`plantilla_xlsm` en `importar_activos.py`), con los lugares,
+  categorías, subcategorías y equipos del momento en la hoja Listas. Se
+  puede usar el formulario de Inicio o escribir directo en la tabla de la
+  hoja Activos: cada celda muestra su ayuda al seleccionarla,
+  lugar/categoría/subcategoría tienen desplegable (aceptan valores nuevos) y
+  el formato condicional marca en rojo el nombre, la placa o la categoría que
+  falten y las placas repetidas. No hay plantilla `.xlsx`, pero la
+  importación sí acepta ese formato (alguien puede guardar el archivo así).
+- **El formulario escribe en la hoja Activos**, que es la única
+  que lee la importación: las macros nunca llegan al servidor. El VBA
+  (`plantillas/ImportarActivos.bas.txt` y `ThisWorkbook.cls.txt`) valida
+  nombre, placa y categoría, rechaza una placa repetida en la hoja y copia el
+  formulario a la siguiente fila libre, aunque haya filas escritas a mano.
+- **Categorías y subcategorías nuevas desde Inicio.** A la derecha del
+  formulario, dos campos con su botón (`AgregarALista`) agregan el valor a la
+  hoja Listas, de donde leen los desplegables; un valor repetido (sin
+  distinguir mayúsculas) no se duplica. Solo cambian el archivo: en la base,
+  categoría y subcategoría son texto libre del activo, no tablas aparte.
+- **Los botones son celdas con hipervínculo, no objetos de dibujo.**
+  `Workbook_SheetFollowHyperlink` dispara la macro. openpyxl no conserva
+  botones ni formas, y así la plantilla se puede regenerar en cada descarga.
+- **El VBA no conoce las columnas.** Cada campo es un nombre definido
+  `f_<clave>` y su columna es la de Activos cuyo encabezado dice `<clave>`;
+  los botones y mensajes son `btn_agregar`, `btn_limpiar`, `msg_formulario`,
+  `btn_categoria`, `btn_subcategoria`, `n_categoria`, `n_subcategoria` y
+  `msg_listas`. Agregar una columna a `COLUMNAS` no obliga a tocar el VBA.
+- **El VBA vive en `plantillas/base-activos.xlsm`**, un libro vacío con las
+  tres hojas, que `plantilla_xlsm` abre con `keep_vba=True` y rellena. Se
+  regenera solo cuando cambia el VBA, con
+  `flask-app/scripts/generar_base_xlsm.ps1` (necesita Excel de escritorio;
+  activa "Confiar en el acceso al modelo de objetos de VBA" mientras corre y
+  lo restaura al final, después de que Excel cierre).
+- **Macros bloqueadas.** Un `.xlsm` bajado desde otro equipo por IP llega
+  marcado como de internet y Excel bloquea sus macros hasta que se desbloquea
+  en Propiedades. La hoja Inicio lo explica, y sin macros igual se puede
+  llenar la hoja Activos a mano o usar el CSV.
 
 - **Solo agrega.** Nunca actualiza ni borra. Una placa que ya existe es un
   error de esa fila, no una actualización.

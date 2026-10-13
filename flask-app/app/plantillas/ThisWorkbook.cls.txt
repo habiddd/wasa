@@ -1,0 +1,19 @@
+Option Explicit
+
+' Los "botones" de la hoja Inicio son celdas con hipervínculo, no objetos de
+' dibujo: así el servidor puede regenerar la plantilla con openpyxl en cada
+' descarga sin perderlos. Las celdas se ubican por nombre definido
+' (btn_agregar, btn_limpiar, btn_categoria, btn_subcategoria), no por dirección.
+Private Sub Workbook_SheetFollowHyperlink(ByVal Sh As Object, ByVal Target As Hyperlink)
+    On Error GoTo Fin
+    If Not Intersect(Target.Range, Sh.Range("btn_agregar")) Is Nothing Then
+        AgregarActivo
+    ElseIf Not Intersect(Target.Range, Sh.Range("btn_limpiar")) Is Nothing Then
+        LimpiarFormulario True
+    ElseIf Not Intersect(Target.Range, Sh.Range("btn_categoria")) Is Nothing Then
+        AgregarALista "n_categoria", "categorias"
+    ElseIf Not Intersect(Target.Range, Sh.Range("btn_subcategoria")) Is Nothing Then
+        AgregarALista "n_subcategoria", "subcategorias"
+    End If
+Fin:
+End Sub
