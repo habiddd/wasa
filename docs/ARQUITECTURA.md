@@ -2521,8 +2521,12 @@ incluye.
 ## Importar activos desde Excel o CSV
 
 El botón "Importar" de la pestaña Activos (`ImportarActivosDialog.tsx`) abre
-un diálogo con las dos plantillas para descargar y, al lado, la subida del
-archivo lleno. La lectura y las plantillas viven en
+un diálogo de dos pasos: primero se elige el formato (Excel o CSV) y después
+aparecen la descarga de esa plantilla y, al lado, la subida del archivo
+lleno. La subida es una zona para arrastrar el archivo o hacer clic; el
+`accept` del input no filtra lo que se suelta, así que la extensión se
+revisa en el cliente (`tomar`) además de en el servidor. "Cambiar formato"
+vuelve al primer paso y descarta el archivo y los errores. La lectura y las plantillas viven en
 `flask-app/app/importar_activos.py` (sin Flask ni base de datos); la inserción,
 en `routes/dashboard.py` (`api_importar_activos`).
 

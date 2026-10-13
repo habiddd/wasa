@@ -291,6 +291,9 @@ Es un asistente de 4 pasos en diálogo. Una vez que hay algún trazo de firma, *
 ### Buscador de Reservas
 Es un input de búsqueda de 288px con icono de lupa, a la izquierda de los filtros. Busca en el cliente, sin tildes ni mayúsculas, por estudiante, teléfono, código, número de reserva, activo o placa, y se combina con los filtros (los contadores del filtro de estado también lo reflejan). Si no hay resultados, lo dice con la consulta citada y ofrece "Limpiar búsqueda".
 
+### Importar activos
+Es un diálogo de dos pasos. Primero, dos opciones grandes con borde ("Excel (.xlsm)" y "CSV (.csv)"), cada una con una línea que dice qué es. Al elegir, dos recuadros lado a lado: a la izquierda la descarga de la plantilla con sus notas; a la derecha una zona de borde punteado que ocupa el alto libre, para arrastrar el archivo o hacer clic, con "Importar" como acción principal debajo. La zona se resalta mientras se arrastra encima y, con un archivo elegido, muestra su nombre. Los errores salen bajo los recuadros, por número de fila, en un bloque con borde rojo tenue. En el pie, "Cambiar formato" (fantasma) y "Cerrar".
+
 ### Pie del detalle de reserva
 "Eliminar reserva" queda sola a la izquierda, con tinte rojo. A la derecha, de menor a mayor peso, van "Editar reserva" y **una sola** acción principal, que es el siguiente paso del préstamo: "Confirmar todo" si hay pendientes; si no, "Firmar entrega" o "Firmar devolución".
 
