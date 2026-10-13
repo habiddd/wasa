@@ -26,15 +26,19 @@ import { useActivosContext } from "@/features/activos/activos-context"
 import {
   ZONA_LACS,
   agruparEnEventos,
+  codigoUsuario,
   FILTROS_ESTADO_COMUNES,
   diaDe,
   etiquetaEvento,
   horaCompacta,
   mismoDia,
+  opcionesUsuarios,
+  TIPOS_RECURSO,
   ubicarReservas,
   type EventoCalendario,
 } from "@/features/calendario/calendario-utils"
 import { EstadoEventoBadge } from "@/features/calendario/EstadoBadge"
+import { FiltroMultiple } from "@/features/calendario/FiltroMultiple"
 import { IconoTipo } from "@/features/calendario/IconoTipo"
 import { ReservaDetalle } from "@/features/calendario/ReservaDetalle"
 import { type EstadoReserva, type ReservaCreada, type VentanaReservas } from "@/lib/api"
@@ -352,6 +356,11 @@ export function ReservasPanel() {
   const [filtro, setFiltro] = useState<FiltroEstado>(filtroInicial)
   const [soloSeguro, setSoloSeguro] = useState<boolean>(seguroInicial)
   const [busqueda, setBusqueda] = useState("")
+  // Igual que en el calendario: en recursos y usuarios vacío = todos; en
+  // `tipos` la selección es explícita y vacío = no mostrar nada.
+  const [tipos, setTipos] = useState<string[]>(() => TIPOS_RECURSO.map((t) => t.valor))
+  const [recursoIds, setRecursoIds] = useState<string[]>([])
+  const [usuarioCodigos, setUsuarioCodigos] = useState<string[]>([])
   const [idSeleccionado, setIdSeleccionado] = useState<number | null>(null)
   const [creando, setCreando] = useState(false)
 
@@ -396,18 +405,39 @@ export function ReservasPanel() {
 
   const placaDe = useMemo(() => new Map(activos.map((a) => [a.id, a.placa])), [activos])
 
-  // El checkbox "Necesita seguro" y la búsqueda combinan con AND sobre el
-  // filtro de estado ya calculado; se recalculan aparte para no rehacer el
-  // agrupamiento.
+  const recursos = useMemo(
+    () =>
+      activos
+        .filter((r) => tipos.includes(r.tipo))
+        .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
+        .map((r) => ({ valor: String(r.id), etiqueta: r.nombre })),
+    [activos, tipos]
+  )
+  const usuarios = useMemo(() => opcionesUsuarios(ubicadas, usuarioCodigos), [ubicadas, usuarioCodigos])
+
+  // La búsqueda, "Necesita seguro" y los filtros de tipo, recurso y usuario
+  // combinan con AND sobre el filtro de estado ya calculado; se recalculan
+  // aparte para no rehacer el agrupamiento. A diferencia del calendario, se
+  // filtra la reserva completa: basta con que una de sus líneas coincida.
   const eventosVisibles = useMemo(() => {
     const consulta = normalizar(busqueda.trim())
-    if (!soloSeguro && !consulta) return eventosPorFiltro
+    const todosLosTipos = tipos.length === TIPOS_RECURSO.length
+    if (!soloSeguro && !consulta && todosLosTipos && !recursoIds.length && !usuarioCodigos.length) {
+      return eventosPorFiltro
+    }
     const pasa = (e: EventoCalendario) =>
-      (!soloSeguro || necesitaSeguro(e)) && (!consulta || textoBuscable(e, placaDe).includes(consulta))
+      (!soloSeguro || necesitaSeguro(e)) &&
+      (!consulta || textoBuscable(e, placaDe).includes(consulta)) &&
+      e.reservas.some(
+        (r) =>
+          tipos.includes(r.recurso_tipo ?? "") &&
+          (!recursoIds.length || recursoIds.includes(String(r.recurso_id))) &&
+          (!usuarioCodigos.length || usuarioCodigos.includes(codigoUsuario(r)))
+      )
     return new Map<FiltroEstado, EventoCalendario[]>(
       [...eventosPorFiltro].map(([k, lista]) => [k, lista.filter(pasa)])
     )
-  }, [eventosPorFiltro, soloSeguro, busqueda, placaDe])
+  }, [eventosPorFiltro, soloSeguro, busqueda, placaDe, tipos, recursoIds, usuarioCodigos])
 
   const eventos = eventosVisibles.get(filtro) ?? []
   const pendientes = eventosVisibles.get("por_confirmar")?.length ?? 0
@@ -439,6 +469,15 @@ export function ReservasPanel() {
     } catch {
       // localStorage no disponible
     }
+  }
+
+  function cambiarTipos(nuevos: string[]) {
+    setTipos(nuevos)
+    // Los recursos elegidos pueden no pertenecer a los nuevos tipos.
+    const permitidos = new Set(
+      activos.filter((r) => nuevos.includes(r.tipo)).map((r) => String(r.id))
+    )
+    setRecursoIds((ids) => ids.filter((id) => permitidos.has(id)))
   }
 
   function cambiarVentana(nuevo: VentanaReservas) {
@@ -484,6 +523,30 @@ export function ReservasPanel() {
             placeholder="Estudiante, N.º de reserva o placa"
             aria-label="Buscar reservas por estudiante, número de reserva, activo o placa"
             className="h-8 pl-8"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <FiltroMultiple
+            opciones={TIPOS_RECURSO}
+            seleccion={tipos}
+            onChange={cambiarTipos}
+            textoTodos="Activos y lugares"
+            resumen={tipos.length ? undefined : "Ningún tipo"}
+          />
+          <FiltroMultiple
+            opciones={recursos}
+            seleccion={recursoIds}
+            onChange={setRecursoIds}
+            textoTodos="Todos los recursos"
+            className="max-w-52"
+          />
+          <FiltroMultiple
+            opciones={usuarios}
+            seleccion={usuarioCodigos}
+            onChange={setUsuarioCodigos}
+            textoTodos="Todos los usuarios"
+            className="max-w-60"
           />
         </div>
 

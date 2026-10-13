@@ -150,6 +150,44 @@ export function ubicarReservas(reservas: Sesion[]): ReservaUbicada[] {
   return ubicadas.sort((a, b) => a.inicio.getTime() - b.inicio.getTime())
 }
 
+export const TIPOS_RECURSO = [
+  { valor: "equipo", etiqueta: "Activos" },
+  { valor: "espacio", etiqueta: "Lugares" },
+]
+
+export const USUARIO_SIN_CODIGO = "__sin_codigo__"
+
+export function codigoUsuario(reserva: Sesion) {
+  return reserva.usuario_codigo_uninorte || USUARIO_SIN_CODIGO
+}
+
+/** Opciones del filtro de usuarios: los que aparecen en `ubicadas`, ordenados por código. */
+export function opcionesUsuarios(ubicadas: ReservaUbicada[], seleccion: string[]) {
+  const vistos = new Map<string, string>()
+  for (const { reserva } of ubicadas) {
+    const codigo = codigoUsuario(reserva)
+    if (!vistos.has(codigo)) {
+      vistos.set(codigo, reserva.usuario_nombre || reserva.usuario_telefono)
+    }
+  }
+  // Un código elegido puede no estar en el periodo actual: se conserva para
+  // poder desmarcarlo.
+  for (const codigo of seleccion) {
+    if (!vistos.has(codigo)) vistos.set(codigo, codigo)
+  }
+  return [...vistos.entries()]
+    .sort(([codigoA], [codigoB]) => codigoA.localeCompare(codigoB, "es"))
+    .map(([codigo, nombre]) => ({
+      valor: codigo,
+      etiqueta:
+        codigo === USUARIO_SIN_CODIGO
+          ? "Sin código Uninorte"
+          : codigo === nombre
+            ? codigo
+            : `${codigo} · ${nombre}`,
+    }))
+}
+
 // --- Eventos (una reserva hecha = un evento) --------------------------------
 
 /**

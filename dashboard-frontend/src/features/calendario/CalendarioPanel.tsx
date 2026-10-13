@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react"
+import { ChevronLeft, ChevronRight, Plus, Search } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -20,6 +21,7 @@ import {
 
 import {
   agruparEnEventos,
+  codigoUsuario,
   FILTROS_ESTADO_COMUNES,
   desplazar,
   diaDe,
@@ -28,6 +30,8 @@ import {
   finDelDia,
   hoy,
   inicioDelDia,
+  opcionesUsuarios,
+  TIPOS_RECURSO,
   ubicarReservas,
   type DiaCivil,
   type Vista,
@@ -41,8 +45,6 @@ import { VistaTiempo } from "./VistaTiempo"
 const PREFIJO_STORAGE = "dashboard-lacs-calendario-"
 const REFRESCO_MS = 60000
 
-const USUARIO_SIN_CODIGO = "__sin_codigo__"
-
 // Los estados salen de FILTROS_ESTADO_COMUNES, igual que en ReservasPanel: es el mismo
 // concepto de estado, solo que acá vive en un selector múltiple con búsqueda
 // en vez de una barra de chips. "retrasada" no es un estado de línea (ver el
@@ -55,10 +57,6 @@ const ESTADOS: { valor: string; etiqueta: string }[] = [
 const ESTADOS_POR_DEFECTO = ESTADOS.map((e) => e.valor).filter(
   (v) => v !== "cancelada" && v !== "denegada"
 )
-const TIPOS = [
-  { valor: "equipo", etiqueta: "Activos" },
-  { valor: "espacio", etiqueta: "Lugares" },
-]
 
 function guardado<T extends string>(clave: string, valores: readonly T[], porDefecto: T): T {
   try {
@@ -100,10 +98,11 @@ export function CalendarioPanel() {
   // En recursos y usuarios vacío = todos; en `tipos` y `estados` la selección
   // es explícita y vacío = no mostrar nada.
   const [tipos, setTipos] = useState<string[]>(() =>
-    guardadoLista("tipos-marcados", TIPOS.map((t) => t.valor), TIPOS.map((t) => t.valor))
+    guardadoLista("tipos-marcados", TIPOS_RECURSO.map((t) => t.valor), TIPOS_RECURSO.map((t) => t.valor))
   )
   const [recursoIds, setRecursoIds] = useState<string[]>([])
   const [usuarioCodigos, setUsuarioCodigos] = useState<string[]>([])
+  const [numero, setNumero] = useState("")
   const [estados, setEstados] = useState<string[]>(() =>
     guardadoLista("estados", ESTADOS.map((e) => e.valor), ESTADOS_POR_DEFECTO)
   )
@@ -157,40 +156,22 @@ export function CalendarioPanel() {
     return [...lista].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
   }, [activos, tipos])
 
-  const usuarios = useMemo(() => {
-    const vistos = new Map<string, string>()
-    for (const { reserva } of ubicadas) {
-      const codigo = reserva.usuario_codigo_uninorte || USUARIO_SIN_CODIGO
-      if (!vistos.has(codigo)) {
-        vistos.set(codigo, reserva.usuario_nombre || reserva.usuario_telefono)
-      }
-    }
-    // Un código elegido puede no estar en el periodo actual: se conserva para
-    // poder desmarcarlo.
-    for (const codigo of usuarioCodigos) {
-      if (!vistos.has(codigo)) vistos.set(codigo, codigo)
-    }
-    return [...vistos.entries()].sort(([codigoA], [codigoB]) =>
-      codigoA.localeCompare(codigoB, "es")
-    )
-  }, [ubicadas, usuarioCodigos])
+  const usuarios = useMemo(() => opcionesUsuarios(ubicadas, usuarioCodigos), [ubicadas, usuarioCodigos])
 
-  const filtradas = useMemo(
-    () =>
-      ubicadas.filter(({ reserva }) => {
-        if (!tipos.includes(reserva.recurso_tipo ?? "")) return false
-        if (recursoIds.length && !recursoIds.includes(String(reserva.recurso_id))) return false
-        if (usuarioCodigos.length) {
-          const codigo = reserva.usuario_codigo_uninorte || USUARIO_SIN_CODIGO
-          if (!usuarioCodigos.includes(codigo)) return false
-        }
-        // A diferencia de los demás estados, "retrasada" no compara contra
-        // `reserva.estado`: es el campo derivado que manda el backend (ver
-        // Sesion.retrasada / actas_service.esta_retrasada).
-        return estados.includes(reserva.estado) || (estados.includes("retrasada") && reserva.retrasada)
-      }),
-    [ubicadas, tipos, recursoIds, usuarioCodigos, estados]
-  )
+  const filtradas = useMemo(() => {
+    // "#123" o "123"; vacío o no numérico = sin filtro.
+    const buscado = Number(numero.trim().replace(/^#/, "")) || null
+    return ubicadas.filter(({ reserva }) => {
+      if (buscado !== null && reserva.grupo_id !== buscado) return false
+      if (!tipos.includes(reserva.recurso_tipo ?? "")) return false
+      if (recursoIds.length && !recursoIds.includes(String(reserva.recurso_id))) return false
+      if (usuarioCodigos.length && !usuarioCodigos.includes(codigoUsuario(reserva))) return false
+      // A diferencia de los demás estados, "retrasada" no compara contra
+      // `reserva.estado`: es el campo derivado que manda el backend (ver
+      // Sesion.retrasada / actas_service.esta_retrasada).
+      return estados.includes(reserva.estado) || (estados.includes("retrasada") && reserva.retrasada)
+    })
+  }, [ubicadas, tipos, recursoIds, usuarioCodigos, estados, numero])
 
   // Se agrupa después de filtrar: si se filtra por un activo concreto, el
   // evento muestra solo esa línea, no toda la reserva.
@@ -259,8 +240,24 @@ export function CalendarioPanel() {
           Calendario de reservas
         </h1>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-32">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              type="search"
+              inputMode="numeric"
+              value={numero}
+              onChange={(e) => setNumero(e.target.value)}
+              placeholder="N.º reserva"
+              aria-label="Buscar por número de reserva"
+              className="h-7 pl-7"
+            />
+          </div>
+
           <FiltroMultiple
-            opciones={TIPOS}
+            opciones={TIPOS_RECURSO}
             seleccion={tipos}
             onChange={cambiarTipos}
             textoTodos="Activos y lugares"
@@ -276,15 +273,7 @@ export function CalendarioPanel() {
           />
 
           <FiltroMultiple
-            opciones={usuarios.map(([codigo, nombre]) => ({
-              valor: codigo,
-              etiqueta:
-                codigo === USUARIO_SIN_CODIGO
-                  ? "Sin código Uninorte"
-                  : codigo === nombre
-                    ? codigo
-                    : `${codigo} · ${nombre}`,
-            }))}
+            opciones={usuarios}
             seleccion={usuarioCodigos}
             onChange={setUsuarioCodigos}
             textoTodos="Todos los usuarios"
