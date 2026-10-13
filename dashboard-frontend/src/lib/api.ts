@@ -883,6 +883,28 @@ export function crearActivo(cambios: CambiosActivo) {
   })
 }
 
+// Importar activos desde la plantilla (Excel o CSV). Solo agrega: el backend
+// no modifica ni borra activos, y si una fila falla no importa ninguna (ver
+// app/importar_activos.py). Multipart a mano por lo mismo que registrarActa.
+export const URL_PLANTILLA_ACTIVOS = {
+  xlsx: `${BASE}/activos/plantilla.xlsx`,
+  csv: `${BASE}/activos/plantilla.csv`,
+}
+
+export type ErrorImportacion = { fila: number; mensaje: string }
+
+export type ResultadoImportacion = { creados: number; errores: ErrorImportacion[] }
+
+export async function importarActivos(archivo: File): Promise<ResultadoImportacion> {
+  const formData = new FormData()
+  formData.append("archivo", archivo)
+  const resp = await conectar(`${BASE}/activos/importar`, { method: "POST", body: formData })
+  const data = await resp.json().catch(() => null)
+  if (resp.ok) return { creados: data.creados, errores: [] }
+  if (data?.errores?.length) return { creados: 0, errores: data.errores }
+  throw errorHttp(resp.status, data)
+}
+
 // `propagar_espacio` no es un campo de Recurso: es una opción de la
 // petición que le dice al backend si debe arrastrar a los hijos (por
 // padre_id) que estaban en el mismo lugar (ver dashboard.py). El backend

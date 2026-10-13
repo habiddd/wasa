@@ -289,7 +289,7 @@ Es la pantalla de inicio del mostrador. Lleva un `h1` "Hoy" con la fecha larga y
 Es un asistente de 4 pasos en diálogo. Una vez que hay algún trazo de firma, **nada lo cierra sin preguntar**: Escape, el clic afuera y "Cancelar" abren "¿Descartar las firmas?", con "Seguir firmando" (outline) y "Descartar firmas" (tinte rojo). El nombre y la cédula de quien firma por la LACS se recuerdan en el navegador después de cada acta registrada.
 
 ### Buscador de Reservas
-Es un input de búsqueda de 288px con icono de lupa, a la izquierda de los filtros. Busca en el cliente, sin tildes ni mayúsculas, por estudiante, teléfono, código, número de reserva, activo o placa, y se combina con los filtros (los contadores del select también lo reflejan). Si no hay resultados, lo dice con la consulta citada y ofrece "Limpiar búsqueda".
+Es un input de búsqueda de 288px con icono de lupa, a la izquierda de los filtros. Busca en el cliente, sin tildes ni mayúsculas, por estudiante, teléfono, código, número de reserva, activo o placa, y se combina con los filtros (los contadores del filtro de estado también lo reflejan). Si no hay resultados, lo dice con la consulta citada y ofrece "Limpiar búsqueda".
 
 ### Pie del detalle de reserva
 "Eliminar reserva" queda sola a la izquierda, con tinte rojo. A la derecha, de menor a mayor peso, van "Editar reserva" y **una sola** acción principal, que es el siguiente paso del préstamo: "Confirmar todo" si hay pendientes; si no, "Firmar entrega" o "Firmar devolución".

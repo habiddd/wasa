@@ -22,7 +22,7 @@ import qrcode
 import requests
 from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from sqlalchemy import or_, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app import (
@@ -31,6 +31,7 @@ from app import (
     avisos_reservas,
     estado_bot,
     fechas_bloqueadas_service,
+    importar_activos,
     metricas_excel,
     recursos_service,
     registro_service,
@@ -38,6 +39,7 @@ from app import (
     whatsapp_client,
 )
 from app.extensions import db, redis_client
+from app.textutils import normalizar
 from app.models import (
     AuditoriaBot,
     CalendarioReglas,
@@ -2689,6 +2691,180 @@ def api_crear_activo():
         return jsonify({"error": _mensaje_integridad(exc)}), 400
 
     return jsonify(_serializar_recurso(recurso)), 201
+
+
+@bp.route("/api/activos/plantilla.<any(xlsx, csv):formato>")
+def api_plantilla_activos(formato):
+    """Plantilla vacía para importar activos (ver app/importar_activos.py)."""
+    if formato == "csv":
+        return send_file(
+            io.BytesIO(importar_activos.plantilla_csv()), as_attachment=True,
+            download_name="plantilla-activos.csv", mimetype="text/csv",
+        )
+    lugares = [r.nombre for r in Recurso.query.filter_by(tipo="espacio").order_by(Recurso.nombre)]
+    return send_file(
+        io.BytesIO(importar_activos.plantilla_xlsx(lugares)), as_attachment=True,
+        download_name="plantilla-activos.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@bp.route("/api/activos/importar", methods=["POST"])
+def api_importar_activos():
+    """Importa activos desde un archivo. Solo inserta, nunca actualiza ni borra.
+
+    All-or-nothing: si alguna fila falla, no se importa nada y se reportan todos
+    los errores.
+    """
+    archivo = request.files.get("archivo")
+    if not archivo or not archivo.filename:
+        return jsonify({"error": "Adjunta un archivo .xlsx o .csv."}), 400
+
+    try:
+        filas = importar_activos.leer_filas(archivo.filename, archivo.read())
+    except importar_activos.ErrorArchivo as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    errores = []
+    limpias = []
+    placas_archivo = {}  # placa -> fila
+
+    for fila, datos in filas:
+        limpio, error = importar_activos.normalizar_fila(datos)
+        if error:
+            errores.append({"fila": fila, "mensaje": error})
+            continue
+
+        if limpio["placa"] and limpio["placa"] in placas_archivo:
+            errores.append({
+                "fila": fila,
+                "mensaje": f"La placa {limpio['placa']} está repetida en el archivo (fila {placas_archivo[limpio['placa']]})."
+            })
+            continue
+
+        if limpio["placa"]:
+            placas_archivo[limpio["placa"]] = fila
+
+        limpias.append((fila, limpio))
+
+    # Cargar lugares existentes: nombre normalizado -> [Recurso]
+    lugares = {}
+    for r in Recurso.query.filter_by(tipo="espacio"):
+        clave = normalizar(r.nombre)
+        if clave not in lugares:
+            lugares[clave] = []
+        lugares[clave].append(r)
+
+    creados_por_placa = {}
+    creados = 0
+
+    def insertar(d: dict, padre) -> str | None:
+        """Intenta insertar una fila. Devuelve None si éxito, mensaje de error si fallo."""
+        nonlocal creados
+
+        # Determinar espacio_id
+        espacio_id = None
+        if d["lugar"]:
+            candidatos = lugares.get(normalizar(d["lugar"]), [])
+            if not candidatos:
+                return f"No existe el lugar «{d['lugar']}»."
+            if len(candidatos) > 1:
+                return f"Hay varios lugares llamados «{d['lugar']}»."
+            espacio_id = candidatos[0].id
+        elif padre is not None:
+            # Hereda el lugar del padre
+            espacio_id = padre.espacio_id
+
+        recurso = Recurso(
+            tipo=d["tipo"],
+            nombre=d["nombre"],
+            descripcion=d["descripcion"],
+            ubicacion=d["ubicacion"],
+            placa=d["placa"],
+            categoria=d["categoria"],
+            subcategoria=d["subcategoria"],
+            marca=d["marca"],
+            modelo=d["modelo"],
+            identificador=d["identificador"],
+            requiere_confirmacion=d["requiere_confirmacion"],
+            estado=d["estado"],
+            padre_id=padre.id if padre else None,
+            espacio_id=espacio_id,
+        )
+
+        try:
+            with db.session.begin_nested():
+                db.session.add(recurso)
+                db.session.flush()
+        except IntegrityError as exc:
+            return _mensaje_integridad(exc)
+        except DataError:
+            return "Algún dato supera el largo permitido."
+
+        # Registro exitoso
+        if d["tipo"] == "espacio":
+            clave = normalizar(recurso.nombre)
+            if clave not in lugares:
+                lugares[clave] = []
+            lugares[clave].append(recurso)
+        if recurso.placa:
+            creados_por_placa[recurso.placa] = recurso
+        creados += 1
+        return None
+
+    # Insertar en rondas: primero espacios, luego equipos (algunos con padres)
+    pendientes = sorted(limpias, key=lambda x: x[1]["tipo"] != "espacio")
+
+    while pendientes:
+        siguientes = []
+        for fila, d in pendientes:
+            padre = None
+            if d["placa_padre"]:
+                padre = creados_por_placa.get(d["placa_padre"])
+                if padre is None and d["placa_padre"] in placas_archivo:
+                    # Su padre aún no se creó, pasa a la siguiente ronda
+                    siguientes.append((fila, d))
+                    continue
+                if padre is None:
+                    padre = Recurso.query.filter_by(placa=d["placa_padre"]).first()
+                if padre is None:
+                    errores.append({
+                        "fila": fila,
+                        "mensaje": f"No existe un activo con placa {d['placa_padre']} (ni en la base ni en el archivo)."
+                    })
+                    continue
+                if padre.tipo != "equipo":
+                    errores.append({
+                        "fila": fila,
+                        "mensaje": _ERROR_PADRE_NO_EQUIPO
+                    })
+                    continue
+
+            error = insertar(d, padre)
+            if error:
+                errores.append({"fila": fila, "mensaje": error})
+
+        if len(siguientes) == len(pendientes):
+            # Ciclo infinito: todos los padres quedan sin crear
+            for fila, d in pendientes:
+                errores.append({
+                    "fila": fila,
+                    "mensaje": f"Su padre (placa {d['placa_padre']}) no se pudo crear."
+                })
+            break
+
+        pendientes = siguientes
+
+    if errores:
+        db.session.rollback()
+        n = len(errores)
+        return jsonify({
+            "error": f"No se importó ningún activo: {n} fila(s) con errores.",
+            "errores": sorted(errores, key=lambda e: e["fila"])
+        }), 400
+
+    db.session.commit()
+    return jsonify({"creados": creados}), 201
 
 
 @bp.route("/api/activos/<int:recurso_id>", methods=["PATCH"])

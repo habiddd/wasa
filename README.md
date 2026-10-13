@@ -143,9 +143,10 @@ los submenús.
   (por confirmar / confirmada / entregada / completada / devuelta tarde /
   no devuelta / no se presentó / cancelada / denegada) y el ícono si es un
   activo o un lugar. La leyenda plegable "Qué significa cada color" explica
-  cada estado. Se puede filtrar por tipo, recurso, usuario y estado. Cada
-  filtro tiene buscador y deja marcar varias opciones; por defecto se
-  ocultan las canceladas y las denegadas. Al hacer clic en un evento se abre
+  cada estado. Se puede filtrar por número de reserva, tipo, recurso,
+  usuario y estado. Cada filtro (salvo el número) tiene buscador y deja
+  marcar varias opciones; por defecto se ocultan las canceladas y las
+  denegadas. Al hacer clic en un evento se abre
   un modal con su **número de reserva**, el usuario, el horario y la lista
   de activos, desde donde se puede **editar** la reserva (horario, estado y,
   si es de un solo activo, el recurso) vía
@@ -156,8 +157,10 @@ los submenús.
   local de la LACS (`America/Bogota`), sin importar la zona del equipo desde
   el que se abra el dashboard. Se refresca solo cada 60s.
 - **Reservas**: la misma lista de sesiones en tabla (o tarjetas en pantallas
-  angostas), filtrable por periodo, por estado (con los mismos filtros del
-  Calendario, más "Por confirmar") y por si necesita seguro. Un buscador
+  angostas), ordenada por número de reserva de mayor a menor y filtrable
+  por periodo, por si necesita seguro y con los mismos filtros
+  multiselección del Calendario: tipo, recurso, usuario y estado (con el
+  conteo de cada uno). Un buscador
   encuentra por estudiante, teléfono, código, número de reserva, activo o
   placa, sin importar tildes ni mayúsculas. Cada fila tiene un botón que
   abre el **acta de entrega y devolución** en un modal con la vista previa
@@ -236,7 +239,11 @@ los submenús.
   propio, para no crear un ciclo. Solo los activos
   "Disponible" entran al catálogo que ofrece el bot por WhatsApp. El botón
   "+ Agregar activo" crea uno nuevo, decidiendo ahí mismo si es un activo
-  independiente (padre) o un hijo de otro equipo ya existente. No se
+  independiente (padre) o un hijo de otro equipo ya existente. El botón
+  "Importar" agrega activos y lugares en lote desde una plantilla de Excel
+  o CSV que se descarga en el mismo diálogo, con el padre por placa y el
+  lugar por nombre. Solo agrega, y si una fila tiene un error no se importa
+  ninguna (ver `docs/ARQUITECTURA.md`, "Importar activos"). No se
   auto-refresca -- botón "Refrescar" manual, para no perder una edición a
   medio hacer.
 - **Lugares**: espacios reservables (`tipo='espacio'`, ej. salas/estudios),

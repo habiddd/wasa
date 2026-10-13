@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 
 import { ActivoCard } from "./ActivoCard"
 import { ActivoNuevoForm } from "./ActivoNuevoForm"
+import { ImportarActivosDialog } from "./ImportarActivosDialog"
 import { useActivosContext } from "./activos-context"
 import {
   descendientesDe,
@@ -29,6 +30,7 @@ export function ActivosPanel() {
     setSubsubtabActiva,
   } = useActivosContext()
   const [mostrarNuevo, setMostrarNuevo] = useState(false)
+  const [importando, setImportando] = useState(false)
 
   useEffect(() => {
     reload()
@@ -83,6 +85,9 @@ export function ActivosPanel() {
           <Button size="sm" variant="outline" onClick={() => setMostrarNuevo((v) => !v)}>
             + Agregar activo
           </Button>
+          <Button size="sm" variant="outline" onClick={() => setImportando(true)}>
+            Importar
+          </Button>
           <Button size="sm" variant="outline" onClick={() => reload()}>
             Refrescar
           </Button>
@@ -110,6 +115,8 @@ export function ActivosPanel() {
           }}
         />
       )}
+
+      {importando && <ImportarActivosDialog onClose={() => setImportando(false)} onImportado={() => reload()} />}
 
       <div className="flex flex-wrap gap-1.5">
         {claves.map((clave) => {

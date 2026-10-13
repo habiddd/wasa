@@ -1173,10 +1173,10 @@ flowchart TD
   (`_reserva_solapada`, `_reserva_en_curso`, `_proxima_reserva`, las de
   cancelación) usan `ESTADOS_QUE_OCUPAN = ('confirmada', 'pendiente')`.
 - **La LACS confirma desde el dashboard**, en la pestaña Reservas: un
-  desplegable de estado (con el conteo de cada uno) reemplaza a las
-  pestañas de antes, y la opción "Por confirmar" junta las reservas con
-  alguna línea pendiente (la más próxima primero); un checkbox aparte
-  "Necesita seguro" filtra (con AND sobre el estado elegido) las que salen
+  filtro de estado multiselección (con el conteo de cada uno) reemplaza a
+  las pestañas de antes, y la opción "Por confirmar" junta las reservas con
+  alguna línea pendiente; un checkbox aparte
+  "Necesita seguro" filtra (con AND sobre los estados elegidos) las que salen
   de Barranquilla, la misma condición del badge "Sale de Barranquilla ·
   seguro". En el modal de detalle cada activo pendiente tiene sus botones
   (ver el punto siguiente). "Confirmar todo" aparece solo si hay más de un
@@ -1500,9 +1500,13 @@ tener presentes antes de tocarlo:
 - **Un evento agrupa las líneas de un mismo `grupo_id` y horario.** Una
   reserva hecha para cinco activos llena el día con un solo evento. El
   `grupo_id` evita mezclar dos reservas independientes del mismo usuario a
-  la misma hora; el filtrado (tipo, recurso, usuario y estado) ocurre
+  la misma hora; el filtrado (número, tipo, recurso, usuario y estado) ocurre
   **antes** de agrupar. El filtro de usuario usa `usuarios.codigo_uninorte`.
-- **Los cuatro filtros son multiselección con búsqueda.** El componente
+- **Búsqueda por número de reserva.** Un input aparte, antes de los
+  filtros, compara exacto contra `grupo_id` (acepta `123` o `#123`; vacío
+  o no numérico = sin filtro). Solo busca dentro del periodo cargado: no
+  salta a la fecha de la reserva. No se guarda en `localStorage`.
+- **Los otros cuatro filtros son multiselección con búsqueda.** El componente
   `FiltroMultiple.tsx` es un popover de Radix con un buscador (no distingue
   tildes ni mayúsculas), casillas y los botones "Todos" y "Ninguno", que
   actúan solo sobre lo que muestra la búsqueda. No se agregó `cmdk` ni
@@ -1522,6 +1526,18 @@ tener presentes antes de tocarlo:
     hay migración.
   - Al desmarcar un tipo se quitan los recursos marcados que no son de ese
     tipo.
+- **Reservas usa los mismos filtros**, con las mismas piezas:
+  `FiltroMultiple`, y `TIPOS_RECURSO`, `codigoUsuario` y `opcionesUsuarios`
+  de `calendario-utils.ts`. Cambian tres cosas:
+  - Filtra la reserva **completa**, después de agrupar: entra si alguna de
+    sus líneas coincide (`cumpleEstado` en `ReservasPanel`). Cada fila es
+    una reserva entera y el modal tiene que ver todos sus activos.
+  - Estado trae todo marcado (equivale al "Todas" de antes) y cada opción
+    muestra su conteo, que respeta los demás filtros y la búsqueda. Solo
+    estado se guarda, en `dashboard-lacs-reservas-estados`; la clave vieja
+    `dashboard-lacs-reservas-estado` se ignora.
+  - La tabla va por número de reserva de mayor a menor (`porNumeroDesc`);
+    las legadas sin `grupo_id` quedan al final.
 - **El modal permite editar los activos reservados.** La lista principal
   muestra solo las líneas de ese grupo, agrupando visualmente los padres y
   sus hijos con indentación. El botón `+` abre un árbol con casillas para
@@ -1554,9 +1570,8 @@ tener presentes antes de tocarlo:
 - **Un solo vocabulario de estados.** Las etiquetas visibles salen de
   `calendario-utils.ETIQUETA_ESTADO` (`etiquetaEstado`), y los filtros que
   comparten Calendario y Reservas de `FILTROS_ESTADO_COMUNES`: cada panel
-  solo antepone los suyos: Reservas, "Vigentes"/"Todas" y "Por confirmar";
-  el Calendario, solo "Por confirmar", porque ahí los atajos son la
-  selección por defecto y la casilla de cada estado. Así un
+  solo antepone "Por confirmar" (en Reservas, reservas con alguna línea
+  pendiente; en el Calendario, las líneas `pendiente`). Así un
   estado no se llama distinto según la pestaña.
 - **Una sola barra de desplazamiento.** En semana y día la rejilla de horas
   mide lo que queda de ventana debajo de ella (`VistaTiempo`, recalculado en
@@ -2502,6 +2517,41 @@ incluye.
   guarda zonas.
 - El frontend descarga con un `<a href download>`. El navegador ya manda la
   autenticación básica del panel, así que no hace falta `fetch` ni blob.
+
+## Importar activos desde Excel o CSV
+
+El botón "Importar" de la pestaña Activos (`ImportarActivosDialog.tsx`) abre
+un diálogo con las dos plantillas para descargar y, al lado, la subida del
+archivo lleno. La lectura y las plantillas viven en
+`flask-app/app/importar_activos.py` (sin Flask ni base de datos); la inserción,
+en `routes/dashboard.py` (`api_importar_activos`).
+
+| Endpoint | Qué hace |
+|---|---|
+| `GET /api/activos/plantilla.xlsx` | Hojas Instrucciones, Activos (encabezados, listas desplegables, placas como texto) y Lugares (los existentes) |
+| `GET /api/activos/plantilla.csv` | Solo la fila de encabezados, separada por `;` y con BOM |
+| `POST /api/activos/importar` | Multipart con `archivo` (.xlsx o .csv); 201 `{creados}` o 400 `{error, errores: [{fila, mensaje}]}` |
+
+- **Solo agrega.** Nunca actualiza ni borra. Una placa que ya existe es un
+  error de esa fila, no una actualización.
+- **Todo o nada.** Cada fila se inserta en un savepoint
+  (`begin_nested`), así un error no corta las demás y se reportan todos de
+  una vez. Si hubo alguno, se hace rollback de todo.
+- **Relaciones en texto, no ids.** `placa_padre` es la placa del equipo
+  padre; `lugar`, el nombre del espacio, sin tildes ni mayúsculas (un nombre
+  repetido entre lugares es un error). Ambos pueden existir ya o venir en el
+  mismo archivo: primero se insertan los lugares y después los equipos por
+  rondas, de modo que un hijo puede ir antes que su padre en el archivo. Sin
+  `lugar`, el hijo hereda el de su padre, igual que el alta manual.
+- **Las reglas son las de la base.** El formato de placa, la placa y la
+  categoría obligatorias y los lugares sin padre los validan los CHECK de
+  `recursos`; el mensaje sale de `_mensaje_integridad`, el mismo del alta
+  manual.
+- **Lectura tolerante.** Encabezados sin tildes ni mayúsculas, columnas
+  opcionales, filas vacías ignoradas; en CSV, `;` o `,` y UTF-8 o
+  Windows-1252. Excel convierte placas en números: `12345670.0` vuelve a
+  `"12345670"`. Máximo 2000 filas.
+- Autoverificación: `docker exec lacs_flask_app python -m app.importar_activos`.
 
 ## Excepciones: lista negra de fechas
 

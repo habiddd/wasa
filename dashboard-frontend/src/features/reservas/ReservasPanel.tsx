@@ -41,36 +41,40 @@ import { EstadoEventoBadge } from "@/features/calendario/EstadoBadge"
 import { FiltroMultiple } from "@/features/calendario/FiltroMultiple"
 import { IconoTipo } from "@/features/calendario/IconoTipo"
 import { ReservaDetalle } from "@/features/calendario/ReservaDetalle"
-import { type EstadoReserva, type ReservaCreada, type VentanaReservas } from "@/lib/api"
-import { cn } from "@/lib/utils"
+import { type ReservaCreada, type VentanaReservas } from "@/lib/api"
 
 import { BotonActaPdf } from "./BotonActaPdf"
 import { NuevaReservaDialog } from "./NuevaReservaDialog"
 import { useReservasVentana } from "./use-reservas-ventana"
 
-const FILTRO_STORAGE_KEY = "dashboard-lacs-reservas-estado"
+const ESTADOS_STORAGE_KEY = "dashboard-lacs-reservas-estados"
+
+const FILTROS: { valor: string; etiqueta: string }[] = [
+  { valor: "por_confirmar", etiqueta: "Por confirmar" },
+  ...FILTROS_ESTADO_COMUNES,
+]
+
+// Igual que en el calendario, vacío = no mostrar nada; por defecto, todos.
+function estadosIniciales(): string[] {
+  try {
+    const guardado = JSON.parse(localStorage.getItem(ESTADOS_STORAGE_KEY) ?? "null")
+    if (Array.isArray(guardado)) return guardado.filter((v) => FILTROS.some((f) => f.valor === v))
+  } catch {
+    // localStorage no disponible o JSON inválido
+  }
+  return FILTROS.map((f) => f.valor)
+}
 
 // "por_confirmar" no es un estado de línea: junta las reservas que tienen
 // algún activo pendiente de la LACS (parciales o pendientes del todo).
 // "retrasada" tampoco: es el mismo pseudo-filtro, pero sobre
 // evento.retrasada (derivado de estado == "entregada" && fin < ahora, ver
 // calendario-utils) -- no hay una columna "retrasada" que filtrar en la BD.
-type FiltroEstado = "todas" | "por_confirmar" | "retrasada" | EstadoReserva
-
-const FILTROS: { valor: FiltroEstado; etiqueta: string }[] = [
-  { valor: "todas", etiqueta: "Todas" },
-  { valor: "por_confirmar", etiqueta: "Por confirmar" },
-  ...FILTROS_ESTADO_COMUNES,
-]
-
-function filtroInicial(): FiltroEstado {
-  try {
-    const guardado = localStorage.getItem(FILTRO_STORAGE_KEY)
-    if (guardado && FILTROS.some((f) => f.valor === guardado)) return guardado as FiltroEstado
-  } catch {
-    // localStorage no disponible
-  }
-  return "todas"
+// ¿El evento entra en la opción de estado `valor`? Basta con una de sus líneas.
+function cumpleEstado(evento: EventoCalendario, valor: string) {
+  if (valor === "por_confirmar") return evento.porConfirmar
+  if (valor === "retrasada") return evento.retrasada
+  return evento.reservas.some((r) => r.estado === valor)
 }
 
 const SEGURO_STORAGE_KEY = "dashboard-lacs-reservas-seguro"
@@ -110,13 +114,10 @@ function ventanaInicial(): VentanaReservas {
 // seguridad de "todas", no un recorte esperado (ver useReservasVentana).
 const TOPE_RESERVAS_VENTANA = 5000
 
-// Más recientes arriba: las próximas y las de hoy son las que se consultan.
-function porInicioDesc(a: EventoCalendario, b: EventoCalendario) {
-  return b.inicio.getTime() - a.inicio.getTime()
-}
-
-function porInicioAsc(a: EventoCalendario, b: EventoCalendario) {
-  return a.inicio.getTime() - b.inicio.getTime()
+// N.º de reserva de mayor a menor: las creadas más recientemente arriba. Las
+// legadas sin número van al final, por inicio.
+function porNumeroDesc(a: EventoCalendario, b: EventoCalendario) {
+  return (b.numeros[0] ?? 0) - (a.numeros[0] ?? 0) || b.inicio.getTime() - a.inicio.getTime()
 }
 
 // --- Formato corto -------------------------------------------------------
@@ -353,7 +354,7 @@ export function ReservasPanel() {
   const { activos, reload: recargarActivos } = useActivosContext()
   const [ventana, setVentana] = useState<VentanaReservas>(ventanaInicial)
   const { reservas, cargando, refrescando, error, truncado, reload } = useReservasVentana(ventana)
-  const [filtro, setFiltro] = useState<FiltroEstado>(filtroInicial)
+  const [estados, setEstados] = useState<string[]>(estadosIniciales)
   const [soloSeguro, setSoloSeguro] = useState<boolean>(seguroInicial)
   const [busqueda, setBusqueda] = useState("")
   // Igual que en el calendario: en recursos y usuarios vacío = todos; en
@@ -372,36 +373,9 @@ export function ReservasPanel() {
 
   const ubicadas = useMemo(() => ubicarReservas(reservas), [reservas])
 
-  // Igual que el calendario, se filtra por línea antes de agrupar: una
-  // reserva con estados mixtos aparece en cada filtro con las líneas que
-  // le corresponden.
-  const eventosPorFiltro = useMemo(() => {
-    const porFiltro = new Map(
-      FILTROS.filter(({ valor }) => valor !== "por_confirmar" && valor !== "retrasada").map(
-        ({ valor }) => [
-          valor,
-          agruparEnEventos(
-            valor === "todas" ? ubicadas : ubicadas.filter((u) => u.reserva.estado === valor)
-          ).sort(porInicioDesc),
-        ]
-      )
-    )
-    // "Por confirmar" es una lista de pendientes por atender: va la reserva
-    // completa (para ver también qué quedó confirmado) y la más próxima
-    // primero.
-    porFiltro.set(
-      "por_confirmar",
-      (porFiltro.get("todas") ?? []).filter((e) => e.porConfirmar).sort(porInicioAsc)
-    )
-    // "Retrasada" tampoco es un estado de línea (ver el comentario de
-    // FiltroEstado): se calcula igual que "por_confirmar", sobre el evento
-    // ya agrupado.
-    porFiltro.set(
-      "retrasada",
-      (porFiltro.get("todas") ?? []).filter((e) => e.retrasada).sort(porInicioAsc)
-    )
-    return porFiltro
-  }, [ubicadas])
+  // A diferencia del calendario, se muestra la reserva completa: entra en un
+  // estado si alguna de sus líneas lo tiene, y el modal ve todos sus activos.
+  const todos = useMemo(() => agruparEnEventos(ubicadas).sort(porNumeroDesc), [ubicadas])
 
   const placaDe = useMemo(() => new Map(activos.map((a) => [a.id, a.placa])), [activos])
 
@@ -416,47 +390,63 @@ export function ReservasPanel() {
   const usuarios = useMemo(() => opcionesUsuarios(ubicadas, usuarioCodigos), [ubicadas, usuarioCodigos])
 
   // La búsqueda, "Necesita seguro" y los filtros de tipo, recurso y usuario
-  // combinan con AND sobre el filtro de estado ya calculado; se recalculan
-  // aparte para no rehacer el agrupamiento. A diferencia del calendario, se
-  // filtra la reserva completa: basta con que una de sus líneas coincida.
-  const eventosVisibles = useMemo(() => {
+  // combinan con AND: se recalculan aparte para no rehacer el agrupamiento.
+  // A diferencia del calendario, se filtra la reserva completa: basta con
+  // que una de sus líneas coincida.
+  const filtrados = useMemo(() => {
     const consulta = normalizar(busqueda.trim())
     const todosLosTipos = tipos.length === TIPOS_RECURSO.length
     if (!soloSeguro && !consulta && todosLosTipos && !recursoIds.length && !usuarioCodigos.length) {
-      return eventosPorFiltro
+      return todos
     }
-    const pasa = (e: EventoCalendario) =>
-      (!soloSeguro || necesitaSeguro(e)) &&
-      (!consulta || textoBuscable(e, placaDe).includes(consulta)) &&
-      e.reservas.some(
-        (r) =>
-          tipos.includes(r.recurso_tipo ?? "") &&
-          (!recursoIds.length || recursoIds.includes(String(r.recurso_id))) &&
-          (!usuarioCodigos.length || usuarioCodigos.includes(codigoUsuario(r)))
-      )
-    return new Map<FiltroEstado, EventoCalendario[]>(
-      [...eventosPorFiltro].map(([k, lista]) => [k, lista.filter(pasa)])
+    return todos.filter(
+      (e) =>
+        (!soloSeguro || necesitaSeguro(e)) &&
+        (!consulta || textoBuscable(e, placaDe).includes(consulta)) &&
+        e.reservas.some(
+          (r) =>
+            tipos.includes(r.recurso_tipo ?? "") &&
+            (!recursoIds.length || recursoIds.includes(String(r.recurso_id))) &&
+            (!usuarioCodigos.length || usuarioCodigos.includes(codigoUsuario(r)))
+        )
     )
-  }, [eventosPorFiltro, soloSeguro, busqueda, placaDe, tipos, recursoIds, usuarioCodigos])
+  }, [todos, soloSeguro, busqueda, placaDe, tipos, recursoIds, usuarioCodigos])
 
-  const eventos = eventosVisibles.get(filtro) ?? []
-  const pendientes = eventosVisibles.get("por_confirmar")?.length ?? 0
+  const cantidades = useMemo(
+    () => new Map(FILTROS.map(({ valor }) => [valor, filtrados.filter((e) => cumpleEstado(e, valor)).length])),
+    [filtrados]
+  )
+
+  const soloPorConfirmar = estados.length === 1 && estados[0] === "por_confirmar"
+
+  const eventos = useMemo(
+    () => filtrados.filter((e) => estados.some((v) => cumpleEstado(e, v))),
+    [filtrados, estados]
+  )
+
+  const pendientes = cantidades.get("por_confirmar") ?? 0
+
+  const resumenEstados =
+    estados.length === FILTROS.length
+      ? "Todos los estados"
+      : !estados.length
+        ? "Ningún estado"
+        : estados.length === 1
+          ? (FILTROS.find((f) => f.valor === estados[0])?.etiqueta ?? estados[0])
+          : `${estados.length} estados`
 
   // El modal se alimenta de la reserva completa, no de la filtrada: así
   // sigue abierto si una edición cambia el estado y la saca del filtro, y el
   // formulario no toma por activos de la reserva solo las líneas visibles.
   const seleccionado = useMemo(
-    () =>
-      eventosPorFiltro
-        .get("todas")
-        ?.find((e) => e.reservas.some((r) => r.id === idSeleccionado)) ?? null,
-    [eventosPorFiltro, idSeleccionado]
+    () => todos.find((e) => e.reservas.some((r) => r.id === idSeleccionado)) ?? null,
+    [todos, idSeleccionado]
   )
 
-  function cambiarFiltro(nuevo: FiltroEstado) {
-    setFiltro(nuevo)
+  function cambiarEstados(nuevos: string[]) {
+    setEstados(nuevos)
     try {
-      localStorage.setItem(FILTRO_STORAGE_KEY, nuevo)
+      localStorage.setItem(ESTADOS_STORAGE_KEY, JSON.stringify(nuevos))
     } catch {
       // localStorage no disponible
     }
@@ -548,33 +538,18 @@ export function ReservasPanel() {
             textoTodos="Todos los usuarios"
             className="max-w-60"
           />
+          <FiltroMultiple
+            opciones={FILTROS.map(({ valor, etiqueta }) => ({
+              valor,
+              etiqueta: `${etiqueta} (${cargando ? "–" : (cantidades.get(valor) ?? 0)})`,
+            }))}
+            seleccion={estados}
+            onChange={cambiarEstados}
+            textoTodos="Todos los estados"
+            resumen={`${resumenEstados} · ${cargando ? "–" : eventos.length}`}
+          />
         </div>
 
-        <Select value={filtro} onValueChange={(v) => cambiarFiltro(v as FiltroEstado)}>
-          <SelectTrigger size="sm" className="min-w-44" aria-label="Filtrar por estado">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {FILTROS.map(({ valor, etiqueta }) => {
-              const cantidad = eventosVisibles.get(valor)?.length ?? 0
-              // Las que esperan a la LACS resaltan para que no se queden sin atender.
-              const resaltar = valor === "por_confirmar" && cantidad > 0
-              return (
-                <SelectItem key={valor} value={valor}>
-                  {etiqueta}
-                  <span
-                    className={cn(
-                      "text-xs tabular-nums",
-                      resaltar ? "font-semibold text-warning-text" : "text-muted-foreground"
-                    )}
-                  >
-                    {cargando ? "–" : cantidad}
-                  </span>
-                </SelectItem>
-              )
-            })}
-          </SelectContent>
-        </Select>
 
         {/* Recorta en el servidor (ver useReservasVentana); los contadores de
             arriba pasan a contar solo dentro de esta ventana. */}
@@ -591,9 +566,9 @@ export function ReservasPanel() {
           </SelectContent>
         </Select>
 
-        {/* Si el filtro activo no es "por confirmar", que las pendientes no
+        {/* Si no se está viendo solo "por confirmar", que las pendientes no
             se pierdan de vista igual. */}
-        {filtro !== "por_confirmar" && pendientes > 0 && (
+        {!soloPorConfirmar && pendientes > 0 && (
           <p className="text-xs text-warning-text">
             {pendientes} por confirmar
           </p>
@@ -646,7 +621,7 @@ export function ReservasPanel() {
           </div>
         ) : (
           <p className="rounded-md border p-4 text-sm text-muted-foreground">
-            {filtro === "por_confirmar" && !soloSeguro
+            {soloPorConfirmar && !soloSeguro
               ? "No hay reservas pendientes de confirmación."
               : soloSeguro
                 ? "No hay reservas que requieran seguro para este filtro."
@@ -657,7 +632,7 @@ export function ReservasPanel() {
 
       {!cargando && !(error && reservas.length === 0) && eventos.length > 0 && (
         <>
-          {filtro === "por_confirmar" && (
+          {soloPorConfirmar && (
             <p className="text-sm text-muted-foreground">
               Abre una reserva para confirmar o denegar cada activo pendiente. El estudiante
               recibe un WhatsApp con cada decisión.
