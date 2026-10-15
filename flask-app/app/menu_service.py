@@ -51,8 +51,16 @@ MAX_REINTENTOS = 2
 # una reserva", que es justo lo que hace esa opción.
 PALABRAS_SALIR = {"salir", "cerrar", "nada", "ninguna", "olvidalo"}
 
-PALABRAS_RESERVAR = {"reserv", "aparta", "prestamo", "alquil", "necesito"}
-PALABRAS_PREGUNTAS = {"pregunt", "consult", "disponib", "duda", "informacion", "libre", "tienen"}
+OPCIONES_POR_NUMERO = {"1": "reservar", "2": "preguntas", "3": "cancelar"}
+# El menú dice "o escríbelo con tus palabras": el nombre de la opción a
+# secas se resuelve aquí; cualquier frase más larga, el clasificador.
+OPCIONES_POR_NOMBRE = {
+    "reservar": "reservar", "reserva": "reservar",
+    "consultar": "preguntas", "consulta": "preguntas", "preguntar": "preguntas",
+    "cancelar": "cancelar",
+}
+# Solo para el paso "esperando_consulta": ahí "cancela la del viernes" no
+# es el nombre de un equipo, es un cambio de idea.
 PALABRAS_CANCELAR = {"cancel", "anul"}
 
 TEXTO_MENU = (
@@ -89,40 +97,25 @@ def activar_menu(sesion: dict) -> tuple[str, dict]:
 
 
 def _interpretar_opcion_menu(texto_usuario: str) -> str | None:
-    """Devuelve 'reservar' | 'preguntas' | 'cancelar' | 'salir' | None (no
-    reconocida).
+    """Devuelve 'reservar' | 'preguntas' | 'cancelar' | 'salir' |
+    'texto_libre' | None (un número que no es opción -> reintento).
 
-    Orden deliberado: cancelar se chequea antes que las palabras clave de
-    reservar por el mismo motivo que `llm_client._clasificar_sin_llm`
-    revisa "cancel" antes que "reserv" -- "cancelar mi reserva" contiene la
-    subcadena "reserv"."""
+    Solo resuelve lo inequívoco: el número de una opción, su nombre a secas,
+    o una palabra de salida. El texto libre ya no se adivina con subcadenas:
+    "mi reserva quedó confirmada?" contenía "reserv" y abría el wizard de
+    reserva, y "gracias, chao" repetía el menú (medido en vivo 2026-10-15).
+    Ese texto vuelve al clasificador: ver "seguir_curso" en
+    `procesar_respuesta`."""
     texto_norm = normalizar(texto_usuario)
-    tokens = set(texto_norm.split())
 
-    if tokens & PALABRAS_SALIR:
+    if set(texto_norm.split()) & PALABRAS_SALIR:
         return "salir"
 
     m = re.match(r"^\s*(\d+)", texto_norm)
     if m:
-        numero = m.group(1)
-        if numero == "1":
-            return "reservar"
-        if numero == "2":
-            return "preguntas"
-        if numero == "3":
-            return "cancelar"
-        return None  # cualquier otro número -> no reconocida, reintento
+        return OPCIONES_POR_NUMERO.get(m.group(1))
 
-    if any(p in texto_norm for p in PALABRAS_CANCELAR):
-        return "cancelar"
-
-    es_reservar = any(p in texto_norm for p in PALABRAS_RESERVAR)
-    es_preguntas = any(p in texto_norm for p in PALABRAS_PREGUNTAS)
-    if es_reservar and not es_preguntas:
-        return "reservar"
-    if es_preguntas and not es_reservar:
-        return "preguntas"
-    return None
+    return OPCIONES_POR_NOMBRE.get(texto_norm.strip(" .!¡?¿"), "texto_libre")
 
 
 def procesar_respuesta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict, dict]:
@@ -136,6 +129,9 @@ def procesar_respuesta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict
                                  `recursos_service.evaluar_consulta_disponibilidad`.
       - accion == "cancelar":   payload es el texto a pasarle a
                                  `recursos_service.gestionar_cancelacion`.
+      - accion == "seguir_curso": texto libre, no una opción del menú; el
+                                 webhook lo clasifica como mensaje nuevo
+                                 (la sesión ya viene sin el menú).
       - auditoria: {"intent": str, "permitido": bool, "motivo_bloqueo": str | None}
     """
     estado = sesion.get(CLAVE_SESION)
@@ -161,7 +157,7 @@ def procesar_respuesta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict
         # saber?" no está nombrando un equipo: cambió de idea y quiere
         # cancelar una reserva. Antes ese texto se le pasaba tal cual a la
         # consulta de disponibilidad, que no encontraba nada.
-        if opcion == "cancelar":
+        if opcion == "cancelar" or any(p in normalizar(texto_usuario) for p in PALABRAS_CANCELAR):
             return (
                 "cancelar",
                 texto_usuario,
@@ -211,7 +207,18 @@ def procesar_respuesta(texto_usuario: str, sesion: dict) -> tuple[str, str, dict
             {"intent": INTENT_AUDITORIA, "permitido": True, "motivo_bloqueo": None},
         )
 
-    # No reconocida
+    # Una frase en vez de una opción: que la clasifique el LLM como
+    # cualquier mensaje nuevo. Si tampoco la entiende, el webhook vuelve a
+    # mostrar el menú.
+    if opcion == "texto_libre":
+        return (
+            "seguir_curso",
+            texto_usuario,
+            sesion_limpia,
+            {"intent": INTENT_AUDITORIA, "permitido": True, "motivo_bloqueo": None},
+        )
+
+    # No reconocida (un número que no es opción)
     if intentos < MAX_REINTENTOS:
         nueva_sesion = {
             **sesion,

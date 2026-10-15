@@ -221,9 +221,16 @@ def _procesar_mensaje(numero: str, texto: str, remote_jid: str, pisar_jid: bool 
     # `menu_fallback` en None en la sesión que devuelve antes de que se
     # la pasemos a `gestionar_reserva`, para no propagar este estado
     # dentro del wizard de reservas. ---
+    accion = None
     if sesion.get(menu_service.CLAVE_SESION):
         accion, payload, sesion, auditoria = menu_service.procesar_respuesta(texto, sesion)
 
+    if accion == "seguir_curso":
+        # Una frase en vez de una opción ("mi reserva quedó confirmada?",
+        # "gracias, chao"): el menú ya se limpió y el mensaje sigue hacia
+        # la clasificación de intent de abajo, como uno nuevo.
+        sesiones.guardar_sesion(numero, sesion)
+    elif accion:
         if accion == "reservar":
             respuesta, sesion = recursos_service.gestionar_reserva(payload, usuario, sesion)
         elif accion == "consultar":
