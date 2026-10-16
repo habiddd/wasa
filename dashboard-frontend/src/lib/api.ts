@@ -963,7 +963,13 @@ export function actualizarActivo(
 export type OrigenExcepcion = "dia_semana" | "festivo" | "manual" | "desbloqueada"
 export type TipoExcepcion = "bloqueo" | "desbloqueo"
 
-export type ReglasExcepcion = { dias_semana: number[]; festivos_co: boolean; actualizado_en: string | null }
+export type ReglasExcepcion = {
+  dias_semana: number[]
+  festivos_co: boolean
+  hora_apertura: string
+  hora_cierre: string
+  actualizado_en: string | null
+}
 
 export type DiaExcepcion = {
   fecha: string
@@ -984,7 +990,9 @@ export function fetchReglasExcepcion() {
   return request<ReglasExcepcion>("/excepciones/reglas")
 }
 
-export function guardarReglasExcepcion(reglas: { dias_semana: number[]; festivos_co: boolean }) {
+export function guardarReglasExcepcion(reglas: {
+  dias_semana: number[]; festivos_co: boolean; hora_apertura: string; hora_cierre: string
+}) {
   return request<ReglasExcepcion>("/excepciones/reglas", { method: "PUT", body: JSON.stringify(reglas) })
 }
 

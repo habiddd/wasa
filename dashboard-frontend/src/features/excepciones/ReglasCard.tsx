@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { fetchReglasExcepcion, guardarReglasExcepcion, type ReglasExcepcion } from "@/lib/api"
@@ -14,6 +15,8 @@ export function ReglasCard({ version, onCambio }: { version: number; onCambio: (
   const [reglas, setReglas] = useState<ReglasExcepcion | null>(null)
   const [diasSemana, setDiasSemana] = useState<number[]>([])
   const [festivosCo, setFestivosCo] = useState(true)
+  const [horaApertura, setHoraApertura] = useState("08:00")
+  const [horaCierre, setHoraCierre] = useState("18:00")
   const [cargando, setCargando] = useState(true)
   const [guardando, setGuardando] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -27,6 +30,8 @@ export function ReglasCard({ version, onCambio }: { version: number; onCambio: (
         setReglas(datos)
         setDiasSemana(datos.dias_semana)
         setFestivosCo(datos.festivos_co)
+        setHoraApertura(datos.hora_apertura)
+        setHoraCierre(datos.hora_cierre)
         setError(null)
       })
       .catch((err) => {
@@ -49,13 +54,18 @@ export function ReglasCard({ version, onCambio }: { version: number; onCambio: (
   const hayCambios =
     !!reglas &&
     (JSON.stringify([...diasSemana].sort()) !== JSON.stringify([...reglas.dias_semana].sort()) ||
-      festivosCo !== reglas.festivos_co)
+      festivosCo !== reglas.festivos_co ||
+      horaApertura !== reglas.hora_apertura || horaCierre !== reglas.hora_cierre)
   const los7Bloqueados = diasSemana.length === 7
+  const horarioInvalido = !horaApertura || !horaCierre || horaApertura >= horaCierre
 
   async function guardar() {
     setGuardando(true)
     try {
-      const nuevas = await guardarReglasExcepcion({ dias_semana: diasSemana, festivos_co: festivosCo })
+      const nuevas = await guardarReglasExcepcion({
+        dias_semana: diasSemana, festivos_co: festivosCo,
+        hora_apertura: horaApertura, hora_cierre: horaCierre,
+      })
       setReglas(nuevas)
       toast.success("Reglas actualizadas.")
       onCambio()
@@ -104,6 +114,17 @@ export function ReglasCard({ version, onCambio }: { version: number; onCambio: (
                 Bloquear festivos de Colombia
               </Label>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Label htmlFor="regla-apertura">Horario de atención</Label>
+              <Input id="regla-apertura" type="time" className="w-32" value={horaApertura}
+                onChange={(e) => setHoraApertura(e.target.value)} disabled={guardando} />
+              <span className="text-sm text-muted-foreground">a</span>
+              <Input aria-label="Hora de cierre" type="time" className="w-32" value={horaCierre}
+                onChange={(e) => setHoraCierre(e.target.value)} disabled={guardando} />
+            </div>
+            {horarioInvalido && (
+              <p className="text-xs text-destructive-text">La hora de apertura debe ser antes de la de cierre.</p>
+            )}
             <p className="text-xs text-muted-foreground">
               Las excepciones de un día concreto mandan sobre estas reglas.
             </p>
@@ -112,7 +133,7 @@ export function ReglasCard({ version, onCambio }: { version: number; onCambio: (
                 No se pueden bloquear los 7 días de la semana.
               </p>
             )}
-            <Button size="sm" onClick={guardar} disabled={!hayCambios || los7Bloqueados || guardando}>
+            <Button size="sm" onClick={guardar} disabled={!hayCambios || los7Bloqueados || horarioInvalido || guardando}>
               {guardando ? "Guardando…" : "Guardar reglas"}
             </Button>
           </>

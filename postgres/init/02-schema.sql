@@ -603,6 +603,17 @@ CREATE TABLE IF NOT EXISTS calendario_reglas (
 );
 INSERT INTO calendario_reglas (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
+-- Horario de atención (hora LACS): el bot solo acepta reservas que empiecen
+-- y terminen dentro de él. Editable en la pestaña "Excepciones".
+ALTER TABLE calendario_reglas ADD COLUMN IF NOT EXISTS hora_apertura TIME NOT NULL DEFAULT '08:00';
+ALTER TABLE calendario_reglas ADD COLUMN IF NOT EXISTS hora_cierre   TIME NOT NULL DEFAULT '18:00';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'calendario_reglas_horario_valido') THEN
+        ALTER TABLE calendario_reglas
+            ADD CONSTRAINT calendario_reglas_horario_valido CHECK (hora_apertura < hora_cierre);
+    END IF;
+END $$;
+
 -- Excepciones de un día concreto: mandan sobre las reglas. 'bloqueo' cierra
 -- un día normal; 'desbloqueo' abre un festivo o un día de semana bloqueado.
 -- Una por fecha (PK); borrar la fila devuelve el día a las reglas.

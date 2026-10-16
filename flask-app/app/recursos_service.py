@@ -7,7 +7,7 @@ está disponible sale siempre de aquí (ver docs/ARQUITECTURA.md, sección
 """
 
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
@@ -69,6 +69,9 @@ MARGEN_INICIO_PASADO = timedelta(minutes=5)
 # routes/dashboard.api_confirmar_reserva_grupo). Una reserva con activos
 # confirmados y pendientes a la vez es una "reserva parcial".
 ESTADO_PENDIENTE = "pendiente"
+# Préstamo de más de una semana (de inicio a fin): nace 'pendiente' sea cual
+# sea el activo, igual que uno con `requiere_confirmacion` (ver crear_reservas_grupo).
+PRESTAMO_LARGO = timedelta(days=7)
 # El usuario ya tiene el equipo en sus manos (se llega solo registrando el
 # acta de ENTREGA -- ver actas_service.aplicar_transicion). Sigue ocupando el
 # activo igual que 'confirmada'/'pendiente': el préstamo sigue vivo hasta la
@@ -842,6 +845,10 @@ def _quitar_del_carrito(carrito: list[dict], nombres: set[str]) -> list[dict]:
     return [item for item in carrito if item["nombre_recurso"] not in quitados]
 
 
+def es_prestamo_largo(inicio: datetime, fin: datetime) -> bool:
+    return fin - inicio > PRESTAMO_LARGO
+
+
 def crear_reservas_grupo(
     usuario_id: int,
     recursos: list[Recurso],
@@ -863,7 +870,7 @@ def crear_reservas_grupo(
     horario) para ESTADOS_QUE_OCUPAN, ver postgres/init/02-schema.sql), se
     revierte todo el grupo en vez de dejar solo una parte del carrito.
 
-    Cada activo con `requiere_confirmacion` nace 'pendiente' y el resto
+    Cada activo con `requiere_confirmacion` (o todos, si es_prestamo_largo) nace 'pendiente' y el resto
     'confirmada': si el carrito mezcla ambos, la reserva queda parcial hasta
     que la LACS la confirme desde el dashboard. `aprobada_por_lacs=True` (solo
     para reservas creadas por la LACS desde el dashboard, no el bot) se salta
@@ -919,7 +926,7 @@ def crear_reservas_grupo(
             fin=fin,
             estado=(
                 "confirmada" if aprobada_por_lacs
-                else (ESTADO_PENDIENTE if recurso.requiere_confirmacion else "confirmada")
+                else (ESTADO_PENDIENTE if recurso.requiere_confirmacion or es_prestamo_largo(inicio, fin) else "confirmada")
             ),
             canal_origen=canal_origen,
             grupo_id=grupo.id,
@@ -1000,19 +1007,16 @@ def _resolver_recurso_para_reserva(
     return None, candidatos, es_match_debil
 
 
-def _estado_de_reserva_creada(unidades: list[Recurso]) -> tuple[str, str]:
-    """(título, aviso) de la factura final según cuántos activos esperan la
-    confirmación de la LACS (`requiere_confirmacion`, ver
-    `crear_reservas_grupo`): ninguno -> confirmada; algunos -> parcial;
-    todos -> pendiente. El aviso va en líneas aparte y nombra los activos
-    (una vez por modelo, aunque se reserven varias unidades del mismo): con
-    varios en el carrito hace falta saber cuál espera y cuál no."""
-    pendientes = list(dict.fromkeys(u.nombre for u in unidades if u.requiere_confirmacion))
+def _estado_de_reserva_creada(reservas: list[Reserva]) -> tuple[str, str]:
+    """(título, aviso) de la factura final según cuántas líneas quedaron
+    'pendiente' (ver `crear_reservas_grupo`): ninguna -> confirmada; algunas ->
+    parcial; todas -> pendiente. El aviso nombra los activos una vez por modelo."""
+    pendientes = list(dict.fromkeys(r.recurso.nombre for r in reservas if r.estado == ESTADO_PENDIENTE))
     if not pendientes:
         return "RESERVA CONFIRMADA", ""
 
     cierre = "Te escribiré por aquí apenas la LACS la confirme."
-    confirmados = list(dict.fromkeys(u.nombre for u in unidades if not u.requiere_confirmacion))
+    confirmados = list(dict.fromkeys(r.recurso.nombre for r in reservas if r.estado != ESTADO_PENDIENTE))
     if confirmados:
         return "RESERVA PARCIAL", (
             f"✅ Confirmado: {', '.join(confirmados)}\n"
@@ -2077,6 +2081,20 @@ def _error_fecha_bloqueada(wizard: dict, fecha_inicio: date, fecha_fin: date | N
     return None
 
 
+def _error_horario(hora: tuple[int, int], cuando: str, reglas=None) -> str | None:
+    """None si `hora` (hora LACS, (h, m)) cae dentro del horario de atención
+    (`calendario_reglas.hora_apertura`..`hora_cierre`, extremos incluidos,
+    editable en la pestaña "Excepciones"); si no, el rechazo para WhatsApp.
+    `cuando`: "empezar" o "terminar". `reglas` solo lo pasa el check."""
+    r = reglas or fechas_bloqueadas_service.obtener_reglas()
+    if r.hora_apertura <= time(*hora) <= r.hora_cierre:
+        return None
+    apertura, cierre, pedida = (_formatear_hora(datetime.combine(date(2000, 1, 1), t))
+                                for t in (r.hora_apertura, r.hora_cierre, time(*hora)))
+    # Sin punto final: `pedida` ya termina en "a.m."/"p.m." y el llamador agrega la frase que sigue.
+    return f"La LACS atiende de {apertura} a {cierre}, así que la reserva no puede {cuando} a las {pedida}"
+
+
 def advertencias_fechas(inicio_utc: datetime, fin_utc: datetime, sale_de_barranquilla: bool | None) -> list[str]:
     """Igual que las validaciones del wizard del bot (inicio no pasado,
     plazo del seguro, fecha bloqueada), pero como avisos en vez de bloqueos
@@ -2840,7 +2858,7 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
 
     inicio_local = inicio_utc.astimezone(ZONA_HORARIA_LACS)
     fin_local = fin_utc.astimezone(ZONA_HORARIA_LACS)
-    titulo, aviso_confirmacion = _estado_de_reserva_creada(unidades)
+    titulo, aviso_confirmacion = _estado_de_reserva_creada(reservas)
     # El número va en la factura para que el estudiante relacione con esta
     # reserva el aviso que le llega cuando la LACS confirma lo pendiente.
     mensaje = (
@@ -2860,6 +2878,8 @@ def _crear_reserva_desde_wizard(wizard: dict, usuario: Usuario, sesion: dict) ->
     )
     if aviso_confirmacion:
         mensaje += "\n" + aviso_confirmacion
+        if es_prestamo_largo(inicio_utc, fin_utc):
+            mensaje += "\n📅 Los préstamos de más de una semana siempre necesitan la aprobación de la LACS."
     if wizard.get("sale_de_barranquilla"):
         mensaje += ("\n🛡️ Como los activos salen de Barranquilla, la LACS debe tramitar su seguro antes de la entrega: "
                     f"plazo de {_TEXTO_PLAZO} (fecha mínima de inicio: {_fecha_legible(fecha_minima_sale_de_barranquilla())}).")
@@ -2902,6 +2922,12 @@ def _aplicar_hora_inicio_valida(wizard: dict, usuario: Usuario, sesion: dict, ho
         wizard["opciones_actuales"] = None
         return "Esa hora ya pasó. Dime una hora de inicio futura.", {**sesion, "reserva_wizard": wizard}
 
+    error_horario = _error_horario(hora, "empezar")
+    if error_horario:
+        wizard["paso"] = "hora_inicio"
+        wizard["opciones_actuales"] = None
+        return error_horario + " Dime otra hora de inicio.", {**sesion, "reserva_wizard": wizard}
+
     wizard["inicio"] = inicio_utc.isoformat()
     wizard["opciones_actuales"] = None
     mensaje, wizard, listo = _avanzar_wizard(wizard, usuario)
@@ -2929,6 +2955,12 @@ def _aplicar_hora_fin_valida(wizard: dict, usuario: Usuario, sesion: dict, hora:
         return (
             "La hora de fin debe ser después de la hora de inicio. ¿Puedes revisar la hora?"
         ), {**sesion, "reserva_wizard": wizard}
+
+    error_horario = _error_horario(hora, "terminar")
+    if error_horario:
+        wizard["paso"] = "hora_fin"
+        wizard["opciones_actuales"] = None
+        return error_horario + " Dime otra hora de fin.", {**sesion, "reserva_wizard": wizard}
 
     wizard["fin"] = fin_utc.isoformat()
     wizard["opciones_actuales"] = None

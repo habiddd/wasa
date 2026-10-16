@@ -7,7 +7,7 @@ Lista negra de fechas: días en que el bot NO acepta reservas (pestaña
 Todo el que necesite saber si una fecha se puede reservar pasa por aquí.
 Ver docs/ARQUITECTURA.md, sección "Excepciones: lista negra de fechas".
 """
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 import holidays
 
@@ -25,12 +25,15 @@ def obtener_reglas() -> CalendarioReglas:
     # transitorio con los valores por defecto SIN escribir: esto lo llama el bot
     # en medio de su propia transacción.
     return CalendarioReglas.query.get(1) or CalendarioReglas(
-        id=1, dias_semana_bloqueados=list(DIAS_SEMANA_POR_DEFECTO), festivos_co=True)
+        id=1, dias_semana_bloqueados=list(DIAS_SEMANA_POR_DEFECTO), festivos_co=True,
+        hora_apertura=time(8, 0), hora_cierre=time(18, 0))
 
 
 def serializar_reglas(r: CalendarioReglas) -> dict:
     return {"dias_semana": sorted(r.dias_semana_bloqueados or []),
             "festivos_co": bool(r.festivos_co),
+            "hora_apertura": r.hora_apertura.strftime("%H:%M"),
+            "hora_cierre": r.hora_cierre.strftime("%H:%M"),
             "actualizado_en": r.actualizado_en.isoformat() if r.actualizado_en else None}
 
 

@@ -15,7 +15,7 @@ import io
 import json
 import re
 import secrets
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 import qrcode
@@ -202,9 +202,17 @@ def api_guardar_reglas_excepciones():
         return jsonify({"error": "No se pueden bloquear los 7 días de la semana."}), 400
     if not isinstance(festivos, bool):
         return jsonify({"error": "'festivos_co' debe ser true o false."}), 400
+    try:
+        apertura = time.fromisoformat(datos.get("hora_apertura")).replace(second=0, microsecond=0)
+        cierre = time.fromisoformat(datos.get("hora_cierre")).replace(second=0, microsecond=0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "'hora_apertura' y 'hora_cierre' deben tener formato HH:MM."}), 400
+    if apertura >= cierre:
+        return jsonify({"error": "La hora de apertura debe ser antes de la hora de cierre."}), 400
     reglas = CalendarioReglas.query.get(1) or CalendarioReglas(id=1)
     reglas.dias_semana_bloqueados = sorted(set(dias))   # reasignar, no mutar
     reglas.festivos_co = festivos
+    reglas.hora_apertura, reglas.hora_cierre = apertura, cierre
     reglas.actualizado_en = datetime.now(timezone.utc)
     db.session.add(reglas)
     db.session.commit()

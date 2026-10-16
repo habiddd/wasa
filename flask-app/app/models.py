@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
@@ -210,6 +210,9 @@ class CalendarioReglas(db.Model):
     # no mutarla en sitio (ARRAY no rastrea .append()).
     dias_semana_bloqueados = db.Column(ARRAY(db.SmallInteger), nullable=False, default=lambda: [5, 6])
     festivos_co = db.Column(db.Boolean, nullable=False, default=True)
+    # Horario de atención (hora LACS), ver recursos_service._error_horario.
+    hora_apertura = db.Column(db.Time, nullable=False, default=time(8, 0))
+    hora_cierre = db.Column(db.Time, nullable=False, default=time(18, 0))
     actualizado_en = db.Column(db.DateTime(timezone=True), default=datetime.utcnow)
 
 
