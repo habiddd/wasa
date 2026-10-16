@@ -32,6 +32,7 @@ from app import (
     estado_bot,
     fechas_bloqueadas_service,
     importar_activos,
+    llm_client,
     metricas_excel,
     recursos_service,
     registro_service,
@@ -117,15 +118,15 @@ def _check_baileys(estado: dict | None) -> dict:
 
 
 def _check_llm() -> dict:
-    base_url = current_app.config["LLM_BASE_URL"].rstrip("/")
-    api_key = current_app.config.get("LLM_API_KEY")
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    cfg = llm_client.config_llm()
+    info = {"modelo": cfg["modelo"], "modo": cfg["modo"]}
+    headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
     try:
-        resp = requests.get(f"{base_url}/v1/models", headers=headers, timeout=3)
+        resp = requests.get(f"{cfg['base_url']}/v1/models", headers=headers, timeout=3)
         resp.raise_for_status()
-        return {"ok": True, "detalle": "conectado"}
+        return {"ok": True, "detalle": "conectado", **info}
     except requests.RequestException as exc:
-        return {"ok": False, "detalle": str(exc)}
+        return {"ok": False, "detalle": str(exc), **info}
 
 
 # --- Rutas -------------------------------------------------------------------
@@ -487,6 +488,30 @@ def api_cambiar_proveedor_whatsapp():
     if faltan:
         return jsonify({"error": "Faltan variables en .env: " + ", ".join(faltan), "faltan": faltan}), 400
     return jsonify({"activo": proveedor})
+
+
+@bp.route("/api/llm")
+def api_config_llm():
+    return jsonify(llm_client.config_publica())
+
+
+@bp.route("/api/llm", methods=["PUT"])
+def api_guardar_config_llm():
+    datos = request.get_json(silent=True) or {}
+    campos = [datos.get(k) or "" for k in ("base_url", "modelo", "api_key", "modo")]
+    if not all(isinstance(v, str) for v in campos):
+        return jsonify({"error": "Los campos deben ser texto."}), 400
+    try:
+        llm_client.guardar_config(*campos)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(llm_client.config_publica())
+
+
+@bp.route("/api/llm", methods=["DELETE"])
+def api_borrar_config_llm():
+    llm_client.borrar_config()
+    return jsonify(llm_client.config_publica())
 
 
 # Préstamo = la reserva llegó a entregarse (ver docs/PLAN_metricas_2026-09-29.md).

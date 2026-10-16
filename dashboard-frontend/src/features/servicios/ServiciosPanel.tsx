@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react"
-import { AlertTriangle, CircleCheck, ExternalLink } from "lucide-react"
+import { useEffect, useState, type FormEvent, type ReactNode } from "react"
+import { AlertTriangle, CircleCheck, ExternalLink, Pencil } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -15,18 +15,24 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { usePolling } from "@/hooks/use-polling"
 import {
+  borrarConfigLlm,
   cambiarProveedorWhatsapp,
+  fetchConfigLlm,
   fetchMetricasMeta,
   fetchProveedorWhatsapp,
   fetchQr,
   fetchStatus,
+  guardarConfigLlm,
+  type ConfigLlm,
   type EstadoServicio,
   type FiltroMeta,
   type MetricasMeta,
+  type ModoLlm,
   type PeriodoMeta,
   type ProveedorWhatsapp,
 } from "@/lib/api"
@@ -47,7 +53,7 @@ const NOMBRES: Record<string, string> = {
   postgres: "Postgres",
   redis: "Redis",
   baileys: "Baileys / WhatsApp",
-  llm: "LLM local",
+  llm: "LLM",
   flask: "Flask",
 }
 
@@ -66,19 +72,51 @@ function EstadoBadge({ ok }: { ok: boolean }) {
   )
 }
 
-function ServicioCard({ clave, servicio }: { clave: string; servicio: EstadoServicio }) {
+function ServicioCard({
+  clave,
+  servicio,
+  onEditar,
+}: {
+  clave: string
+  servicio: EstadoServicio
+  onEditar?: () => void
+}) {
   return (
-    <Card>
+    <Card
+      role={onEditar ? "button" : undefined}
+      tabIndex={onEditar ? 0 : undefined}
+      onClick={onEditar}
+      onKeyDown={
+        onEditar &&
+        ((e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault()
+            onEditar()
+          }
+        })
+      }
+      className={
+        onEditar
+          ? "cursor-pointer outline-none hover:ring-foreground/25 focus-visible:ring-3 focus-visible:ring-ring/50"
+          : undefined
+      }
+    >
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           {NOMBRES[clave] ?? clave}
           <EstadoBadge ok={servicio.ok} />
+          {onEditar && <Pencil className="ml-auto size-3.5 text-muted-foreground" aria-hidden />}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-1 text-sm text-muted-foreground">
         <p className="break-words">
           {(clave === "baileys" && DETALLE_BAILEYS[servicio.detalle ?? ""]) || servicio.detalle || ""}
         </p>
+        {clave === "llm" && servicio.modelo && (
+          <p className="break-words">
+            {servicio.modelo} · {servicio.modo === "online" ? "online" : "local"}
+          </p>
+        )}
         {clave === "baileys" && servicio.numero && <p>Número: {servicio.numero}</p>}
         {clave === "baileys" && servicio.buffer_atascado && (
           <p className="flex items-center gap-1 text-warning-text">
@@ -538,8 +576,138 @@ function ContenidoMetricasMeta({ data, periodo }: { data: MetricasMeta; periodo:
   )
 }
 
+const NOMBRE_MODO: Record<ModoLlm, string> = {
+  local: "Modelo local (LM Studio / Ollama)",
+  online: "Modelo online (OpenRouter u otra API)",
+}
+
+// Se guarda en Redis y aplica al instante en los dos workers; "Usar .env"
+// borra lo guardado. La key nunca vuelve completa del servidor.
+function ConfigLlmDialog({
+  actual,
+  onCerrar,
+  onGuardado,
+}: {
+  actual: ConfigLlm
+  onCerrar: () => void
+  onGuardado: () => void
+}) {
+  const [baseUrl, setBaseUrl] = useState(actual.base_url)
+  const [modelo, setModelo] = useState(actual.modelo)
+  const [apiKey, setApiKey] = useState("")
+  const [modo, setModo] = useState<ModoLlm>(actual.modo)
+  const [guardando, setGuardando] = useState(false)
+  const cambiaUrl = baseUrl.trim().replace(/\/+$/, "") !== actual.base_url
+
+  async function enviar(accion: () => Promise<ConfigLlm>, mensaje: string) {
+    setGuardando(true)
+    try {
+      await accion()
+      toast.success(mensaje)
+      onGuardado()
+      onCerrar()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  function guardar(e: FormEvent) {
+    e.preventDefault()
+    enviar(
+      () => guardarConfigLlm({ base_url: baseUrl, modelo, api_key: apiKey, modo }),
+      "Configuración del LLM guardada.",
+    )
+  }
+
+  const estadoKey = actual.api_key_configurada
+    ? `Hay una key guardada${actual.api_key_final ? ` (termina en …${actual.api_key_final})` : ""}. Déjalo vacío para conservarla.`
+    : "No hay key guardada."
+
+  return (
+    <Dialog open onOpenChange={(abierto) => !abierto && !guardando && onCerrar()}>
+      <DialogContent className="sm:max-w-md">
+        <form onSubmit={guardar} className="flex flex-col gap-4">
+          <DialogHeader>
+            <DialogTitle>Configurar el LLM</DialogTitle>
+            <DialogDescription>
+              El cambio aplica al instante.{" "}
+              {actual.origen === ".env" ? "Ahora se usan los valores de .env." : "Ahora se usan valores guardados aquí."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1">
+            <Label>Especialización</Label>
+            <Select value={modo} onValueChange={(v) => setModo(v as ModoLlm)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(["local", "online"] as const).map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {NOMBRE_MODO[m]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Local usa el muestreo recomendado para Qwen3; online deja el muestreo al proveedor.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="llm-url">URL</Label>
+            <Input id="llm-url" type="url" required value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://openrouter.ai/api" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="llm-modelo">Modelo</Label>
+            <Input id="llm-modelo" required value={modelo} onChange={(e) => setModelo(e.target.value)} placeholder="deepseek/deepseek-v4-flash-0731" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="llm-key">API key</Label>
+            <Input
+              id="llm-key"
+              type="password"
+              autoComplete="new-password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={cambiaUrl ? "Vacía = sin key" : "Vacía = conservar la actual"}
+            />
+            <p className="text-xs text-muted-foreground">
+              {cambiaUrl
+                ? "Cambiaste la URL: la key guardada no se manda a otro servidor. Escríbela si el nuevo la pide."
+                : estadoKey}
+            </p>
+          </div>
+          <DialogFooter>
+            {actual.origen === "dashboard" && (
+              <Button type="button" variant="outline" disabled={guardando} onClick={() => enviar(borrarConfigLlm, "El LLM vuelve a usar los valores de .env.")}>
+                Usar .env
+              </Button>
+            )}
+            <Button type="button" variant="outline" onClick={onCerrar} disabled={guardando}>
+              Cancelar
+            </Button>
+            <Button type="submit" disabled={guardando}>
+              Guardar
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function EstadoServiciosPanel() {
-  const { data, error, loading } = usePolling(fetchStatus, 10000)
+  const { data, error, loading, reload } = usePolling(fetchStatus, 10000)
+  const [configLlm, setConfigLlm] = useState<ConfigLlm | null>(null)
+
+  async function editarLlm() {
+    try {
+      setConfigLlm(await fetchConfigLlm())
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -555,6 +723,7 @@ export function EstadoServiciosPanel() {
                 key={clave}
                 clave={clave}
                 servicio={data[clave as keyof typeof data] as EstadoServicio}
+                onEditar={clave === "llm" ? editarLlm : undefined}
               />
             ))}
       </div>
@@ -564,6 +733,7 @@ export function EstadoServiciosPanel() {
           Última actualización: {formatearHoraLACS(data.chequeado_en)}
         </p>
       )}
+      {configLlm && <ConfigLlmDialog actual={configLlm} onCerrar={() => setConfigLlm(null)} onGuardado={reload} />}
     </div>
   )
 }

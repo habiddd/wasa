@@ -42,6 +42,8 @@ export type EstadoServicio = {
   whatsapp_conectado?: boolean
   numero?: string | null
   buffer_atascado?: boolean
+  modelo?: string
+  modo?: ModoLlm
 }
 
 export type EstadoStatus = {
@@ -100,6 +102,31 @@ export function cambiarProveedorWhatsapp(proveedor: ProveedorWhatsapp) {
     method: "PUT",
     body: JSON.stringify({ proveedor }),
   })
+}
+
+// --- LLM (editable desde Estado; ver llm_client.config_llm) -------------
+
+export type ModoLlm = "local" | "online"
+
+export type ConfigLlm = {
+  base_url: string
+  modelo: string
+  modo: ModoLlm
+  origen: "dashboard" | ".env"
+  api_key_configurada: boolean
+  api_key_final: string | null
+}
+
+export function fetchConfigLlm() {
+  return request<ConfigLlm>("/llm")
+}
+
+export function guardarConfigLlm(cambios: { base_url: string; modelo: string; api_key: string; modo: ModoLlm }) {
+  return request<ConfigLlm>("/llm", { method: "PUT", body: JSON.stringify(cambios) })
+}
+
+export function borrarConfigLlm() {
+  return request<ConfigLlm>("/llm", { method: "DELETE" })
 }
 
 export type MetricasMeta = {

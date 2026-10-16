@@ -15,11 +15,81 @@ import json
 import random
 import re
 from datetime import datetime
+from urllib.parse import urlparse
 
 import requests
 from flask import current_app
 
+from app.extensions import redis_client
 from app.textutils import normalizar
+
+# Config editable desde el dashboard (Estado → tarjeta LLM). Vive en Redis
+# para que la vean los dos workers de gunicorn; sin clave, la de .env.
+_CLAVE_CONFIG = "llm:config"
+MODOS = ("local", "online")
+
+
+def config_llm() -> dict:
+    """URL (sin "/" final), modelo, key (o None), modo y origen efectivos."""
+    try:
+        g = {k.decode(): v.decode() for k, v in redis_client.hgetall(_CLAVE_CONFIG).items()}
+    except Exception:  # noqa: BLE001 - Redis caído: se usa .env
+        g = {}
+    if g.get("base_url"):
+        return {
+            "base_url": g["base_url"],
+            "modelo": g.get("modelo", ""),
+            "api_key": g.get("api_key") or None,
+            "modo": g.get("modo") if g.get("modo") in MODOS else "local",
+            "origen": "dashboard",
+        }
+    cfg = current_app.config
+    # Sin override: modo "local" = el mismo muestreo de siempre.
+    return {
+        "base_url": cfg["LLM_BASE_URL"].rstrip("/"),
+        "modelo": cfg["LLM_MODEL"],
+        "api_key": cfg.get("LLM_API_KEY"),
+        "modo": "local",
+        "origen": ".env",
+    }
+
+
+def config_publica() -> dict:
+    """Lo que ve el dashboard: nunca la key completa."""
+    c = config_llm()
+    key = c.pop("api_key")
+    return {**c, "api_key_configurada": bool(key), "api_key_final": key[-4:] if key and len(key) >= 12 else None}
+
+
+def guardar_config(base_url: str, modelo: str, api_key: str, modo: str) -> None:
+    """ValueError con el mensaje si algo no es válido. `api_key` vacía
+    conserva la actual solo si la URL no cambia: con otra URL queda sin key,
+    para no mandarle la key a otro servidor."""
+    base_url = base_url.strip().rstrip("/")
+    modelo, api_key = modelo.strip(), api_key.strip()
+    if (
+        not base_url.startswith(("http://", "https://"))
+        or not urlparse(base_url).netloc
+        or any(c.isspace() for c in base_url)
+        or len(base_url) > 300
+    ):
+        raise ValueError("La URL debe empezar con http:// o https://.")
+    if not modelo or len(modelo) > 200:
+        raise ValueError("Falta el nombre del modelo.")
+    if modo not in MODOS:
+        raise ValueError("La especialización debe ser 'local' u 'online'.")
+    if len(api_key) > 500:
+        raise ValueError("La API key es demasiado larga.")
+    actual = config_llm()
+    if not api_key and base_url == actual["base_url"]:
+        api_key = actual["api_key"] or ""
+    redis_client.hset(_CLAVE_CONFIG, mapping={"base_url": base_url, "modelo": modelo, "api_key": api_key, "modo": modo})
+    current_app.logger.info("Config del LLM cambiada desde el dashboard: %s, %s (%s)", base_url, modelo, modo)
+
+
+def borrar_config() -> None:
+    redis_client.delete(_CLAVE_CONFIG)
+
 
 SYSTEM_PROMPT = """Eres el asistente de reservas de la LACS (Centro de Producción
 Audiovisual) de Uninorte. SOLO puedes ayudar con: reservar equipos/espacios,
@@ -389,25 +459,15 @@ def clasificar_intent(texto_usuario: str, terminos_catalogo: list[str] | None = 
     if rapido is not None:
         return rapido
 
-    base_url = current_app.config["LLM_BASE_URL"].rstrip("/")
-    modelo = current_app.config["LLM_MODEL"]
-    url = f"{base_url}/v1/chat/completions"
+    cfg = config_llm()
+    url = f"{cfg['base_url']}/v1/chat/completions"
 
     payload = {
-        "model": modelo,
+        "model": cfg["modelo"],
         "messages": [
             {"role": "system", "content": PROMPT_CLASIFICACION},
             {"role": "user", "content": texto_usuario},
         ],
-        # Muestreo recomendado por Qwen3 para su modo de razonamiento, que
-        # desaconseja explícitamente la decodificación greedy (temperature
-        # 0): hace que el razonamiento entre en bucle. Medido con
-        # `qwen/qwen3-1.7b` y temperature 0: "necesito una camara para el
-        # viernes" oscilaba entre reservar/otro hasta agotar los tokens.
-        # Si se cambia de familia de modelo, revisar estos tres valores.
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "top_k": 20,
         # La respuesta útil es UNA palabra: todo el presupuesto se va en
         # razonar. qwen3 gasta 60-430 tokens; el tope existe para cortar
         # al modelo cuando se enreda (`finish_reason == "length"`, que abajo
@@ -416,12 +476,23 @@ def clasificar_intent(texto_usuario: str, terminos_catalogo: list[str] | None = 
         # bien encaminados.
         "max_tokens": 1500,
     }
+    if cfg["modo"] == "local":
+        # Muestreo recomendado por Qwen3 para su modo de razonamiento, que
+        # desaconseja explícitamente la decodificación greedy (temperature
+        # 0): hace que el razonamiento entre en bucle. Medido con
+        # `qwen/qwen3-1.7b` y temperature 0: "necesito una camara para el
+        # viernes" oscilaba entre reservar/otro hasta agotar los tokens.
+        # Si se cambia de familia de modelo, revisar estos tres valores.
+        payload.update(temperature=0.6, top_p=0.95, top_k=20)
+    else:
+        # Online: el proveedor ya trae su muestreo; solo temperatura baja.
+        payload["temperature"] = 0.2
 
     try:
         # Tope duro. Con qwen3 una clasificación tarda 2-10 s; si el LLM
         # está caído del todo, esto acota cuánto tarda el bot en darse
         # cuenta y responder con el heurístico.
-        resp = requests.post(url, json=payload, headers=_headers(), timeout=45)
+        resp = requests.post(url, json=payload, headers=_headers(cfg), timeout=45)
         resp.raise_for_status()
         eleccion = resp.json()["choices"][0]
         mensaje = eleccion["message"]
@@ -486,9 +557,8 @@ def _clasificar_intent_heuristico(texto_usuario: str) -> str:
     return "otro"
 
 
-def _headers() -> dict:
-    api_key = current_app.config.get("LLM_API_KEY")
-    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+def _headers(cfg: dict) -> dict:
+    return {"Authorization": f"Bearer {cfg['api_key']}"} if cfg["api_key"] else {}
 
 
 _REGEX_THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -520,12 +590,11 @@ def _completar(system_prompt: str, texto_usuario: str, respaldo: str) -> str:
     conversacional corta tardó entre 10 y 20 segundos medida contra LM
     Studio -- los 30s de timeout y los 300 tokens de antes se quedaban
     cortos y cortaban la respuesta a la mitad."""
-    base_url = current_app.config["LLM_BASE_URL"].rstrip("/")
-    modelo = current_app.config["LLM_MODEL"]
-    url = f"{base_url}/v1/chat/completions"
+    cfg = config_llm()
+    url = f"{cfg['base_url']}/v1/chat/completions"
 
     payload = {
-        "model": modelo,
+        "model": cfg["modelo"],
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": texto_usuario},
@@ -537,7 +606,7 @@ def _completar(system_prompt: str, texto_usuario: str, respaldo: str) -> str:
     }
 
     try:
-        resp = requests.post(url, json=payload, headers=_headers(), timeout=120)
+        resp = requests.post(url, json=payload, headers=_headers(cfg), timeout=120)
         resp.raise_for_status()
         eleccion = resp.json()["choices"][0]
         contenido = _limpiar_para_whatsapp(eleccion["message"].get("content") or "")
@@ -632,9 +701,8 @@ def extraer_datos_reserva(
     (ver docs/ARQUITECTURA.md). Devuelve None si el LLM no respondió con
     JSON parseable; el llamador debe tratarlo como "no se pudo extraer
     nada" y pedirle al usuario que reformule, no como error fatal."""
-    base_url = current_app.config["LLM_BASE_URL"].rstrip("/")
-    modelo = current_app.config["LLM_MODEL"]
-    url = f"{base_url}/v1/chat/completions"
+    cfg = config_llm()
+    url = f"{cfg['base_url']}/v1/chat/completions"
 
     system_prompt = PROMPT_EXTRACCION.format(
         nombres_recursos=", ".join(nombres_recursos) if nombres_recursos else "(ninguno cargado)",
@@ -644,7 +712,7 @@ def extraer_datos_reserva(
     )
 
     payload = {
-        "model": modelo,
+        "model": cfg["modelo"],
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": texto_usuario},
@@ -666,7 +734,7 @@ def extraer_datos_reserva(
         # bastante más que una respuesta conversacional corta (se han visto
         # 40-50s con max_tokens=2000) -- timeout generoso para no cortarlo
         # a mitad de camino, ya que eso es indistinguible de "no hay red".
-        resp = requests.post(url, json=payload, headers=_headers(), timeout=150)
+        resp = requests.post(url, json=payload, headers=_headers(cfg), timeout=150)
         resp.raise_for_status()
         mensaje = resp.json()["choices"][0]["message"]
         # Fallback: si el modelo dejó "content" vacío pero sí razonó, el
