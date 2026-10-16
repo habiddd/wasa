@@ -17,12 +17,12 @@ flowchart LR
         P["postgres 16 · :5432<br/>volumen postgres_data"]
         R["redis 7<br/>volumen redis_data"]
     end
-    L["LLM local<br/>LM Studio, fuera de Docker"]
+    L["LLM, API compatible con OpenAI<br/>OpenRouter o LM Studio, fuera de Docker"]
     B -- "webhooks: mensaje, QR, ack" --> F
     F -- "POST /send" --> B
     DF -- "proxy /dashboard/api/" --> F
     F --> P
-    F -- "sesiones y lock del barrido" --> R
+    F -- "sesiones, rate limit, config del LLM<br/>y lock del barrido" --> R
     F -- "clasificar intent y charla" --> L
 ```
 
@@ -98,7 +98,7 @@ sequenceDiagram
     participant B as baileys-bot
     participant F as Flask /webhook/whatsapp
     participant R as Redis (sesión)
-    participant L as LLM (lfm2.5)
+    participant L as LLM
     participant DB as Postgres
     U->>B: mensaje
     B->>F: POST /webhook/whatsapp (remoteJid completo)
@@ -110,7 +110,7 @@ sequenceDiagram
         F->>R: leer sesión
         F->>F: responde al paso exacto (recursos_service / menu_service)
     else mensaje nuevo
-        F->>L: clasificar_intent (solo si la ruta rápida no decide)
+        F->>L: clasificar_intent (salvo charla social pura)
         F->>F: intent_permitido (whitelist)
         F->>DB: recursos_service consulta o escribe reservas
     end
@@ -126,13 +126,18 @@ sequenceDiagram
    `POST /webhook/whatsapp` en Flask, con el `remoteJid` completo tal cual
    lo entrega Baileys (ver nota sobre JIDs `@lid` más abajo).
 3. Flask, en orden (ver `routes/webhook.py:recibir_webhook`):
-   - Aplica **rate limiting** por número (`guardrails.excede_limite_mensajes`).
+   - Aplica **rate limiting** por número (`guardrails.excede_limite_mensajes`):
+     un contador por minuto en Redis (`rate:<número>:<minuto>`), compartido
+     por los dos workers de gunicorn. Antes era un `deque` en memoria y el
+     tope real era el doble (medido: 10 mensajes simultáneos pasaban todos
+     con un límite de 8).
    - Aplica **filtrado de entrada** contra mensajes sospechosos/inyección
      de prompt (`guardrails.mensaje_es_sospechoso`). La comparación se
      hace sobre una forma *compactada* del mensaje -- sin tildes, sin
      caracteres invisibles y sin nada que no sea letra o dígito -- para
-     que meter un espacio o un guion de más no evada el filtro; ver
-     `docs/SEGURIDAD.md`.
+     que meter un espacio o un guion de más no evada el filtro. Aparte se
+     rechazan los prefijos de rol al inicio de una línea (`SYSTEM:`,
+     `assistant:`, `categoría:`...); ver `docs/SEGURIDAD.md`.
    - Resuelve/crea el **Usuario** por `telefono_wa` (`usuarios_service`) y,
      si su registro no está completo, el mensaje se trata como respuesta a
      la siguiente pregunta pendiente del alta (`registro_service`) --
@@ -296,40 +301,49 @@ ver "El wizard de reservas no usa el LLM" más abajo.
 
 ### Clasificación de intent en tres capas (`llm_client.clasificar_intent`)
 
-El modelo en uso es `lfm2.5-2.6b` (LM Studio). Razona antes de responder
-y **no se le puede apagar el razonamiento por API** -- probados
-`chat_template_kwargs.enable_thinking=false`, `reasoning_effort` y
-`/nothink` en el system prompt, los tres siguen gastando ~190 tokens. Una
-clasificación cuesta entre 13 y 25 segundos. Eso condiciona todo el
-diseño: la meta no es solo acertar, es llamar al modelo lo menos posible.
+El modelo en producción es `deepseek/deepseek-v4-flash-0731` por
+OpenRouter (~2 s por clasificación); antes fue `qwen/qwen3-4b-2507` en LM
+Studio (~0.4 s), y en septiembre `lfm2.5-2.6b` (13-25 s, con un
+razonamiento que no se podía apagar). La comparación de 6 modelos está en
+`docs/PRUEBAS_SISTEMA_MODELOS_2026-10-15.md`. Con un modelo así de rápido,
+la regla es la contraria a la de septiembre: **casi todo mensaje pasa por el
+LLM**, porque acertar importa más que ahorrarse la llamada.
 
 ```mermaid
 flowchart TD
-    M[Mensaje] --> A{"¿Señal inequívoca?<br/>_clasificar_sin_llm"}
-    A -- "sí, sin MARCADORES_DESISTIR" --> I([Intent])
+    M[Mensaje] --> A{"¿Charla social pura?<br/>_clasificar_sin_llm"}
+    A -- sí --> I([saludo])
     A -- no --> L["LLM clasifica<br/>tope 45 s"]
     L -- "timeout, sin respuesta o length" --> H["Heurístico<br/>_clasificar_intent_heuristico"]
     L -- "reservar, cancelar o consultar" --> V{"¿Señal de dominio?<br/>_validar_intent_de_accion"}
-    L -- "ayuda, saludo u otro" --> I
-    V -- sí --> I
-    V -- no --> S["saludo u otro"] --> I
-    H --> I
+    L -- "ayuda, saludo u otro" --> I2([Intent])
+    V -- sí --> I2
+    V -- no --> S["saludo u otro"] --> I2
+    H --> I2
 ```
 
-1. **Ruta rápida, sin red (`_clasificar_sin_llm`).** Si el mensaje trae
-   una señal inequívoca -- un marcador de reserva, de cancelación, de
-   disponibilidad, de ayuda, o es un saludo suelto -- se responde al
-   instante. Medido sobre una batería de 20 mensajes realistas, 11
-   resolvieron aquí (ver `docs/PRUEBAS_CHAT_2026-09-09.md`). Estos son
-   justamente los casos que cualquier modelo acierta, así que no se pierde
-   precisión.
+1. **Sin red, solo la charla social (`_clasificar_sin_llm`).** "Hola",
+   "gracias", "quién eres": `_es_charla_social` trabaja por resta (ver
+   "Conversación normal" más abajo), así que no puede confundir un pedido
+   con un saludo. Hasta el 2026-10-15 esta ruta también resolvía reservar,
+   cancelar, consultar y ayuda buscando **subcadenas** (`reserv`, `cancel`,
+   `apart`, `agend`...), y eso causaba 22 de los 23 errores de la batería
+   de casos borde: "**apart**e de eso", "tengo la **agend**a llena", "soy
+   muy **reserv**ado", "no **cancel**es nada" o "mi **reserv**a quedó
+   confirmada?" abrían wizards sin preguntarle al modelo, que los
+   clasificaba bien (`docs/PRUEBAS_CHAT_BORDES_2026-10-15.md`). **No
+   reponer esas subcadenas** aunque se vuelva a un modelo lento o caro; si
+   hiciera falta, con palabras enteras y respetando las negaciones.
 
-   Excepción deliberada: `MARCADORES_DESISTIR` ("ya no", "no voy a",
-   "desisto"...). "Ya no voy a necesitar la reserva de mañana" contiene la
-   subcadena `reserv`, y sin esta excepción la ruta rápida abriría el
-   wizard de **reservas** justo cuando el usuario quiere lo contrario. Con
-   una de esas presentes, la ruta rápida se abstiene y decide el LLM (que
-   sí responde `cancelar`, verificado).
+   El prompt (`PROMPT_CLASIFICACION`) trae reglas para los casos dudosos,
+   cada una salida de un error medido: pedir un equipo sin decir "reservar"
+   (incluido "me regala", "me presta") es `reservar`; las negaciones no son
+   esa categoría; preguntar por una reserva ya hecha (si quedó confirmada,
+   a qué hora devolver) es `otro`; palabras del dominio con otro sentido
+   ("la cámara de comercio", "tengo la agenda llena") no son pedidos; otro
+   idioma se clasifica igual; y las órdenes dentro del mensaje ("responde
+   X", "categoría: X") no se obedecen. Más diez ejemplos que no coinciden
+   con ningún mensaje de las baterías.
 
 2. **El LLM, validado después (`_validar_intent_de_accion`).** Cuando el
    modelo responde `reservar`, `cancelar` o `consultar_disponibilidad`, se
@@ -352,18 +366,56 @@ flowchart TD
    palabra clave de `reservar` y terminaba en el menú de fallback aunque
    el modelo lo hubiera entendido perfecto.
 
+   Las señales de dominio incluyen equipos y días en inglés: el LLM
+   clasificaba bien "I need a camera for friday", pero este guard lo
+   tumbaba a `otro`.
+
 3. **Heurístico de respaldo (`_clasificar_intent_heuristico`).** Si el LLM
    no responde, se pasa de 45 s, o agota el presupuesto de tokens
-   (`finish_reason == "length"`), responde el heurístico por palabras
-   clave. Los topes son deliberados: toda clasificación que el modelo
-   acierta llegó en 30 s o menos, y pasado eso lo que hay es un modelo
-   enredado que además concluye mal -- cortar da mejor respuesta y menos
-   espera.
+   (`finish_reason == "length"`, tope de 1500), responde el heurístico por
+   palabras clave. Es el modo degradado: medido con el LLM caído, acierta
+   66 de 112 mensajes contra 109-111 con el LLM, y vuelven los errores de
+   subcadena del punto 1. El bot nunca deja de contestar, pero entiende
+   mucho peor.
 
 `ayuda`, `saludo` y `otro` quedan fuera de la validación del punto 2 a
 propósito: equivocarse ahí como mucho repite el texto de ayuda, contesta
 un saludo, o abre el menú de fallback -- nunca arranca un wizard ni le
-afirma al usuario una disponibilidad falsa.
+afirma al usuario una disponibilidad falsa. Un `otro` del LLM se respeta
+aunque el mensaje nombre un equipo: el menú es la salida segura ante la
+duda. Hubo un guard que lo pisaba con el heurístico (para `qwen3-1.7b`), y
+con un modelo mejor solo empeoraba ("a qué hora devuelvo la cámara que
+**reserv**é" → wizard de reserva); se quitó.
+
+### Proveedor y configuración del LLM (Estado → tarjeta "LLM")
+
+El cliente habla la API de chat de OpenAI, así que el proveedor es
+cualquier endpoint compatible: OpenRouter, LM Studio u Ollama. La
+configuración efectiva sale de `llm_client.config_llm()`, el único punto
+que la leen `clasificar_intent`, `_completar`, `extraer_datos_reserva` y el
+healthcheck del dashboard (`_check_llm`):
+
+- **Por defecto, `.env`** (`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`).
+- **Editable en caliente desde el dashboard:** clic en la tarjeta "LLM" de
+  Estado abre un diálogo con URL, modelo, API key y **especialización**
+  (`local` | `online`). Se guarda en el hash de Redis `llm:config`, el mismo
+  patrón que `whatsapp:proveedor`, así que lo ven los dos workers al
+  instante y sobrevive a un reinicio de `flask-app`. "Usar .env" borra el
+  hash. Rutas: `GET`/`PUT`/`DELETE /dashboard/api/llm`.
+- **Especialización:** solo cambia el muestreo de la clasificación. `local`
+  manda `temperature 0.6, top_p 0.95, top_k 20`, lo que recomienda Qwen3 en
+  modo razonamiento (con `temperature 0` el razonamiento entra en bucle);
+  `online` manda solo `temperature 0.2` y deja el resto al proveedor. Sin
+  nada guardado el modo es `local`.
+- **La API key nunca vuelve completa al navegador**, solo si está
+  configurada y sus últimos 4 caracteres. Dejar el campo vacío conserva la
+  key **solo si la URL no cambia**; con otra URL queda sin key, para no
+  mandarle la de OpenRouter a otro servidor. La key no se loguea.
+- **Si se guarda una configuración en el dashboard, el `.env` deja de
+  mandar** hasta que se pulse "Usar .env". Ojo con eso al cambiar el
+  `.env` o al probar con `docker exec -e LLM_MODEL=...`.
+- El indicador "conectado" hace `GET {url}/v1/models`. En OpenRouter ese
+  endpoint es público, así que no comprueba que la key sea válida.
 
 ### Conversación normal: el intent `saludo`
 
@@ -380,10 +432,14 @@ residuo ("necesito camara"), así que sigue siendo un pedido.
 
 `llm_client.responder_charla` contesta en dos velocidades: un saludo pelado
 ("hola", "buenos días") sale de un texto fijo rotado entre varias
-redacciones -- instantáneo, y con este modelo eso importa, porque generar
-una respuesta cuesta 10-20 s y es una eternidad para contestar "hola". Lo
+redacciones -- instantáneo (se decidió cuando generar costaba 10-20 s con
+`lfm2.5-2.6b`; hoy cuesta ~3 s, pero el texto fijo sigue sonando bien). Lo
 demás que sea social pero no un saludo pelado ("cómo estás", "quién eres")
-sí pasa por el LLM, con el texto fijo como respaldo si falla. Ninguna de
+sí pasa por el LLM, con el texto fijo como respaldo si falla. Un modelo que
+razona puede gastar todo el presupuesto pensando y no escribir nada (medido
+con nemotron: 10 de 18 respuestas): por eso `_completar` tiene un tope de
+2000 tokens y deja un `WARNING` en el log (`El LLM respondió sin texto`)
+cuando cae al respaldo, para que no sea invisible. Ninguna de
 las dos rutas consulta la base de datos ni afirma nada sobre
 disponibilidad.
 
@@ -631,7 +687,10 @@ sola fecha, perdiendo el "desde mañana".
 5pm" -- pedido explícito para no confundir al usuario con dos datos a la
 vez, sea la reserva de un día o de varios. Cada paso usa
 `_parsear_hora_individual` (una sola hora, ej. "3:00pm") sobre la fecha
-que le corresponde (`fecha` para el inicio, `fecha_fin` para el fin).
+que le corresponde (`fecha` para el inicio, `fecha_fin` para el fin). Las
+dos horas tienen que caer dentro del **horario de atención** (por defecto
+8:00 a.m. a 6:00 p.m., editable en Excepciones; ver "Excepciones: lista
+negra de fechas y horario de atención").
 
 Si el texto no viene en el formato exacto (fecha o una hora), antes de
 rechazarlo se intenta reconocer con patrones deterministas más flexibles
@@ -667,7 +726,10 @@ absoluto se muestra "No reconocí esa opción."
 **antes** de despachar al paso actual, así que funcionan sin importar en
 qué parte del flujo esté el usuario -- solo borran `sesion["reserva_wizard"]`;
 nunca queda un activo/espacio a medio reservar porque nada se escribe en
-`reservas` hasta el paso final "confirmar".
+`reservas` hasta el paso final "confirmar". **Excepción conocida, sin
+arreglar:** en el paso `nota_texto` el mensaje se guarda tal cual como la
+nota, así que "cancelar" ahí queda como "Nota: cancelar" y el wizard sigue
+al resumen (medido el 2026-10-16). Se puede cancelar en el paso siguiente.
 
 ### Cláusula de seguro: salida de Barranquilla
 
@@ -1145,8 +1207,22 @@ cualquier paso sin tocar la base, igual que en `gestionar_reserva`.
 Un activo con `recursos.requiere_confirmacion` no se presta hasta que el
 equipo de la LACS lo aprueba. El estado vive **por línea** (`reservas.estado`),
 como el resto: `crear_reservas_grupo` crea esas líneas como `pendiente` y
-las demás como `confirmada`. El estado de la reserva completa se deriva de
-sus líneas:
+las demás como `confirmada`.
+
+**Préstamos de más de una semana:** si `fin - inicio > 7 días`
+(`es_prestamo_largo`, constante `PRESTAMO_LARGO`), **todas** las líneas
+nacen `pendiente`, sin importar el activo. Es la misma condición, en el
+mismo punto de `crear_reservas_grupo`, así que el resto del circuito
+(filtro "Por confirmar", Confirmar/Denegar, aviso por WhatsApp) no cambia.
+Exactamente 7 días todavía se confirma solo. La factura agrega "📅 Los
+préstamos de más de una semana siempre necesitan la aprobación de la LACS."
+Las reservas que crea la LACS desde el dashboard nacen confirmadas igual,
+porque ella es quien aprueba.
+
+El estado de la reserva completa se deriva de sus líneas, y la factura
+(`_estado_de_reserva_creada`) se calcula con el **estado real** de cada
+línea, no con `requiere_confirmacion` (si no, un préstamo largo de un activo
+sin esa marca habría dicho "CONFIRMADA" estando pendiente):
 
 | Líneas | Reserva | Factura del bot |
 |---|---|---|
@@ -1156,7 +1232,7 @@ sus líneas:
 
 ```mermaid
 flowchart TD
-    C["crear_reservas_grupo<br/>una línea por activo"] --> Q{"¿recurso.requiere_confirmacion?"}
+    C["crear_reservas_grupo<br/>una línea por activo"] --> Q{"¿requiere_confirmacion<br/>o más de 7 días?"}
     Q -- no --> K["Línea confirmada"]
     Q -- sí --> P["Línea pendiente<br/>aparta el activo igual"]
     P --> D{"La LACS decide en el dashboard<br/>por activo o Confirmar todo"}
@@ -1227,7 +1303,8 @@ lo que de verdad no se entendió.
 Vive en `menu_service.py`, un módulo puro (sin DB, sin
 LLM, sin importar `recursos_service.py`) para no añadir superficie al
 archivo de negocio más grande y crítico del bot; `webhook.py` es quien
-decide a qué servicio despachar según la acción que devuelve.
+decide a qué servicio despachar según la acción que devuelve. Su check
+ejecutable es `flask-app/tests/test_menu_service.py`.
 
 Estado en sesión bajo `sesion["menu_fallback"]`:
 `{"paso": "elegir_opcion" | "esperando_consulta", "intentos": int}`. Igual
@@ -1238,10 +1315,11 @@ clasificación de intent.
 ```mermaid
 stateDiagram-v2
     [*] --> elegir_opcion : intent otro
-    elegir_opcion --> gestionar_reserva : 1 o palabras de reservar
-    elegir_opcion --> esperando_consulta : 2 o palabras de preguntas
-    elegir_opcion --> gestionar_cancelacion : 3 o cancelar
-    elegir_opcion --> elegir_opcion : opción no reconocida
+    elegir_opcion --> gestionar_reserva : 1 o "reservar"
+    elegir_opcion --> esperando_consulta : 2 o "consultar"
+    elegir_opcion --> gestionar_cancelacion : 3 o "cancelar"
+    elegir_opcion --> clasificar_intent : cualquier otra frase (seguir_curso)
+    elegir_opcion --> elegir_opcion : número que no es opción
     elegir_opcion --> rendicion : MAX_REINTENTOS agotados
     elegir_opcion --> [*] : palabra de salida
     esperando_consulta --> evaluar_consulta_disponibilidad : cualquier texto
@@ -1257,17 +1335,26 @@ stateDiagram-v2
     end note
 ```
 
-- **`elegir_opcion`**: `"1"`/palabras de reservar arrancan
-  `recursos_service.gestionar_reserva` con el texto tal cual lo escribió
-  el usuario (si ya menciona el activo, p. ej. "quiero reservar la sala de
-  edición", el wizard salta esos pasos solo, igual que hace hoy con el
-  intent `reservar` normal). `"2"`/palabras de preguntas piden qué activo
-  consultar y pasan al paso `esperando_consulta`. `"3"`/palabras de
-  cancelar arrancan `recursos_service.gestionar_cancelacion`. Una opción no
-  reconocida reintenta el menú hasta `MAX_REINTENTOS` (2) veces; agotados
-  los reintentos, se rinde con el mismo mensaje estático que antes
-  bloqueaba directo, auditado igual que antes
-  (`motivo_bloqueo="intent_no_permitido"`).
+- **`elegir_opcion`** solo resuelve lo inequívoco: el número de la opción
+  (`OPCIONES_POR_NUMERO`), su nombre a secas ("reservar", "consultar",
+  "cancelar", `OPCIONES_POR_NOMBRE`) o una palabra de salida. `"1"` arranca
+  `recursos_service.gestionar_reserva`; `"2"` pregunta qué activo consultar
+  y pasa a `esperando_consulta`; `"3"` arranca
+  `recursos_service.gestionar_cancelacion`.
+  **Cualquier otra frase vuelve al clasificador** como un mensaje nuevo:
+  `procesar_respuesta` devuelve `"seguir_curso"` con el menú ya limpio y
+  `webhook.py` sigue hacia `clasificar_intent`, el mismo patrón que la
+  oferta de reserva. Antes la frase se interpretaba buscando subcadenas, y
+  así "mi reserva quedó confirmada?" abría el wizard de reserva y "gracias,
+  chao" recibía "No reconocí esa opción" (medido en vivo el 2026-10-15). Hoy
+  la primera vuelve a mostrar el menú (el LLM la clasifica `otro`), la
+  segunda se contesta como despedida, y "quiero reservar la sala" abre el
+  wizard.
+  Un número que no es opción ("7") reintenta el menú hasta
+  `MAX_REINTENTOS` (2) veces; agotados los reintentos, se rinde con el
+  mismo mensaje estático que antes bloqueaba directo
+  (`motivo_bloqueo="intent_no_permitido"`). Una frase que el LLM tampoco
+  entiende vuelve a abrir el menú con el contador en cero.
 - **`esperando_consulta`**: cualquier texto (salvo una palabra de salida o
   de cancelar) se pasa tal cual a
   `recursos_service.evaluar_consulta_disponibilidad` -- función pura ya
@@ -2595,11 +2682,30 @@ en `routes/dashboard.py` (`api_importar_activos`).
   `"12345670"`. Máximo 2000 filas.
 - Autoverificación: `docker exec lacs_flask_app python -m app.importar_activos`.
 
-## Excepciones: lista negra de fechas
+## Excepciones: lista negra de fechas y horario de atención
 
 Pestaña "Excepciones" del dashboard (`features/excepciones/`): días en que
 el bot de WhatsApp no acepta reservas, editables desde una vista calendario
-y una vista lista.
+y una vista lista, y el horario de atención en la tarjeta "Reglas
+generales".
+
+- **Horario de atención** (desde el 2026-10-16): `calendario_reglas`
+  tiene `hora_apertura` y `hora_cierre` (`TIME`, por defecto 08:00 y 18:00,
+  con `CHECK hora_apertura < hora_cierre`). Se editan en "Reglas generales"
+  y viajan en el mismo `GET`/`PUT /excepciones/reglas` que los días
+  bloqueados (formato `"HH:MM"`; el PUT rechaza apertura ≥ cierre). El
+  wizard valida la hora de inicio y la de fin con
+  `recursos_service._error_horario`, dentro de `_aplicar_hora_inicio_valida`
+  y `_aplicar_hora_fin_valida`, por donde pasan todas las formas de dar una
+  hora (exacta, interpretada, prefill, "Cambiar hora"). Los extremos valen:
+  8:00 y 18:00 se aceptan. En una reserva de varios días se valida el
+  inicio el primer día y el fin el último. Rechazo: *"La LACS atiende de
+  8:00 a.m. a 6:00 p.m., así que la reserva no puede empezar a las 7:00
+  a.m. Dime otra hora de inicio."*. Lo lee el mismo
+  `fechas_bloqueadas_service.obtener_reglas()`, sin consulta nueva. Fuera a
+  propósito: un horario distinto para una fecha concreta (no existe ese
+  tipo de excepción; para un día raro, bloquearlo o cambiar el horario
+  general) y volver a validar el horario al confirmar la reserva.
 
 - **Dos tablas** (`postgres/init/02-schema.sql`): `calendario_reglas` --
   una sola fila (`id=1`) con `dias_semana_bloqueados` (`SMALLINT[]`, 0 =

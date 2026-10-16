@@ -12,14 +12,15 @@ está activo desde el dashboard (Servicios → QR / WhatsApp), sin reiniciar:
   solo se puede escribir con una plantilla aprobada.
 
 Flask recibe los mensajes por webhook, aplica guardrails, consulta al LLM
-local y responde por el canal activo. El webhook del otro proveedor ignora
+y responde por el canal activo. El webhook del otro proveedor ignora
 los mensajes.
 
 ```
 WhatsApp → Baileys Bot ──┐
                          ├→ webhook → Flask → Postgres
 WhatsApp → Meta Cloud ───┘              ↓
-                                 LLM local (Ollama/LM Studio)
+                     LLM con API compatible con OpenAI
+                     (OpenRouter, o Ollama/LM Studio local)
 ```
 
 ## 1. Requisitos previos
@@ -27,7 +28,12 @@ WhatsApp → Meta Cloud ───┘              ↓
 - Docker y Docker Compose instalados en tu servidor Ubuntu
 - Tu número de WhatsApp libre, con WhatsApp ya instalado en un celular
   (lo necesitas un momento para escanear el QR)
-- Ollama o LM Studio corriendo en tu red local (ajústalo en `.env`)
+- Un LLM con API compatible con OpenAI: una key de OpenRouter u otro
+  proveedor (hoy `deepseek/deepseek-v4-flash-0731`), o Ollama/LM Studio en
+  tu red local. Se configura con `LLM_BASE_URL`, `LLM_MODEL` y `LLM_API_KEY`
+  en `.env`, y también desde el dashboard (Servicios → Estado → tarjeta
+  "LLM"). Comparación de modelos en
+  `docs/PRUEBAS_SISTEMA_MODELOS_2026-10-15.md`.
 
 ## 2. Puesta en marcha
 
@@ -68,7 +74,7 @@ curl http://localhost:5000/webhook/qr
 2. Baileys Bot recibe el mensaje y lo reenvía por webhook a
    `flask-app:5000/webhook/whatsapp`.
 3. Flask aplica guardrails (rate limit, filtrado, whitelist de intent),
-   consulta al LLM local, y responde por Baileys Bot.
+   consulta al LLM, y responde por Baileys Bot.
 4. Revisa `docker compose logs -f flask-app` si algo no llega.
 
 ## 5. Dashboard interno de monitoreo
@@ -93,7 +99,11 @@ los submenús.
 - **Servicios** (al pie del sidebar, con un punto verde o rojo según la
   salud de los servicios): submenú desplegable de dos entradas. "Estado"
   muestra el estado en vivo de Postgres, Redis, Baileys/WhatsApp, el LLM
-  local y el propio Flask (se refresca solo cada 10s). "QR / WhatsApp"
+  y el propio Flask (se refresca solo cada 10s). La tarjeta "LLM" muestra
+  el modelo y se puede clickear para cambiar URL, modelo, API key y
+  especialización (local u online); el cambio aplica al instante y "Usar
+  .env" lo deshace (ver `docs/ARQUITECTURA.md`, "Proveedor y configuración
+  del LLM"). "QR / WhatsApp"
   tiene el selector del canal (Baileys o la API oficial de Meta); con Meta
   activo, las métricas de Meta por semana, mes, año o rango (gastos,
   mensajes enviados, ventanas de 24 h, estado de la cuenta y plantillas);
@@ -214,8 +224,11 @@ los submenús.
   sobrescribe nunca ninguna versión. Ver `docs/ARQUITECTURA.md` para el detalle.
 - **Excepciones**: los días en que el bot no acepta reservas (días de la
   semana bloqueados, festivos de Colombia y fechas sueltas bloqueadas o
-  desbloqueadas), editables en vista calendario o en vista lista. Ver
-  `docs/ARQUITECTURA.md`, sección "Excepciones: lista negra de fechas".
+  desbloqueadas), editables en vista calendario o en vista lista, y el
+  **horario de atención** (por defecto 8:00 a.m. a 6:00 p.m.) en la tarjeta
+  "Reglas generales": el bot rechaza reservas que empiecen o terminen
+  fuera de él. Ver `docs/ARQUITECTURA.md`, sección "Excepciones: lista
+  negra de fechas y horario de atención".
 - **Usuarios**: submenú desplegable de dos entradas, mismo patrón que
   "Servicios". "Usuarios" lista los usuarios que completaron el registro
   por WhatsApp (`registro_completo=True` -- deja afuera contactos a medio
@@ -305,11 +318,17 @@ conversacional abierta en la Cloud API: mantén las respuestas como un
 
 ## 7. Qué ya incluye este scaffold
 
-- Guardrails: rate limiting por número (`app/guardrails.py`), filtrado
-  contra inyección de prompt (compara sobre una forma normalizada y
-  compactada del mensaje, para que el espaciado o la puntuación no lo
-  evadan), whitelist de intents, y auditoría de cada interacción en la
+- Guardrails: rate limiting por número en Redis, compartido por los
+  workers (`app/guardrails.py`), filtrado contra inyección de prompt
+  (compara sobre una forma normalizada y compactada del mensaje, para que
+  el espaciado o la puntuación no lo evadan, y rechaza prefijos de rol como
+  `SYSTEM:`), whitelist de intents, y auditoría de cada interacción en la
   tabla `auditoria_bot`.
+- Préstamos de más de una semana: quedan pendientes de aprobación de la
+  LACS sin importar el activo, con el mismo circuito de "Por confirmar".
+- Checks ejecutables sin pytest en `flask-app/tests/` (menú de fallback,
+  configuración del LLM, horario y préstamo largo). Se corren dentro del
+  contenedor: `docker exec -w /app -e PYTHONPATH=/app lacs_flask_app python tests/<archivo>.py`.
 - Esquema de datos base: `usuarios`, `recursos` (equipos/espacios),
   `reservas`, `reserva_actas` (histórico de actas firmadas),
   `secuencias_confirmacion` (para tu flujo de confirmación de equipos),
@@ -321,7 +340,7 @@ conversacional abierta en la Cloud API: mantén las respuestas como un
 - Dashboard interno en `/dashboard` con estado de servicios, QR y
   métricas (ver sección 5).
 - Separación clara: canal (Baileys o Meta) / lógica de negocio (Flask) /
-  IA (LLM local) — para que cada pieza se pueda reemplazar sin romper
+  IA (LLM por API o local) — para que cada pieza se pueda reemplazar sin romper
   las demás.
 
 ## 8. Qué falta por construir (siguiente iteración)
@@ -333,8 +352,6 @@ conversacional abierta en la Cloud API: mantén las respuestas como un
 - Autenticación para los endpoints de analítica (hoy están abiertos;
   el dashboard en `/dashboard` sí tiene autenticación básica, pero
   `/api/analytics/*` sigue sin protección).
-- Mover el rate limiter de memoria a Redis si vas a correr más de un
-  worker de Flask.
 - Ver `docs/SEGURIDAD.md` para el checklist completo de guardrails
   pendientes antes de producción con datos reales.
 
@@ -364,6 +381,7 @@ lacs-reservas-bot/
 │   │       ├── webhook.py       # recibe mensajes de WhatsApp (Baileys y /webhook/meta)
 │   │       ├── analytics.py     # endpoints de analítica
 │   │       └── dashboard.py     # API del panel de monitoreo (/dashboard/api/*)
+│   ├── tests/                # checks ejecutables sin pytest (se corren en el contenedor)
 │   └── wsgi.py
 ├── dashboard-frontend/     # UI del dashboard: React + shadcn/ui, contenedor propio
 │   ├── Dockerfile            # build Node -> estáticos servidos por Nginx
