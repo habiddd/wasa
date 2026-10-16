@@ -8,14 +8,15 @@ LACS que levante, opere o reconstruya el sistema sin haberlo desarrollado.
 | Servicio (contenedor) | Qué hace | Puerto en el anfitrión |
 |---|---|---|
 | `postgres` (`lacs_postgres`) | Base de datos: recursos, reservas, usuarios, auditoría | `127.0.0.1:5432` |
-| `redis` (`lacs_redis`) | Sesiones de conversación y bloqueo del barrido | solo red interna |
+| `redis` (`lacs_redis`) | Sesiones de conversación, control de tasa, configuración del LLM y bloqueo del barrido | solo red interna |
 | `baileys-bot` (`lacs_baileys_bot`) | Pasarela de WhatsApp por QR | `127.0.0.1:3000` |
 | `flask-app` (`lacs_flask_app`) | Lógica de reservas, guardrails, bot, API del back office | `127.0.0.1:5000` |
 | `dashboard-frontend` (`lacs_dashboard_frontend`) | Back office (React servido por Nginx) | `127.0.0.1:8080` |
 
 Todos los puertos se publican **solo en la interfaz local** del anfitrión.
-Fuera de Docker, el modelo de lenguaje corre en LM Studio u Ollama, en el
-mismo equipo o en la red local.
+El modelo de lenguaje no corre en Docker. Hoy se consulta por la API de
+OpenRouter (`deepseek/deepseek-v4-flash-0731`); también puede ser LM Studio u
+Ollama en el mismo equipo o en la red local.
 
 Datos persistentes (sobreviven a `docker compose down` y a reconstruir las
 imágenes):
@@ -31,8 +32,10 @@ imágenes):
 
 - Docker y Docker Compose.
 - Un número de WhatsApp libre, con el celular a mano para escanear el QR.
-- LM Studio u Ollama con el modelo cargado y servidor en modo API compatible
-  con OpenAI.
+- Un modelo de lenguaje con API compatible con OpenAI: una clave de
+  OpenRouter con saldo (unos USD 0.10 a 0.15 cada 1000 mensajes con el
+  modelo en uso) y conexión a internet, o LM Studio u Ollama con el modelo
+  cargado.
 
 ## 3. Primer despliegue
 
@@ -47,7 +50,7 @@ Editar `.env` y reemplazar **todos** los valores `changeme_*`:
 | `POSTGRES_SUPERUSER_PASSWORD`, `APP_DB_PASSWORD` | Contraseñas largas y distintas |
 | `FLASK_SECRET_KEY`, `FLASK_API_KEY` | Cadenas aleatorias largas |
 | `DASHBOARD_USER`, `DASHBOARD_PASSWORD` | Usuario y contraseña del back office; sin contraseña, el back office responde 503 |
-| `LLM_BASE_URL`, `LLM_MODEL` | Dirección y modelo del servidor de LLM. Si corre en el mismo equipo que Docker Desktop: `http://host.docker.internal:1234` |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | Dirección, modelo y clave del LLM. Con OpenRouter: `https://openrouter.ai/api`, `deepseek/deepseek-v4-flash-0731` y la clave de la cuenta. Con LM Studio en el mismo equipo que Docker Desktop: `http://host.docker.internal:1234`, sin clave. Se pueden cambiar después desde **Servicios → Estado → tarjeta "LLM"**; mientras haya algo guardado ahí, esos valores mandan sobre `.env` hasta pulsar "Usar .env". |
 | `MAX_MESSAGES_PER_MINUTE` | Límite de mensajes por número (por defecto 8) |
 | `AUDITORIA_RETENCION_DIAS` | Días antes de anonimizar la auditoría (por defecto 180) |
 
@@ -128,7 +131,7 @@ Después de actualizar, correr las pruebas (`entregables/OE3/pruebas/README.md`)
 |---|---|
 | El bot no responde | `docker compose logs -f flask-app` y `docker compose logs -f baileys-bot`; en **Servicios → Estado**, que WhatsApp esté conectado. |
 | Pide escanear el QR otra vez | La sesión se cerró desde el celular; escanear de nuevo en **Servicios → QR / WhatsApp**. |
-| Respuestas lentas o de menú a todo | El LLM no responde: **Servicios → Estado** y `LLM_BASE_URL`. Sin LLM el bot sigue funcionando con su clasificador por reglas, pero entiende menos. |
+| Respuestas lentas o de menú a todo | El LLM no responde. Revisar la conexión a internet, el saldo de la cuenta de OpenRouter y la configuración en **Servicios → Estado → tarjeta "LLM"**. La tarjeta puede decir "conectado" con una clave inválida o sin saldo, porque OpenRouter responde la lista de modelos sin pedir clave; el log de `flask-app` muestra el error real. Sin LLM el bot sigue funcionando con su clasificador por reglas, pero entiende mucho menos (66 de 112 mensajes frente a 111). |
 | Un usuario dice que el bot no le contesta | Puede estar excediendo `MAX_MESSAGES_PER_MINUTE`; en **Métricas → Rendimiento bot** aparecen los bloqueos. |
 | El back office pide usuario y contraseña y no entra | `DASHBOARD_USER` / `DASHBOARD_PASSWORD` en `.env`, y reiniciar `flask-app` y `dashboard-frontend`. |
 | No salen los avisos automáticos | `BARRIDO_ACTIVO=1` en `.env` y el log "Ticker de avisos_reservas iniciado" en `flask-app`. |

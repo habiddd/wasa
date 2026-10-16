@@ -32,8 +32,19 @@ WhatsApp → Meta Cloud ───┘              ↓
   proveedor (hoy `deepseek/deepseek-v4-flash-0731`), o Ollama/LM Studio en
   tu red local. Se configura con `LLM_BASE_URL`, `LLM_MODEL` y `LLM_API_KEY`
   en `.env`, y también desde el dashboard (Servicios → Estado → tarjeta
-  "LLM"). Comparación de modelos en
-  `docs/PRUEBAS_SISTEMA_MODELOS_2026-10-15.md`.
+  "LLM"). Así quedaron los modelos que sirven, medidos contra el sistema
+  vivo (`docs/PRUEBAS_SISTEMA_MODELOS_2026-10-15.md`; la tabla completa de
+  6 modelos está en `docs/ARQUITECTURA.md`):
+
+  | Modelo | Dónde | Aciertos (112) | Latencia mediana / máx | Costo cada 1000 mensajes |
+  |---|---|---|---|---|
+  | `deepseek/deepseek-v4-flash-0731` (en uso) | OpenRouter | 111 | 1.7 / 19.8 s | ~USD 0.10–0.15 |
+  | `openai/gpt-oss-20b` | OpenRouter | 110 | 4.8 / 31.7 s | ~USD 0.01 |
+  | `qwen/qwen3-4b-2507` | LM Studio local | 109 | 0.4 / 3.7 s | USD 0 |
+  | Sin LLM (heurístico de respaldo) | | 66 | | |
+
+  No uses modelos `:free` de OpenRouter: devuelven `429` por límite de
+  pedidos y tardan hasta 46 s.
 
 ## 2. Puesta en marcha
 
@@ -345,15 +356,20 @@ conversacional abierta en la Cloud API: mantén las respuestas como un
 
 ## 8. Qué falta por construir (siguiente iteración)
 
-- Lógica real de reservas por intent (hoy hay un `TODO` en
-  `app/routes/webhook.py`): validar disponibilidad, crear/cancelar
-  reserva, activar secuencia de confirmación.
-- Migración de tu data actual de la LACS al esquema de `recursos`/`usuarios`.
-- Autenticación para los endpoints de analítica (hoy están abiertos;
-  el dashboard en `/dashboard` sí tiene autenticación básica, pero
-  `/api/analytics/*` sigue sin protección).
+- Migrar los usuarios actuales de la LACS. Los activos y lugares ya se
+  importan desde Excel o CSV (pestaña Activos).
+- Un aviso visible cuando el LLM falla o la key se queda sin saldo: hoy el
+  bot cae al heurístico (66/112 contra 111/112) y solo queda en el log.
+- Pendientes del wizard: en el paso de la nota, "cancelar" se guarda como
+  nota; un número dentro del texto ("2 horas") cuenta como opción del menú;
+  y un recurso que no existe ("un telescopio") pregunta antes si es
+  particular o para una asignatura.
+- Pasar el limitador por IP de `flask_limiter` a Redis y revisar la
+  concurrencia (2 workers sincrónicos).
+- Revocar la key temporal de OpenRouter y usar una propia con saldo.
 - Ver `docs/SEGURIDAD.md` para el checklist completo de guardrails
-  pendientes antes de producción con datos reales.
+  pendientes antes de producción con datos reales, y
+  `docs/SESION_2026-10-16.md` para el detalle de lo último.
 
 ## Estructura del proyecto
 

@@ -9,8 +9,9 @@
 | Autenticación del back office | Basic Auth (`DASHBOARD_USER` / `DASHBOARD_PASSWORD`) en Nginx y, de forma independiente, en cada llamada a `/dashboard/api/*` (`routes/dashboard.py`, `_requiere_auth`). Sin contraseña configurada responde 503, nunca queda abierto. |
 | Autenticación de los puntos de acceso de analítica | `/api/analytics/*` usa la misma verificación (`routes/analytics.py`). Sin credenciales responde 401. |
 | Exposición restringida de servicios internos | Todos los puertos se publican solo en `127.0.0.1` (`docker-compose.yml`); Redis no se publica. La base se usa con un usuario sin privilegios de superusuario. |
-| Control de tasa de mensajes | `guardrails.excede_limite_mensajes`: `MAX_MESSAGES_PER_MINUTE` por número (por defecto 8); lo que excede queda en la auditoría como `rate_limit_excedido`. |
-| Filtrado de inyección de instrucciones | `guardrails.mensaje_es_sospechoso`: compara contra frases conocidas sobre una forma normalizada del texto (sin tildes, sin separadores) y con tope de longitud. |
+| Control de tasa de mensajes | `guardrails.excede_limite_mensajes`: `MAX_MESSAGES_PER_MINUTE` por número (por defecto 8), con el contador en Redis compartido por los dos procesos de la aplicación; lo que excede queda en la auditoría como `rate_limit_excedido`. |
+| Filtrado de inyección de instrucciones | `guardrails.mensaje_es_sospechoso`: compara contra frases conocidas sobre una forma normalizada del texto (sin tildes, sin separadores), rechaza prefijos de rol al inicio de una línea (`SYSTEM:`, `categoría:`) y aplica tope de longitud. |
+| Clave del modelo de lenguaje | En `.env` o, si se edita desde el back office, en Redis (`llm:config`). Nunca vuelve completa al navegador ni se escribe en el log. |
 | Lista blanca de intenciones | `guardrails.intent_permitido` (ver OE2). |
 | Registro de auditoría | `auditoria_bot`: cada interacción con su intención, respuesta, bloqueo, estado de entrega y latencia. |
 | Política de retención | [POLITICA_RETENCION_AUDITORIA.md](POLITICA_RETENCION_AUDITORIA.md): anonimización automática a los 180 días. |

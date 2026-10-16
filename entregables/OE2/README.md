@@ -18,7 +18,7 @@ está integrada como segundo proveedor (ver `docs/GUIA_META_WHATSAPP.md`).
 
 | Ruta | Qué hace |
 |---|---|
-| `flask-app/app/llm_client.py` | Clasificador en tres capas: ruta rápida por reglas, modelo de lenguaje local (`PROMPT_CLASIFICACION`, el prompt del sistema, versionado aquí) y heurístico de respaldo si el modelo no responde. Intenciones válidas: `INTENTS_VALIDOS`. |
+| `flask-app/app/llm_client.py` | Clasificador en tres capas: saludos y cortesías sin consultar al modelo, modelo de lenguaje por una API compatible con OpenAI (`PROMPT_CLASIFICACION`, el prompt del sistema, versionado aquí) y heurístico de respaldo si el modelo no responde. Funciona con un modelo local pequeño (`qwen3-4b-2507` en LM Studio, 109/112) o con uno grande por internet (en uso: `deepseek/deepseek-v4-flash-0731` por OpenRouter, 111/112); la dirección, el modelo, la clave y la especialización `local` u `online` se cambian desde el back office (`config_llm`), sin tocar código. Intenciones válidas: `INTENTS_VALIDOS`. |
 | `flask-app/app/guardrails.py` | `intent_permitido`: lista blanca (`ALLOWED_INTENTS` en `config.py`). Lo que no está en la lista va al menú de opciones, nunca a una acción. |
 | `flask-app/app/menu_service.py` | Menú de respaldo cuando el mensaje no se entiende. |
 
@@ -26,7 +26,8 @@ Intenciones: `reservar`, `consultar_disponibilidad`, `cancelar`, `ayuda`,
 `saludo` y `otro`. Las tres primeras **no** usan el modelo para responder: la
 respuesta sale de consultas a la base de datos. El diseño se explica en
 `docs/ARQUITECTURA.md` (secciones "Por qué separar el LLM de la lógica de
-reservas" y "Clasificación de intent en tres capas").
+reservas" y "Clasificación de intent en tres capas", con la comparación de
+modelos que llevó a deepseek).
 
 ## Entregable 3: registro de pruebas de interpretación y correcciones aplicadas
 

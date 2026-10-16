@@ -48,6 +48,21 @@ Las cuatro últimas no se corrieron el 1 de octubre para no dejar datos ni
 mandar mensajes en la base desplegada; sus resultados están en
 `docs/PRUEBAS_HISTORIAL_2026-09-28.md` y `docs/PRUEBAS_NO_DEVUELTO_2026-09-28.md`.
 
+## Verificaciones de la aplicación (`flask-app/tests/`)
+
+Desde el 16 de octubre hay tres verificaciones más, junto al código de la
+aplicación. Tampoco necesitan pytest y se corren en el mismo contenedor:
+
+```bash
+docker exec -w /app -e PYTHONPATH=/app lacs_flask_app python tests/<archivo>.py
+```
+
+| Verificación | Qué verifica | Efecto | Resultado 16/10/2026 |
+|---|---|---|---|
+| `test_menu_service.py` | El menú de opciones solo entiende un número, el nombre de una opción o una palabra de salida; cualquier otra frase vuelve al clasificador. | ninguno | OK |
+| `test_config_llm.py` | Configuración del modelo desde el back office: se guarda, se borra y no devuelve la clave completa. | usa una clave de Redis de prueba y la borra | OK |
+| `test_horario_prestamo.py` | Horario de atención (inicio y fin, extremos incluidos) y préstamos de más de siete días como pendientes. | ninguno | OK |
+
 ## Hallazgo de la prueba de concurrencia
 
 La primera corrida de `verificar_concurrencia.py` encontró un defecto real.

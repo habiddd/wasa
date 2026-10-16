@@ -301,13 +301,38 @@ ver "El wizard de reservas no usa el LLM" más abajo.
 
 ### Clasificación de intent en tres capas (`llm_client.clasificar_intent`)
 
-El modelo en producción es `deepseek/deepseek-v4-flash-0731` por
-OpenRouter (~2 s por clasificación); antes fue `qwen/qwen3-4b-2507` en LM
-Studio (~0.4 s), y en septiembre `lfm2.5-2.6b` (13-25 s, con un
-razonamiento que no se podía apagar). La comparación de 6 modelos está en
-`docs/PRUEBAS_SISTEMA_MODELOS_2026-10-15.md`. Con un modelo así de rápido,
-la regla es la contraria a la de septiembre: **casi todo mensaje pasa por el
-LLM**, porque acertar importa más que ahorrarse la llamada.
+El bot empezó con `lfm2.5-2.6b` en LM Studio (13-25 s por clasificación,
+con un razonamiento que no se podía apagar) y hoy usa
+`deepseek/deepseek-v4-flash-0731` por la API de OpenRouter (~2 s, 111/112
+en la batería del sistema vivo). En el medio se probaron `qwen3-1.7b` y
+`qwen3-4b-2507` en local. El proceso, las métricas de cada paso y por qué
+se eligió deepseek están en `docs/SESION_2026-10-16.md`, sección 1. Con un
+modelo así de rápido, casi todo mensaje pasa por el LLM, al revés que en
+septiembre: acertar importa más que ahorrarse la llamada.
+
+Cómo se llegó al modelo:
+
+| Fecha | Modelo | Prueba | Aciertos | Clasificación |
+|---|---|---|---|---|
+| 9/09 | `lfm2.5-2.6b`, LM Studio | batería de 20 | 20/20 | 9.4–29.4 s, tope de 45 s |
+| 14/10 | `qwen3-1.7b`, LM Studio | batería de 20 | 19/20 | 1.6–4.6 s |
+| 15/10 | `qwen3-1.7b` con el prompt nuevo | ampliada (128) | 121/128 (antes 103) | mediana 3.6 s |
+| 15/10 | `qwen3-4b-2507`, LM Studio | ampliada (128) | 123/128 | mediana 0.2 s |
+
+Comparación final, con el mismo código y contra el webhook real
+(`docs/PRUEBAS_SISTEMA_MODELOS_2026-10-15.md`):
+
+| Modelo | Dónde | Batería (112) | Casos nuevos (25) | Latencia mediana / p90 / máx | Costo cada 1000 mensajes |
+|---|---|---|---|---|---|
+| `deepseek/deepseek-v4-flash-0731` (en producción) | API de pago | 111 | 25 | 1.7 / 5.3 / 19.8 s | ~USD 0.10–0.15 |
+| `openai/gpt-oss-20b` | API de pago | 110 | 24 | 4.8 / 18.1 / 31.7 s | ~USD 0.01 |
+| `qwen/qwen3-4b-2507` | LM Studio local | 109 | 24 | 0.4 / 2.4 / 3.7 s | USD 0 |
+| `nvidia/nemotron-3.5-lightning:free` | API gratis | 105 | | 8.9 / 20.2 / 46.1 s | USD 0 |
+| `liquid/lfm-2.5-2.6b:free` | API gratis | 102 | | 2.1 / 5.2 / 9.0 s | USD 0 |
+| `google/gemma-4-31b-it:free` | API gratis | 66 (116 errores `429`) | | | USD 0 |
+
+Los 66/112 de gemma miden en realidad el heurístico de respaldo, porque
+el modelo casi nunca respondió (ver el punto 3 más abajo).
 
 ```mermaid
 flowchart TD
@@ -331,9 +356,24 @@ flowchart TD
    de casos borde: "**apart**e de eso", "tengo la **agend**a llena", "soy
    muy **reserv**ado", "no **cancel**es nada" o "mi **reserv**a quedó
    confirmada?" abrían wizards sin preguntarle al modelo, que los
-   clasificaba bien (`docs/PRUEBAS_CHAT_BORDES_2026-10-15.md`). **No
-   reponer esas subcadenas** aunque se vuelva a un modelo lento o caro; si
-   hiciera falta, con palabras enteras y respetando las negaciones.
+   clasificaba bien (`docs/PRUEBAS_CHAT_BORDES_2026-10-15.md`, con
+   `qwen3-4b-2507`):
+
+   | Quién decidía los 23 fallos | Fallos | Ejemplos |
+   |---|---|---|
+   | Ruta rápida por subcadenas | 22 | "aparte de eso, qué hora es" → `reservar`; "no canceles nada" → `cancelar`; "mi reserva quedó confirmada?" → `reservar` |
+   | LLM | 1 | "ya devolví el trípode" → `cancelar` |
+
+   | Batería | Mensajes | Antes | Después de quitar la ruta |
+   |---|---|---|---|
+   | Casos borde (usada para ajustar) | 51 | 28 | 50 |
+   | Casos borde nuevos | 25 | | 24 |
+   | Ampliada (regresión) | 36 | 35 | 35 |
+   | End-to-end por el webhook | 6 | | 6 |
+
+   **No reponer esas subcadenas** aunque se vuelva a un modelo lento o
+   caro; si hiciera falta, con palabras enteras y respetando las
+   negaciones.
 
    El prompt (`PROMPT_CLASIFICACION`) trae reglas para los casos dudosos,
    cada una salida de un error medido: pedir un equipo sin decir "reservar"
@@ -395,21 +435,21 @@ configuración efectiva sale de `llm_client.config_llm()`, el único punto
 que la leen `clasificar_intent`, `_completar`, `extraer_datos_reserva` y el
 healthcheck del dashboard (`_check_llm`):
 
-- **Por defecto, `.env`** (`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`).
-- **Editable en caliente desde el dashboard:** clic en la tarjeta "LLM" de
-  Estado abre un diálogo con URL, modelo, API key y **especialización**
+- Por defecto manda el `.env` (`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`).
+- Se cambia en caliente desde el dashboard: un clic en la tarjeta "LLM" de
+  Estado abre un diálogo con URL, modelo, API key y especialización
   (`local` | `online`). Se guarda en el hash de Redis `llm:config`, el mismo
   patrón que `whatsapp:proveedor`, así que lo ven los dos workers al
   instante y sobrevive a un reinicio de `flask-app`. "Usar .env" borra el
   hash. Rutas: `GET`/`PUT`/`DELETE /dashboard/api/llm`.
-- **Especialización:** solo cambia el muestreo de la clasificación. `local`
+- La especialización solo cambia el muestreo de la clasificación. `local`
   manda `temperature 0.6, top_p 0.95, top_k 20`, lo que recomienda Qwen3 en
   modo razonamiento (con `temperature 0` el razonamiento entra en bucle);
   `online` manda solo `temperature 0.2` y deja el resto al proveedor. Sin
   nada guardado el modo es `local`.
-- **La API key nunca vuelve completa al navegador**, solo si está
+- La API key nunca vuelve completa al navegador: solo se ve si está
   configurada y sus últimos 4 caracteres. Dejar el campo vacío conserva la
-  key **solo si la URL no cambia**; con otra URL queda sin key, para no
+  key solo si la URL no cambia; con otra URL queda sin key, para no
   mandarle la de OpenRouter a otro servidor. La key no se loguea.
 - **Si se guarda una configuración en el dashboard, el `.env` deja de
   mandar** hasta que se pulse "Usar .env". Ojo con eso al cambiar el
@@ -457,10 +497,20 @@ ningún candidato, y a la vez le exige `_puntaje_nombre_en_texto(...) > 0`
 -- pero `candidatos` **es** el conjunto de nombres con puntaje > 0, así que
 las dos condiciones no pueden cumplirse juntas.
 
-Costaba 54-78 s por cada reserva iniciada, sin poder cambiar el resultado.
-La función y su prompt siguen en `llm_client.py` por si se quieren usar de
-verdad; ya no están en el camino crítico. Detalle y verificación en
-`docs/PRUEBAS_CHAT_2026-09-09.md`, sección 5.
+Costaba 54-78 s por cada reserva iniciada, sin poder cambiar el resultado
+(medido con `lfm2.5-2.6b`, `docs/PRUEBAS_CHAT_2026-09-09.md`, sección 5):
+
+| Mensaje | Tiempo | Devolvió |
+|---|---|---|
+| `quiero reservar una camara` | 54.2 s | todo `null` |
+| `necesito la camara canon eos r el viernes a las 3pm por 2 horas` | 64.8 s | `Cámara Canon EOS R`, `2026-09-11 15:00`, `17:00` |
+| `resérvame el dron mañana de 9 a 11` | 77.6 s | `Dron DJI Mavic`, `2026-10-10` (un mes de más) |
+
+Sin la llamada, el activo se identifica igual por palabra clave en 1-15 ms,
+e iniciar una reserva pasó de 76 s a 10.1 s (todo ese tiempo es el envío
+fallido al número de pruebas). La función y su prompt siguen en
+`llm_client.py` por si se quieren usar de verdad; ya no están en el camino
+crítico.
 
 ## Inventario: varias unidades del mismo modelo (`recursos_service.py`)
 
