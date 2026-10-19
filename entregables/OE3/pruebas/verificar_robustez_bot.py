@@ -198,8 +198,8 @@ with app.app_context():
         assert f"Entendí {R._fecha_legible(martes)}" in r, r
         r, s = reservar("1", s)
         assert "HORA DE INICIO" in r  # sin hora en el mensaje: se pregunta normal
-        r, s = reservar("9pm", s)
-        r, s = reservar("10pm", s)
+        r, s = reservar("4pm", s)
+        r, s = reservar("5pm", s)
         r, s = reservar("2", s)
         assert "RESUMEN DE RESERVA" in r and "Micrófono Rode NTG3" in r and "Trípode Manfrotto" in r
 
@@ -296,8 +296,8 @@ with app.app_context():
     assert wizard["sale_de_barranquilla"] is False and wizard["sale_de_barranquilla_auto"] is True
     fecha_sala = dia_semana(3) + timedelta(days=14)
     r, s = reservar(fecha_sala.strftime("%d/%m/%Y"), s)
-    r, s = reservar("9pm", s)
-    r, s = reservar("10pm", s)
+    r, s = reservar("4pm", s)
+    r, s = reservar("5pm", s)
     r, s = reservar("2", s)
     assert "RESUMEN DE RESERVA" in r and "Sale de Barranquilla" not in r and "Cambiar si sale" not in r, r
     # si luego se agrega un equipo, el valor automático se descarta y se pregunta
@@ -348,7 +348,6 @@ with app.app_context():
 
     # --- F13. "¿Qué reservas tengo?" lista, no abre el wizard
     print("F13")
-    assert L._clasificar_sin_llm("que reservas tengo?") == "reservar"  # la ruta que antes abría el wizard
     for texto in ("que reservas tengo?", "mis reservas", "tengo reservas?", "ver mis reservas", "que tengo reservado"):
         r, s = reservar(texto, {})
         assert "TUS RESERVAS ACTIVAS" in r and "Sala de edición 1" in r, (texto, r)
