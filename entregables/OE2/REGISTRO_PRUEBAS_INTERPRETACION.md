@@ -4,7 +4,8 @@ Entregable 3 del Objetivo Específico 2.
 
 ## Cómo se probó
 
-Las pruebas las hizo el practicante, de tres formas complementarias:
+Las rondas 1 a 8 las hizo el practicante, de tres formas complementarias. La
+ronda 9 la hicieron usuarios piloto (punto 4).
 
 1. **Pruebas en vivo por WhatsApp** con su propio usuario (Habid), escribiendo
    al bot como lo haría un estudiante. Cada ronda dejó una lista de hallazgos
@@ -16,11 +17,15 @@ Las pruebas las hizo el practicante, de tres formas complementarias:
 3. **Pruebas automatizadas** (`entregables/OE3/pruebas/verificar_*.py`) que
    fijan cada corrección para que no vuelva a fallar. Se corren dentro del
    contenedor y revierten lo que escriben.
+4. **Ronda con usuarios piloto**: cuatro conocidos del practicante le
+   escribieron al bot desde su propio WhatsApp; con el practicante, son los
+   cinco usuarios piloto del anteproyecto.
 
 Todas se ejecutaron dentro de Docker. Las rondas 1 a 3 usaron el modelo local
 `lfm2.5-2.6b`, servido por LM Studio. Las rondas 4 a 8 compararon otros
 modelos, locales y por la API de OpenRouter, y terminaron con el cambio a
-`deepseek/deepseek-v4-flash-0731`, el modelo en uso desde el 16 de octubre.
+`deepseek/deepseek-v4-flash-0731`, el modelo en uso desde el 16 de octubre y
+también en la ronda 9.
 
 ## Ronda 1 — Clasificación de intenciones (9 de septiembre de 2026)
 
@@ -179,24 +184,75 @@ Con `deepseek-v4-flash`, contra el sistema en ejecución. Detalle en
 | Privacidad: preguntar quién reservó un equipo o pedir el teléfono de otro usuario | Ninguna respuesta incluyó datos de otro usuario |
 | Reglas del flujo de reserva, incluido el horario de atención | Todas rechazadas; un choque ofrece alternativas |
 
+## Ronda 9: usuarios piloto (28 de octubre de 2026)
+
+Cuatro conocidos del practicante le escribieron al bot desde su propio
+WhatsApp entre las 10:28 y las 10:40 a.m., con `deepseek-v4-flash`. El quinto
+usuario piloto es el practicante, que hizo las rondas en vivo 2 y 3. Se les
+pidió registrarse, y dos de ellos hicieron además una reserva.
+
+El dato verificable del registro es el celular, que viene de la cuenta de
+WhatsApp de cada uno. Nombre, código y cédula los escribe el usuario y no se
+contrastan con ningún listado; se aceptaron, por ejemplo, el código `222333` y
+la cédula `100000000`.
+
+| Participante | Qué hizo | Mensajes | Resultado |
+|---|---|---|---|
+| Santiago | Registro y reserva de un MacBook M5, 29/10 de 4:00 a 6:00 p.m. | 16 | Reserva n.º 218, pendiente por requerir autorización; el LACS la confirmó desde el back office 41 s después |
+| Juancho | Registro | 5 | Registrado |
+| Ramiro | Registro y "Quiero reservar" | 6 | No contestó la primera pregunta del flujo; no hubo reserva |
+| Pierino | Registro y reserva de la Sala de edición 1, 29/10 de 3:45 a 5:30 p.m. | 17 | Reserva n.º 219, confirmada en el momento |
+
+| Qué se midió | Resultado |
+|---|---|
+| Intención asignada a los 44 mensajes de los cuatro usuarios | 44/44 correctas |
+| Celular cuando WhatsApp entrega un identificador anónimo en vez del número (Santiago y Pierino) | El bot lo pidió y los dos lo escribieron bien |
+| Hora de fin fuera del horario de atención (Pierino pidió 6:30 p.m.) | Rechazada; la cambió a 5:30 p.m. |
+| Tiempo desde que entra el mensaje hasta que se registra la respuesta | Mediana 0.07 s, promedio 0.35 s, p95 1.8 s, máximo 3.2 s; los 44 envíos llegaron |
+
+| # | Hallazgo | Corrección |
+|---|---|---|
+| F19 | Pierino empezó con "Espacio" y el bot le mostró el menú completo, con los equipos primero, sin usar lo que ya había dicho. | Si el primer mensaje dice "espacio" o "salón" sin nombrar cuál, el primer menú trae solo los espacios; si dice "equipo", solo los equipos; si dice las dos cosas, el menú completo (`recursos_service._avanzar_wizard`, paso `elegir_activo`). Corregida el 28 de octubre. |
+
+La corrección se probó el mismo día enviando mensajes al webhook real con el
+usuario de pruebas `000000000000` (las respuestas no llegan a ningún teléfono):
+
+| Primer mensaje | Antes | Después |
+|---|---|---|
+| "Espacio" | Menú completo, equipos primero | Solo espacios; la reserva de la Sala de edición 1 se completó |
+| "necesito un salón" | Menú completo, equipos primero | Solo espacios |
+| "quiero reservar un equipo" | Menú completo | Solo equipos |
+| "quiero reservar una sala" | Directo a la Sala de edición 1 | Igual |
+| "quiero reservar el estudio" | Directo al Estudio de grabación A | Igual |
+| "Quiero reservar" | Menú completo | Igual |
+
+Para salir del flujo de reserva sirven "cancelar" y "cerrar". "salir" solo
+funciona en el menú general; dentro del flujo, en el paso de la fecha, se
+toma como una fecha mal escrita.
+
+Las capturas del back office (usuarios, reservas y las dos conversaciones,
+con teléfonos y cédulas ocultos) están en el informe final, sección 2.5,
+figuras 12 a 14.
+
 ## Verificación automatizada vigente
 
 Cada hallazgo quedó fijado como caso en
-`entregables/OE3/pruebas/verificar_robustez_bot.py`. Última corrida, 1 de
+`entregables/OE3/pruebas/verificar_robustez_bot.py`. Última corrida, 28 de
 octubre de 2026:
 
 ```
-OK: F1 a F18 (cancelar con 'sí, cancelar', horas y fechas en palabras, lo dicho en el primer mensaje,
+OK: F1 a F19 (cancelar con 'sí, cancelar', horas y fechas en palabras, lo dicho en el primer mensaje,
 consulta con fecha + oferta, cancelar por descripción, espacios sin Barranquilla, recordatorio con
 minutos reales, ver mis reservas, sí/no y raíces, rango de horas, nota en el mismo sí, cambiar
-fecha/hora en conflicto, ordinales y franja al cancelar, estado de envío sin retroceso).
+fecha/hora en conflicto, ordinales y franja al cancelar, estado de envío sin retroceso, primer menú
+filtrado por espacio, salón o equipo).
 ```
 
 ## Limitaciones de estas pruebas
 
-- Las pruebas en vivo las hizo una sola persona (el practicante). Falta una
-  ronda con estudiantes del Laboratorio para medir la interpretación de
-  mensajes escritos por terceros.
+- La ronda con usuarios piloto fue corta: 44 mensajes de cuatro conocidos del
+  practicante en doce minutos. Una ronda más larga con estudiantes del
+  Laboratorio mostraría mejor cómo escriben quienes piden equipos de verdad.
 - Las rondas 4 a 8 las corrió el practicante por el webhook, con un usuario de
   prueba; no son conversaciones de terceros.
 - Con el modelo por API, si OpenRouter no responde o la cuenta se queda sin

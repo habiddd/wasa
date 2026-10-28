@@ -36,7 +36,7 @@ usuario de pruebas.
 | `verificar_nota_acta.py` | Nota del administrador en el acta y rechazo de una nota demasiado larga. | ninguno | OK |
 | `verificar_celular_registro.py` | Registro por WhatsApp: el celular se pide solo si WhatsApp no lo dio; resumen y confirmación. | ninguno | OK |
 | `verificar_bot_no_disponible.py` | El bot dice "no está disponible" por un equipo no devuelto, no lo cambia por otro modelo y no deja reservarlo. | ninguno | OK |
-| `verificar_robustez_bot.py` | Hallazgos F1–F18 de las pruebas en vivo (ver `entregables/OE2/REGISTRO_PRUEBAS_INTERPRETACION.md`). | ninguno | OK |
+| `verificar_robustez_bot.py` | Hallazgos F1–F18 de las pruebas en vivo y F19 de la ronda con usuarios piloto (ver `entregables/OE2/REGISTRO_PRUEBAS_INTERPRETACION.md`). | ninguno | OK |
 | `verificar_meta_whatsapp.py` | Canal de Meta: firma del webhook, deduplicación, ventana de 24 h, selector de proveedor y métricas. | ninguno | OK |
 | `verificar_excel_raw.py` | Exportación de la base a Excel, partiendo las tablas que pasan el límite de filas. | ninguno | OK |
 | `verificar_historial.py` | Historial de estados, vista de puntualidad y bandera de entrega tardía en todo el ciclo. | deja evidencia | — |

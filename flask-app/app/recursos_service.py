@@ -1604,6 +1604,13 @@ def _menu_paso_activo() -> list[tuple[str, str]]:
     return opciones
 
 
+# Palabra genérica del primer mensaje -> prefijo de las opciones que se dejan en el primer menú.
+_FILTRO_PRIMER_MENU = (
+    (re.compile(r"\b(espacios?|salon(es)?)\b"), "nombre:"),
+    (re.compile(r"\bequipos?\b"), "subcategoria:"),
+)
+
+
 def _formatear_menu_activo(opciones: list[tuple[str, str]]) -> str:
     equipos = [(i, etiqueta) for i, (valor, etiqueta) in enumerate(opciones, start=1) if valor.startswith("subcategoria:")]
     espacios = [(i, etiqueta) for i, (valor, etiqueta) in enumerate(opciones, start=1) if valor.startswith("nombre:")]
@@ -2410,6 +2417,14 @@ def _avanzar_wizard(wizard: dict, usuario: Usuario) -> tuple[str, dict, bool]:
 
         if paso == "elegir_activo":
             opciones = _menu_paso_activo()
+            # Pidió "un espacio" o "un equipo" sin decir cuál (F19): el primer menú
+            # trae solo eso; si nombró los dos, va el menú completo.
+            if not wizard.get("carrito"):
+                texto = _normalizar(wizard.get("texto_inicial") or "")
+                prefijos = {prefijo for patron, prefijo in _FILTRO_PRIMER_MENU if patron.search(texto)}
+                if len(prefijos) == 1:
+                    prefijo = prefijos.pop()
+                    opciones = [o for o in opciones if o[0].startswith(prefijo)] or opciones
             if not opciones:
                 return "Por ahora no tengo activos cargados en el sistema. Contacta al equipo de la LACS.", wizard, True
             wizard["opciones_actuales"] = opciones

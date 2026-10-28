@@ -446,9 +446,24 @@ with app.app_context():
     G.actualizar_estado_envio("wamid.F18", "leido")
     assert fila.estado_envio == "leido"
 
+    # --- F19. "Espacio"/"salón"/"equipo" en el primer mensaje filtran el primer menú (ronda piloto)
+    print("F19")
+    r, s = reservar("Espacio", {})
+    r, s = reservar("1", s)
+    r, s = reservar("1", s)
+    assert "Espacios:" in r and "Equipos:" not in r, r
+    r, s = reservar(numero(s, "sala de edición"), s)
+    assert "FECHA DE RESERVA" in r and "Sala de edición 1" in r, r
+    for texto, espacios, equipos in (("necesito un salón", True, False), ("quiero reservar un equipo", False, True),
+                                     ("un espacio con equipos", True, True), ("Quiero reservar", True, True)):
+        r, s = reservar(texto, {})
+        r, s = reservar("1", s)
+        r, s = reservar("1", s)
+        assert ("Espacios:" in r) == espacios and ("Equipos:" in r) == equipos, (texto, r)
+
     db.session.rollback()
     assert not Usuario.query.filter_by(telefono_wa=TELEFONO).count()
 
-print("OK: F1 a F18 (cancelar con 'sí, cancelar', horas y fechas en palabras, lo dicho en el primer mensaje, "
+print("OK: F1 a F19 (cancelar con 'sí, cancelar', horas y fechas en palabras, lo dicho en el primer mensaje, "
       "consulta con fecha + oferta, cancelar por descripción, espacios sin Barranquilla, recordatorio con minutos reales, "
-      "ver mis reservas, sí/no y raíces, rango de horas, nota en el mismo sí, cambiar fecha/hora en conflicto, ordinales y franja al cancelar, estado de envío sin retroceso).")
+      "ver mis reservas, sí/no y raíces, rango de horas, nota en el mismo sí, cambiar fecha/hora en conflicto, ordinales y franja al cancelar, estado de envío sin retroceso, primer menú filtrado por espacio, salón o equipo).")
