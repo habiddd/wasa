@@ -8,7 +8,7 @@
 |---|---|
 | Autenticación del back office | Basic Auth (`DASHBOARD_USER` / `DASHBOARD_PASSWORD`) en Nginx y, de forma independiente, en cada llamada a `/dashboard/api/*` (`routes/dashboard.py`, `_requiere_auth`). Sin contraseña configurada responde 503, nunca queda abierto. |
 | Autenticación de los puntos de acceso de analítica | `/api/analytics/*` usa la misma verificación (`routes/analytics.py`). Sin credenciales responde 401. |
-| Exposición restringida de servicios internos | Todos los puertos se publican solo en `127.0.0.1` (`docker-compose.yml`); Redis no se publica. La base se usa con un usuario sin privilegios de superusuario. |
+| Exposición restringida de servicios internos | Los puertos internos se publican solo en `127.0.0.1` (`docker-compose.yml`); Redis no se publica y el back office es lo único accesible en la red local, con credenciales, salvo `/webhook/meta`, que comprueba la firma de Meta. La base se usa con un usuario sin privilegios de superusuario. |
 | Control de tasa de mensajes | `guardrails.excede_limite_mensajes`: `MAX_MESSAGES_PER_MINUTE` por número (por defecto 8), con el contador en Redis compartido por los dos procesos de la aplicación; lo que excede queda en la auditoría como `rate_limit_excedido`. |
 | Filtrado de inyección de instrucciones | `guardrails.mensaje_es_sospechoso`: compara contra frases conocidas sobre una forma normalizada del texto (sin tildes, sin separadores), rechaza prefijos de rol al inicio de una línea (`SYSTEM:`, `categoría:`) y aplica tope de longitud. |
 | Clave del modelo de lenguaje | En `.env` o, si se edita desde el back office, en Redis (`llm:config`). Nunca vuelve completa al navegador ni se escribe en el log. |
@@ -27,8 +27,7 @@ personalizado). Se refresca cada 60 s. Consultas en
 
 | Informe comprometido en el anteproyecto | Dónde está |
 |---|---|
-| Número de turnos por día | General → Cuándo se reserva → Por día |
-| Número de turnos por semana y por mes | General → Cuándo se reserva → Por semana / Por mes |
+| Número de turnos por día, semana y mes | General → Cuándo se reserva → Por día / Por semana / Por mes |
 | Demanda por equipo y espacio | General → Top 10 activos; Por activo; Por uso (con y sin NRC) |
 | Franjas de mayor concurrencia | General → Por día de la semana y Por hora de inicio |
 | Solicitudes resueltas sin intervención humana | **Rendimiento bot** → % de solicitudes del bot que no pasaron por la LACS |
@@ -51,10 +50,14 @@ Cómo se calculan los dos indicadores del bot:
   webhook y el envío de la respuesta (`auditoria_bot.latencia_ms`). Se mide
   desde el 1 de octubre de 2026; los mensajes anteriores no tienen el dato.
 
-## Entregable 3: aplicación integrada y desplegada en un entorno de pruebas, con su guía
+## Entregable 3: aplicación integrada y desplegada en un entorno de pruebas del Laboratorio, con su guía de despliegue y operación
+
+**Estado: cumplido parcialmente.** La instalación en un equipo del Laboratorio
+espera credenciales de administrador; ver la sección 4.7 del informe final.
 
 - Despliegue: los cinco servicios orquestados con Docker Compose
-  (`docker-compose.yml`), corriendo en el entorno de pruebas.
+  (`docker-compose.yml`), corriendo en el computador portátil del practicante,
+  con el back office en la red local.
 - [GUIA_DESPLIEGUE_Y_OPERACION.md](GUIA_DESPLIEGUE_Y_OPERACION.md): despliegue,
   vinculación de WhatsApp, operación diaria, respaldo, actualización y
   solución de problemas.

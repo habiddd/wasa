@@ -34,7 +34,8 @@ modelos que llevó a deepseek).
 [REGISTRO_PRUEBAS_INTERPRETACION.md](REGISTRO_PRUEBAS_INTERPRETACION.md)
 
 Nueve rondas. Las ocho primeras las hizo el practicante. La novena, del 28 de
-octubre de 2026, fue la de los cinco usuarios piloto: cuatro conocidos del
-practicante, más él mismo. Los cuatro se registraron por WhatsApp, dos de
+octubre de 2026, fue la de cuatro conocidos del practicante, que con él, que
+participó desde las rondas 2 y 3, completan los cinco usuarios piloto. Los cuatro
+se registraron por WhatsApp, dos de
 ellos hicieron una reserva, y los 44 mensajes que enviaron recibieron la
 intención correcta.

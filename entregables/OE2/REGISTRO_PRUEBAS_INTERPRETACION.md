@@ -169,7 +169,7 @@ Fallas del sistema encontradas y corregidas:
 
 | # | Hallazgo | Corrección |
 |---|---|---|
-| S1 y S2 | El menú de opciones interpretaba cualquier frase por fragmentos: "mi reserva quedó confirmada?" abría el flujo de reservar y "gracias, chao" recibía "No reconocí esa opción". | El menú solo entiende el número o el nombre de una opción; cualquier otra frase vuelve al clasificador. |
+| S1 y S2 | El menú de opciones interpretaba cualquier frase por fragmentos: "mi reserva quedó confirmada?" abría el flujo de reservar y "gracias, chao" recibía "No reconocí esa opción". | El menú solo entiende un número, el nombre de una opción o una palabra de salida; las demás frases vuelven al clasificador, salvo las que empiezan con un número, que cuentan como opción. |
 | S3 | El control de tasa se contaba por proceso: con un tope de 8, pasaban 10 mensajes simultáneos. | Contador en Redis, compartido; en la misma prueba pasan 8. |
 | S4 | Los modelos que razonan podían gastar todo el presupuesto y no escribir la respuesta, sin dejar rastro. | Presupuesto de 2000 tokens y aviso en el log. |
 

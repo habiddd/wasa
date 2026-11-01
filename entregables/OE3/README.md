@@ -7,7 +7,7 @@
 | Operación | Dónde | Cómo |
 |---|---|---|
 | Consulta de disponibilidad | `recursos_service.evaluar_consulta_disponibilidad` | Consulta a la base por recurso y franja; nunca la inventa el modelo de lenguaje. Ofrece reservar al terminar. |
-| Reserva | `recursos_service.gestionar_reserva` (wizard) y `crear_reservas_grupo` | Wizard paso a paso: activo, accesorios, fecha, hora, tipo de uso, modalidad, salida de Barranquilla, nota y **resumen con confirmación explícita** antes de escribir. Todas las líneas se escriben en una sola transacción. |
+| Reserva | `recursos_service.gestionar_reserva` (wizard) y `crear_reservas_grupo` | Wizard paso a paso: tipo de uso, modalidad, activo, accesorios, salida de Barranquilla, fecha, hora, nota y **resumen con confirmación explícita** antes de escribir. Todas las líneas se escriben en una sola transacción. |
 | Validación de no solapamiento | Restricción `reservas_no_solapamiento` (`postgres/init/02-schema.sql`) | `EXCLUDE USING gist` sobre recurso y rango horario. El chequeo previo de la aplicación solo da un mensaje más claro; la garantía es la base de datos. |
 | Recursos con autorización | `recursos.requiere_confirmacion` | La reserva nace `pendiente`. |
 | Decisión de la coordinación | Dashboard: Hoy → *Por confirmar*, Reservas y Calendario | La LACS confirma o deniega; la decisión queda en el historial y el bot le avisa al estudiante por WhatsApp (`confirmacion_lacs` / `denegacion_lacs`). |
@@ -21,7 +21,8 @@ Las solicitudes de recursos con autorización llegan a la bandeja
 **Hoy → Por confirmar** del back office, que se refresca sola cada 30
 segundos, y aparecen marcadas en el Calendario y en Reservas. Desde ahí la
 coordinación las confirma o las deniega, y el estudiante recibe la respuesta
-por WhatsApp.
+por WhatsApp. La notificación llega por esa bandeja; el sistema no le envía a la
+coordinación un mensaje ni un correo.
 
 Detalle del diseño: `docs/ARQUITECTURA.md`, secciones "Reserva paso a paso",
 "Confirmación de la LACS: reservas parciales y pendientes", "Ciclo de estados

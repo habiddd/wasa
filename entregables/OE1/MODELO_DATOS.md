@@ -97,7 +97,7 @@ erDiagram
 | `reserva_actas` | Versiones de las actas de entrega y devolución (PDF firmado en pantalla o subido), con su hash SHA-256. |
 | `reserva_avisos` | Avisos automáticos de WhatsApp. `UNIQUE (grupo_id, tipo)` garantiza que no se repitan. |
 | `reserva_estado_historial` | Cada cambio de estado de una reserva. Lo escribe un trigger, para todos los caminos (bot, dashboard, barrido). |
-| `recurso_estado_historial` | Cada cambio de estado de un activo (disponible, mantenimiento, no devuelto, baja). |
+| `recurso_estado_historial` | Cada cambio de estado de un activo (disponible, en mantenimiento, no disponible, no devuelto). |
 | `auditoria_bot` | Cada interacción del bot: mensaje, intención, respuesta, si un guardrail lo bloqueó, estado de entrega y latencia. |
 | `calendario_reglas`, `fechas_excepcion` | Días de la semana bloqueados, festivos y fechas sueltas en que el bot no acepta reservas. |
 | Vista `reserva_puntualidad` | Retraso de cada entrega y cada devolución respecto a la franja reservada, calculado desde el historial. |
@@ -117,7 +117,7 @@ erDiagram
 ## Versionado del esquema
 
 El esquema y todos sus cambios están versionados en git (`git log --
-postgres/init/02-schema.sql`: 30 commits desde el 12 de agosto de 2026). El
+postgres/init/02-schema.sql`: 32 commits desde el 12 de agosto de 2026). El
 archivo es idempotente (`CREATE ... IF NOT EXISTS`, `ADD COLUMN IF NOT
 EXISTS` y bloques `DO $$` que revisan el catálogo antes de actuar). Postgres
 lo ejecuta al crear el volumen, y para migrar una base que ya existe se vuelve

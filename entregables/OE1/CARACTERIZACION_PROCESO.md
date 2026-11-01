@@ -97,7 +97,7 @@ flowchart TD
 | Revisión de disponibilidad por el funcionario (P1, P2) | Consulta a PostgreSQL en el momento; la reserva se escribe en una transacción atómica con la restricción `EXCLUDE` que impide solapamientos. |
 | Recursos de acceso libre | Quedan `confirmada` sin intermediación (`recursos.requiere_confirmacion = false`). |
 | Recursos con autorización | Quedan `pendiente`; aparecen en el dashboard (Hoy → *Por confirmar*), la LACS confirma o deniega y el bot le avisa al solicitante. La decisión sigue siendo humana. |
-| Confirmación en el sistema interno | El back office es el sistema interno: calendario, reservas, activos, usuarios. |
+| Confirmación en el sistema interno | El back office cumple ese papel para las reservas del sistema nuevo (calendario, reservas, activos, usuarios). No está integrado con el sistema interno actual. |
 | Entrega y devolución presencial | Sin cambios. Se agrega el acta digital (firma en pantalla o PDF) que mueve la reserva a `entregada` y luego a `completada`, `devuelta_tarde` o `no_devuelta`. |
 | Seguimiento manual (P4) | Avisos automáticos: antes de la recogida, a la hora, al no presentarse y antes del vencimiento de la devolución. No-show automático. |
 | Información dispersa (P5) | Módulo de métricas en tiempo real y exportación a Excel. |

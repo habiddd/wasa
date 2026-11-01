@@ -13,7 +13,10 @@
 El historial de cambios del esquema está en git; ver la sección "Versionado
 del esquema" de [MODELO_DATOS.md](MODELO_DATOS.md).
 
-## Entregable 2: base de datos PostgreSQL desplegada con una muestra representativa
+## Entregable 2: base de datos PostgreSQL desplegada, con el modelo entidad-relación implementado y una muestra representativa de los tipos de recursos y de la información histórica cargada, suficiente para validar las reglas de préstamo
+
+**Estado: cumplido parcialmente.** No se cargó información histórica; ver la
+sección 1.5 del informe final.
 
 La base corre en el contenedor `lacs_postgres` (`docker-compose.yml`) con
 volumen persistente. El catálogo de prueba se carga con:

@@ -11,9 +11,10 @@ LACS que levante, opere o reconstruya el sistema sin haberlo desarrollado.
 | `redis` (`lacs_redis`) | Sesiones de conversación, control de tasa, configuración del LLM y bloqueo del barrido | solo red interna |
 | `baileys-bot` (`lacs_baileys_bot`) | Pasarela de WhatsApp por QR | `127.0.0.1:3000` |
 | `flask-app` (`lacs_flask_app`) | Lógica de reservas, guardrails, bot, API del back office | `127.0.0.1:5000` |
-| `dashboard-frontend` (`lacs_dashboard_frontend`) | Back office (React servido por Nginx) | `127.0.0.1:8080` |
+| `dashboard-frontend` (`lacs_dashboard_frontend`) | Back office (React servido por Nginx) | `8080` (HTTP) y `8443` (HTTPS), en la red local |
 
-Todos los puertos se publican **solo en la interfaz local** del anfitrión.
+Solo el back office se publica en la red local, y pide usuario y contraseña,
+salvo `/webhook/meta`, que comprueba la firma de Meta. Los demás puertos se publican **solo en la interfaz local** del anfitrión.
 El modelo de lenguaje no corre en Docker. Hoy se consulta por la API de
 OpenRouter (`deepseek/deepseek-v4-flash-0731`); también puede ser LM Studio u
 Ollama en el mismo equipo o en la red local.

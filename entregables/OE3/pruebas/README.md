@@ -27,9 +27,9 @@ datos y los borra al final; **deja evidencia** = deja las filas a propósito
 para revisarlas en el dashboard; **WhatsApp** = manda un mensaje real al
 usuario de pruebas.
 
-| Prueba | Qué verifica | Efecto | Resultado 01/10/2026 |
+| Prueba | Qué verifica | Efecto | Resultado 28/10/2026 |
 |---|---|---|---|
-| `verificar_concurrencia.py` | 8 hilos ven el mismo equipo libre y reservan la misma franja a la vez: solo una reserva queda, las otras 7 reciben "choque". Solapamiento parcial rechazado, franja contigua aceptada, reserva cancelada no ocupa. | borra | OK (3 de 3 corridas) |
+| `verificar_concurrencia.py` | 8 hilos ven el mismo equipo libre y reservan la misma franja a la vez: solo una reserva queda, las otras 7 reciben "choque". Solapamiento parcial rechazado, franja contigua aceptada, reserva cancelada no ocupa. | borra | OK (y 3 de 3 corridas el 1 de octubre) |
 | `verificar_retencion.py` | Política de retención: una fila de 400 días se anonimiza y conserva intención y latencia; una de hoy queda intacta; la purga es idempotente y se puede desactivar. | borra | OK |
 | `verificar_equipos_acta.py` | Entrega parcial: lo no entregado se cancela; no se devuelve lo no entregado; lo no devuelto queda `no_devuelta`. | ninguno | OK |
 | `verificar_items_acta.py` | Marcas por activo en el acta PDF (entrega y devolución) y que el acta quepa en una página. | ninguno | OK |
@@ -44,9 +44,9 @@ usuario de pruebas.
 | `verificar_no_devuelto_evidencia.py` | El mismo caso, dejando reservas, actas e historial para revisarlos en el dashboard. | deja evidencia | — |
 | `verificar_aviso_devolucion.py` | Aviso automático antes del vencimiento del préstamo: se manda una vez y no se duplica. | WhatsApp | — |
 
-Las cuatro últimas no se corrieron el 1 de octubre para no dejar datos ni
-mandar mensajes en la base desplegada; sus resultados están en
-`docs/PRUEBAS_HISTORIAL_2026-09-28.md` y `docs/PRUEBAS_NO_DEVUELTO_2026-09-28.md`.
+Las cuatro últimas no se repiten para no dejar datos ni mandar mensajes en la
+base desplegada; sus resultados están en `docs/PRUEBAS_HISTORIAL_2026-09-28.md`,
+`docs/PRUEBAS_NO_DEVUELTO_2026-09-28.md` y `docs/SESION_2026-09-29.md`.
 
 ## Verificaciones de la aplicación (`flask-app/tests/`)
 
@@ -57,9 +57,9 @@ aplicación. Tampoco necesitan pytest y se corren en el mismo contenedor:
 docker exec -w /app -e PYTHONPATH=/app lacs_flask_app python tests/<archivo>.py
 ```
 
-| Verificación | Qué verifica | Efecto | Resultado 16/10/2026 |
+| Verificación | Qué verifica | Efecto | Resultado 28/10/2026 |
 |---|---|---|---|
-| `test_menu_service.py` | El menú de opciones solo entiende un número, el nombre de una opción o una palabra de salida; cualquier otra frase vuelve al clasificador. | ninguno | OK |
+| `test_menu_service.py` | El menú de opciones solo entiende un número, el nombre de una opción o una palabra de salida; las demás frases vuelven al clasificador, salvo las que empiezan con un número. | ninguno | OK |
 | `test_config_llm.py` | Configuración del modelo desde el back office: se guarda, se borra y no devuelve la clave completa. | usa una clave de Redis de prueba y la borra | OK |
 | `test_horario_prestamo.py` | Horario de atención (inicio y fin, extremos incluidos) y préstamos de más de siete días como pendientes. | ninguno | OK |
 
